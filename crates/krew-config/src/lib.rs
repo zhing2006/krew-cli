@@ -1,9 +1,17 @@
 mod defaults;
+pub mod instructions;
 
 pub use defaults::*;
+pub use instructions::load_project_instructions;
 
 use serde::Deserialize;
 use std::collections::HashMap;
+
+/// Filename to look for when loading project-level instructions.
+pub const PROJECT_INSTRUCTIONS_FILENAME: &str = "AGENTS.md";
+
+/// Maximum size in bytes for a single project instructions file (100KB).
+pub const PROJECT_INSTRUCTIONS_MAX_SIZE: usize = 102_400;
 
 /// Root configuration loaded from `.krew/settings.toml`.
 #[derive(Debug, Deserialize)]
