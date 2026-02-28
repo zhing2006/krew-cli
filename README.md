@@ -7,9 +7,11 @@ A CLI tool for multi-AI-agent collaborative conversations. Run multiple AI model
 - **Multi-Agent Sessions** — Chat with multiple AI models simultaneously in one terminal
 - **@ Addressing** — `@all` to broadcast, `@agent_name` to target a specific agent
 - **Shared Context** — All agents see the full conversation history, enabling cross-agent collaboration
+- **Per-Agent Sampling** — Configure temperature, top_p, max_tokens, etc. per agent; max_tokens defaults to model maximum
 - **Built-in Tools** — File read/write, shell execution, glob/grep search
 - **MCP Integration** — Extend agent capabilities via Model Context Protocol servers
 - **Session Persistence** — Save and resume conversations with `/resume` and `/new`
+- **Token Tracking & Auto-Compact** — Real-time token usage display; automatic context compression when threshold is exceeded
 - **Streaming Output** — Real-time token-by-token rendering with per-agent color coding
 
 ## Supported Providers
@@ -32,6 +34,7 @@ Create `.krew/settings.toml` in your project directory:
 [settings]
 approval_mode = "suggest"
 reply_order = ["gpt", "opus"]
+auto_compact_threshold = 120000    # auto-compress context at 120K tokens (0 = disable)
 
 [[agents]]
 name = "gpt"
@@ -42,6 +45,8 @@ api_type = "responses"
 color = "green"
 tools = true
 enable_web_search = false
+# sampling.temperature = 0.7
+# sampling.max_tokens = 32768
 
 [[agents]]
 name = "opus"
@@ -103,7 +108,7 @@ you> Tell me more          # sends to the last respondent
 | ------- | ----------- |
 | `/new` | Start a new session |
 | `/resume` | Resume a previous session |
-| `/agents` | List active agents |
+| `/agents` | List active agents and token usage |
 | `/clear` | Clear screen |
 | `/compact <agent>` | Compress context using the specified agent |
 | `/help` | Show help |
