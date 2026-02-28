@@ -1,4 +1,5 @@
 mod app;
+mod custom_terminal;
 mod render;
 
 use std::io::{self, stdout};
@@ -9,9 +10,7 @@ use crossterm::event::{
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::execute;
-use ratatui::{Terminal, TerminalOptions, Viewport};
 
 /// krew CLI argument definitions.
 #[derive(Parser, Debug)]
@@ -110,11 +109,11 @@ fn clean_old_logs(log_dir: &Path, retention_days: u64) {
     }
 }
 
-/// Set up the terminal with a small inline viewport for the input area.
+/// Set up the terminal with a dynamic inline viewport.
 ///
 /// No alternate screen — messages are inserted above the viewport via
 /// `insert_before` and scroll into the terminal's normal scrollback buffer.
-fn setup_terminal() -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
+fn setup_terminal() -> io::Result<custom_terminal::Terminal> {
     enable_raw_mode()?;
 
     // Keyboard enhancement is optional — some terminals (legacy Windows console)
@@ -127,17 +126,10 @@ fn setup_terminal() -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
         ),
     );
 
-    let backend = CrosstermBackend::new(stdout());
+    let mut terminal = custom_terminal::Terminal::new()?;
 
-    // Small inline viewport — only holds the input prompt + status bar.
-    // All other content (header, messages) is inserted above and scrolls
-    // into the terminal's scrollback buffer naturally.
-    let terminal = Terminal::with_options(
-        backend,
-        TerminalOptions {
-            viewport: Viewport::Inline(4),
-        },
-    )?;
+    // Reserve initial viewport space (separator + 1-line input + separator + status).
+    terminal.ensure_viewport_height(4)?;
 
     Ok(terminal)
 }
@@ -172,7 +164,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Move cursor below the viewport while still in raw mode.
     // In raw mode, \r\n forces the terminal to scroll if at the bottom.
-    execute!(stdout(), crossterm::style::Print("\r\n\r\n\r\n\r\n"),)?;
+    let viewport_h = terminal.viewport_area.height;
+    let newlines = "\r\n".repeat(viewport_h as usize);
+    execute!(stdout(), crossterm::style::Print(newlines))?;
 
     // Restore terminal.
     restore_terminal();
