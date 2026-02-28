@@ -236,6 +236,7 @@ trait LlmClient: Send + Sync {
         &self,
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
+        sampling: &SamplingConfig,
     ) -> Result<Pin<Box<dyn Stream<Item = StreamEvent>>>>;
 }
 
@@ -250,10 +251,20 @@ enum StreamEvent {
     },
     /// 思考/推理内容
     ThinkingDelta(String),
-    /// 流结束
-    Done,
+    /// 流结束，携带本次请求的 token 用量
+    Done(Usage),
     /// 错误
     Error(String),
+}
+
+/// 各 Client 在流结束时统一产出的 token 用量。
+/// 各 Provider 原始字段名和返回时机不同（见 §3.5.3 映射表），由各 Client 实现统一收集并映射为此结构。
+/// 若 Provider 未直接返回 total_tokens（如 Anthropic），由 Client 计算:
+///   total_tokens = prompt_tokens + completion_tokens
+struct Usage {
+    prompt_tokens: u32,         // 输入 token 数
+    completion_tokens: u32,     // 输出 token 数（含推理 tokens）
+    total_tokens: u32,          // 总计（部分 Provider 需由 Client 端计算）
 }
 ```
 
@@ -373,7 +384,40 @@ LLM API 调用的错误处理策略：
 
 搜索由模型自主决定是否触发（非每次必搜），搜索结果中的引用信息在终端输出中简化显示为 `[n]` 脚注格式。
 
-### 3.3.6 安全边界
+### 3.3.6 采样参数映射
+
+`SamplingConfig` 中的统一字段到各 Provider API 请求字段的映射关系：
+
+| 统一字段 | OpenAI Chat Completions | OpenAI Responses | Anthropic Messages | Google Gemini |
+| -------- | ---------------------- | ---------------- | ------------------ | ------------- |
+| `temperature` | `temperature` (0-2) | `temperature` (0-2) | `temperature` (0-1, 超出范围 clamp) | `generationConfig.temperature` (0-2) |
+| `top_p` | `top_p` | `top_p` | `top_p` | `generationConfig.topP` |
+| `top_k` | — (忽略) | — (忽略) | `top_k` | `generationConfig.topK` |
+| `max_tokens` | `max_completion_tokens` | `max_output_tokens` | `max_tokens` (**必填**，未设置时取模型最大值) | `generationConfig.maxOutputTokens` |
+| `frequency_penalty` | `frequency_penalty` | — (忽略) | — (忽略) | `generationConfig.frequencyPenalty` |
+| `presence_penalty` | `presence_penalty` | — (忽略) | — (忽略) | `generationConfig.presencePenalty` |
+| `stop_sequences` | `stop` | — (忽略) | `stop_sequences` | `generationConfig.stopSequences` |
+
+**默认值策略：**
+
+- `max_tokens`：默认取各模型的最大输出 token 数，确保不截断长回复。各模型参考值：
+
+| 模型 | 最大输出 Tokens |
+| ---- | -------------- |
+| GPT-4o | 16,384 |
+| GPT-4.1 / 4.1-mini / 4.1-nano | 32,768 |
+| o3 / o4-mini | 100,000 |
+| Claude Opus 4 / 4.5 / 4.6 | 32,000 |
+| Claude Sonnet 4 / 4.5 / 4.6 | 64,000 |
+| Claude Haiku 4.5 | 64,000 |
+| Gemini 2.5 Pro / Flash | 65,536 |
+
+- `temperature`：默认不设置（各 Provider 默认 1.0），用户可按场景自行调整
+- 其余参数：默认不设置，使用 Provider 默认值
+
+**Anthropic 特殊处理：** Anthropic 的 `max_tokens` 为必填参数，当用户未配置 `sampling.max_tokens` 时，LLM Client 必须根据模型名称自动填入对应的最大输出 token 数。
+
+### 3.3.7 安全边界
 
 **路径边界**：内置文件工具（read_file, write_file, edit_file, glob, grep）在执行前校验路径：
 - 解析后的绝对路径必须在 `session.cwd` 及其子目录内
@@ -478,7 +522,25 @@ impl SlashCommand {
 
 命令发现：输入 `/` 后，匹配所有命令名前缀，弹出补全列表。
 
-#### 3.5.1 /compact 实现方案
+#### 3.5.1 /agents 输出规格
+
+`/agents` 命令输出当前会话的 Agent 列表及 token 用量统计。
+
+**输出格式：**
+```txt
+Agents in session:
+  [gpt]    GPT-5.2          openai/gpt-5.2           3,284 tokens (1,250 in / 2,034 out)
+  [opus]   Claude Opus      anthropic/claude-opus-4-6 5,642 tokens (3,512 in / 2,130 out)
+──────────────────────────────────────────────────────
+  Total: 8,926 tokens
+```
+
+**聚合规则：**
+- 遍历 `session.messages` 中所有 `role = Assistant` 的消息，按 `agent_name` 分组
+- 每个 Agent 累加其所有消息的 `usage.prompt_tokens` 和 `usage.completion_tokens`
+- Total 行使用 `session.total_tokens_used`
+
+#### 3.5.2 /compact 实现方案
 
 `/compact <agent_name>` 使用指定 Agent 将当前会话历史压缩为一段摘要。
 
@@ -498,6 +560,61 @@ impl SlashCommand {
 - **跨 Agent 一致性**：压缩后的摘要作为 System 消息注入所有 Agent 的上下文，保证所有 Agent 看到相同的历史摘要
 - **持久化格式**：摘要存储为 session 文件中的 `[compact_summary]` 段
 
+#### 3.5.3 自动压缩（Auto Compact）
+
+当会话的最近一次 `prompt_tokens`（即实际发送给 LLM 的上下文大小）超过 `settings.auto_compact_threshold` 时，在下一次 Agent Loop 开始前自动触发压缩，无需用户手动执行 `/compact`。
+
+**配置：**
+```toml
+[settings]
+auto_compact_threshold = 120000   # 默认 120K tokens
+```
+
+**Token 计数来源：** 使用 LLM API 响应中返回的真实 `Usage` 数据（`prompt_tokens` / `completion_tokens`），而非字符估算。每次 Agent 回复完成时，`StreamEvent::Done(Usage)` 携带本次请求的精确用量，追加到 `Session.total_tokens_used` 并记录到 `ChatMessage.usage`。判断是否需要压缩时，取最近一次 LLM 请求的 `prompt_tokens` 值与阈值比较。
+
+**各 Provider 的 Usage 返回方式：**
+
+| Provider | 返回位置 | 字段 |
+| -------- | -------- | ---- |
+| OpenAI Chat | 流式最后一个 chunk 的 `usage` 字段（需设 `stream_options.include_usage = true`） | `prompt_tokens`, `completion_tokens`, `total_tokens` |
+| OpenAI Responses | `response.completed` 事件的 `usage` 字段 | `input_tokens`, `output_tokens`, `total_tokens` |
+| Anthropic | `message_delta` 事件的 `usage` 字段 + `message_start` 的 `usage` | `input_tokens`, `output_tokens`（无 `total_tokens`，由 Client 计算） |
+| Google Gemini | 流式最后一个 chunk 的 `usageMetadata` 字段 | `promptTokenCount`, `candidatesTokenCount`, `totalTokenCount` |
+
+**触发流程：**
+```txt
+Agent 回复完成，收到 StreamEvent::Done(usage)
+    │
+    ▼
+更新 session.total_tokens_used += usage.total_tokens
+记录 message.usage = usage
+    │
+    ▼
+检查 usage.prompt_tokens >= auto_compact_threshold ?
+    │
+    ├── 否 ──→ 继续（等待下一次用户输入）
+    │
+    └── 是 ──→ 标记需要压缩
+                │
+                ▼
+          下一次用户发送消息时，在 Agent Loop 开始前自动执行 compact
+                │
+                ▼
+          使用 reply_order 中第一个 Agent 生成摘要
+                │
+                ▼
+          显示提示: "⚡ 会话已自动压缩 (N tokens → M tokens)"
+                │
+                ▼
+          继续 Agent Loop
+```
+
+**关键规则：**
+- 使用 `reply_order` 中第一个 Agent 执行压缩（用户也可通过 `/compact <agent>` 手动选择）
+- 自动压缩同样执行备份流程，确保可回滚
+- `auto_compact_threshold = 0` 时禁用自动压缩
+- 压缩后重置标记，下一次 Agent 回复后重新评估
+
 ### 3.6 会话持久化
 
 #### 3.6.1 TOML 文件存储
@@ -515,6 +632,7 @@ impl SlashCommand {
 id = "a1b2c3d4"
 cwd = "/path/to/project"
 agents = ["gpt", "opus"]
+total_tokens_used = 8926
 created_at = "2026-02-28T14:30:00Z"
 updated_at = "2026-02-28T15:45:00Z"
 
@@ -530,11 +648,21 @@ agent_name = "gpt"
 content = "我建议使用 VecDeque 作为基础..."
 created_at = "2026-02-28T14:30:15Z"
 
+[messages.usage]
+prompt_tokens = 1250
+completion_tokens = 2034
+total_tokens = 3284
+
 [[messages]]
 role = "assistant"
 agent_name = "opus"
 content = "考虑到高性能场景，推荐使用无锁环形缓冲区..."
 created_at = "2026-02-28T14:30:32Z"
+
+[messages.usage]
+prompt_tokens = 3512
+completion_tokens = 2130
+total_tokens = 5642
 ```
 
 #### 3.6.2 存储路径
@@ -577,6 +705,7 @@ struct Config {
 struct Settings {
     approval_mode: ApprovalMode,    // suggest | auto-edit | full-auto
     reply_order: Vec<String>,       // @all 回答顺序
+    auto_compact_threshold: Option<u32>,  // 会话自动压缩 token 阈值（默认 120000）
 }
 
 #[derive(Deserialize)]
@@ -590,6 +719,21 @@ struct AgentConfig {
     system_prompt: Option<String>,
     tools: bool,
     enable_web_search: bool,    // 启用模型原生 Web 搜索
+    sampling: Option<SamplingConfig>,  // 采样参数（均可选，未设置则使用模型默认值）
+}
+
+/// Agent 级采样参数配置。
+/// 所有字段均为 Option，未设置时使用各 Provider 的默认值。
+/// 不同 Provider 支持的参数集不同，不支持的参数会被静默忽略。
+#[derive(Deserialize)]
+struct SamplingConfig {
+    temperature: Option<f64>,           // 采样温度。OpenAI/Google: 0-2, Anthropic: 0-1
+    top_p: Option<f64>,                 // 核采样。0-1。建议不与 temperature 同时调整
+    top_k: Option<u32>,                 // Top-K 采样。仅 Anthropic/Google 支持
+    max_tokens: Option<u32>,            // 最大输出 token 数。默认取模型最大值
+    frequency_penalty: Option<f64>,     // 频率惩罚 -2.0~2.0。仅 OpenAI(Chat)/Google 支持
+    presence_penalty: Option<f64>,      // 存在惩罚 -2.0~2.0。仅 OpenAI(Chat)/Google 支持
+    stop_sequences: Option<Vec<String>>,// 停止序列
 }
 
 enum ApiType {
@@ -636,6 +780,7 @@ struct ChatMessage {
     content: MessageContent,
     tool_calls: Option<Vec<ToolCall>>,
     tool_results: Option<Vec<ToolCallResult>>,
+    usage: Option<Usage>,           // assistant 消息携带本次请求的 token 用量
     created_at: DateTime<Utc>,
 }
 
@@ -672,6 +817,7 @@ struct Session {
     cwd: PathBuf,
     agents: Vec<String>,            // 参与的 Agent name 列表
     messages: Vec<ChatMessage>,     // 完整消息历史
+    total_tokens_used: u64,         // 会话累计 token 用量（所有 Agent 的 total_tokens 之和）
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -720,13 +866,14 @@ struct AgentRuntime {
      │    └── 检查审批 → 执行工具 → 将结果追加消息 → 重新请求 LLM
      │
      ▼
- 7. StreamEvent::Done
+ 7. StreamEvent::Done(usage)
      │
      ▼
- 8. 构建 Agent 回复 ChatMessage { role: Assistant, agent_name: "opus", ... }
+ 8. 构建 Agent 回复 ChatMessage { role: Assistant, agent_name: "opus", usage, ... }
      │
      ▼
  9. session.messages.push(reply)
+     │    session.total_tokens_used += usage.total_tokens
      │
      ▼
 10. storage.save_message(session_id, reply)
