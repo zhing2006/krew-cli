@@ -1,14 +1,13 @@
 //! App state machine and main event loop.
 
-use std::io;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures::StreamExt;
-use ratatui::backend::CrosstermBackend;
 use ratatui_textarea::{Input, Key, TextArea};
 
+use crate::custom_terminal;
 use crate::render;
 
 /// Duration within which a second Ctrl+C triggers quit.
@@ -61,16 +60,18 @@ impl<'a> App<'a> {
     }
 
     /// Run the main event loop.
-    pub async fn run(
-        &mut self,
-        terminal: &mut ratatui::Terminal<CrosstermBackend<io::Stdout>>,
-    ) -> anyhow::Result<()> {
+    pub async fn run(&mut self, terminal: &mut custom_terminal::Terminal) -> anyhow::Result<()> {
         // Print the header above the viewport (scrolls into scrollback).
         render::insert_header(terminal, self)?;
 
         let mut event_stream = EventStream::new();
 
         loop {
+            // Adjust viewport height to fit the current textarea content.
+            let input_lines = self.textarea.lines().len() as u16;
+            let needed = input_lines.max(1) + 3; // separators (2) + status bar (1)
+            terminal.ensure_viewport_height(needed)?;
+
             // Render input prompt + status bar inside the inline viewport.
             terminal.draw(|frame| render::render_input_viewport(frame, self))?;
 
@@ -109,7 +110,7 @@ impl<'a> App<'a> {
     fn handle_event(
         &mut self,
         event: Event,
-        terminal: &mut ratatui::Terminal<CrosstermBackend<io::Stdout>>,
+        terminal: &mut custom_terminal::Terminal,
     ) -> anyhow::Result<()> {
         match event {
             Event::Key(key_event) => {
@@ -128,7 +129,7 @@ impl<'a> App<'a> {
     fn handle_key(
         &mut self,
         key_event: KeyEvent,
-        terminal: &mut ratatui::Terminal<CrosstermBackend<io::Stdout>>,
+        terminal: &mut custom_terminal::Terminal,
     ) -> anyhow::Result<()> {
         // Ctrl+C: double-press to quit.
         if key_event.modifiers.contains(KeyModifiers::CONTROL)
@@ -163,6 +164,17 @@ impl<'a> App<'a> {
             } => {
                 self.textarea.insert_newline();
             }
+            // Ctrl+J => insert newline (fallback for terminals without
+            // keyboard enhancement where Shift+Enter is indistinguishable
+            // from Enter).
+            Input {
+                key: Key::Char('j'),
+                ctrl: true,
+                shift: false,
+                alt: false,
+            } => {
+                self.textarea.insert_newline();
+            }
             // All other keys => forward to textarea.
             other => {
                 self.textarea.input(other);
@@ -185,10 +197,7 @@ impl<'a> App<'a> {
     }
 
     /// Send the current input as a message and produce an echo reply.
-    fn send_message(
-        &mut self,
-        terminal: &mut ratatui::Terminal<CrosstermBackend<io::Stdout>>,
-    ) -> anyhow::Result<()> {
+    fn send_message(&mut self, terminal: &mut custom_terminal::Terminal) -> anyhow::Result<()> {
         let text = self.textarea.lines().join("\n");
 
         if text.trim().is_empty() {

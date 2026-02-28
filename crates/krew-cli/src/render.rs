@@ -4,21 +4,18 @@
 //! All other content (header, messages) is inserted above the viewport
 //! via `insert_before`, scrolling naturally into terminal history.
 
-use std::io;
-
-use ratatui::Frame;
-use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
 use crate::app::App;
+use crate::custom_terminal;
 
 // ── Viewport rendering (input + status bar only) ───────────────────────
 
 /// Render the inline viewport: input prompt + status bar.
-pub fn render_input_viewport(frame: &mut Frame, app: &mut App) {
+pub fn render_input_viewport(frame: &mut custom_terminal::Frame, app: &mut App) {
     let area = frame.area();
 
     let textarea_lines = app.textarea.lines().len() as u16;
@@ -39,7 +36,7 @@ pub fn render_input_viewport(frame: &mut Frame, app: &mut App) {
 }
 
 /// Render the input prompt — `› ` prefix, no border.
-fn render_input(frame: &mut Frame, app: &mut App, area: Rect) {
+fn render_input(frame: &mut custom_terminal::Frame, app: &mut App, area: Rect) {
     let chunks = Layout::horizontal([
         Constraint::Length(2), // `› `
         Constraint::Min(1),    // Textarea
@@ -58,7 +55,7 @@ fn render_input(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 /// Render a horizontal separator line.
-fn render_separator(frame: &mut Frame, area: Rect) {
+fn render_separator(frame: &mut custom_terminal::Frame, area: Rect) {
     let line = "─".repeat(area.width as usize);
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
@@ -70,7 +67,7 @@ fn render_separator(frame: &mut Frame, area: Rect) {
 }
 
 /// Render the bottom status bar.
-fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
+fn render_status_bar(frame: &mut custom_terminal::Frame, app: &App, area: Rect) {
     let content = if let Some(hint) = &app.quit_hint {
         Line::from(Span::styled(
             format!("  {hint}"),
@@ -94,10 +91,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
 // ── Content inserted above viewport (scrolls into history) ─────────────
 
 /// Insert the header box above the viewport.
-pub fn insert_header(
-    terminal: &mut ratatui::Terminal<CrosstermBackend<io::Stdout>>,
-    app: &App,
-) -> anyhow::Result<()> {
+pub fn insert_header(terminal: &mut custom_terminal::Terminal, app: &App) -> anyhow::Result<()> {
     let version = env!("CARGO_PKG_VERSION");
     let dir = app.cwd.display();
 
@@ -146,7 +140,7 @@ pub fn insert_header(
 
 /// Insert a chat message above the viewport.
 pub fn insert_message(
-    terminal: &mut ratatui::Terminal<CrosstermBackend<io::Stdout>>,
+    terminal: &mut custom_terminal::Terminal,
     prefix: &str,
     content: &str,
 ) -> anyhow::Result<()> {
