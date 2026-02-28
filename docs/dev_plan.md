@@ -17,7 +17,7 @@
 
 | Phase | 名称 | 详情 | 状态 | 已有基础 |
 | ----- | ---- | ---- | ---- | -------- |
-| 1 | [日志系统 + TUI Echo 模式](./phases/phase-01-tui-echo.md) | tracing 日志、ratatui TUI、多行输入、Echo 回显 | ⬜ 待开始 | clap 参数解析、App 结构体骨架 |
+| 1 | [日志系统 + TUI Echo 模式](./phases/phase-01-tui-echo.md) | tracing 日志、ratatui TUI、多行输入、Echo 回显 | ✅ 已完成 | clap 参数解析、App 结构体骨架 |
 | 2 | [配置系统](./phases/phase-02-config.md) | 加载 settings.toml、CLI 参数覆盖、AGENTS.md | ⬜ 待开始 | Config/AgentConfig 等类型定义、AGENTS.md 加载已完成（含测试） |
 | 3 | [输入解析 + Slash 命令](./phases/phase-03-input-commands.md) | @ 寻址、/help /agents /clear 等命令 | ⬜ 待开始 | parse_input() + Addressee 枚举、SlashCommand 枚举骨架已有 |
 | 4 | [单 LLM 接入 + Markdown 渲染](./phases/phase-04-openai-chat.md) | OpenAI Chat Completions、流式输出、syntect 高亮 | ⬜ 待开始 | LlmClient trait + StreamEvent + Usage 已定义 |
