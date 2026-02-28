@@ -1,0 +1,1 @@
+//! Read file contents tool.

@@ -1,0 +1,16 @@
+[package]
+name = "krew-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+krew-llm = { workspace = true }
+krew-tools = { workspace = true }
+krew-storage = { workspace = true }
+krew-config = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+tokio = { workspace = true }

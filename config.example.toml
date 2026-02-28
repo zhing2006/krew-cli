@@ -1,0 +1,89 @@
+# krew-cli configuration example
+# Copy this file to .krew/settings.toml and edit as needed.
+
+[settings]
+approval_mode = "suggest"              # suggest | auto-edit | full-auto
+reply_order = ["gpt", "opus", "sonnet", "gemini", "doubao"]
+auto_compact_threshold = 120000        # auto-compact token threshold (0 = disabled)
+
+# Agent definitions
+
+[[agents]]
+name = "gpt"
+display_name = "GPT-5.2"
+provider = "openai"
+model = "gpt-5.2"
+api_type = "responses"
+color = "green"
+system_prompt = ""
+tools = true
+enable_web_search = false
+# sampling.temperature = 0.7
+# sampling.max_tokens = 32768
+
+[[agents]]
+name = "opus"
+display_name = "Claude Opus"
+provider = "anthropic"
+model = "claude-opus-4-6"
+color = "magenta"
+system_prompt = ""
+tools = true
+enable_web_search = false
+
+[[agents]]
+name = "sonnet"
+display_name = "Claude Sonnet"
+provider = "anthropic"
+model = "claude-sonnet-4-6"
+color = "cyan"
+system_prompt = ""
+tools = true
+enable_web_search = false
+
+[[agents]]
+name = "gemini"
+display_name = "Gemini 3.1 Pro"
+provider = "google"
+model = "gemini-3.1-pro"
+color = "blue"
+system_prompt = ""
+tools = true
+enable_web_search = false
+
+[[agents]]
+name = "doubao"
+display_name = "Doubao Seed 2.0"
+provider = "openai-compatible"
+model = "doubao-seed-2.0-pro"
+color = "yellow"
+system_prompt = ""
+tools = true
+enable_web_search = false
+
+# Provider SDK configuration
+
+[providers.openai]
+api_key_env = "OPENAI_API_KEY"
+base_url = "https://api.openai.com/v1"
+# azure_endpoint = "https://xxx.openai.azure.com"
+# azure_api_version = "2025-01-01"
+
+[providers.anthropic]
+api_key_env = "ANTHROPIC_API_KEY"
+base_url = "https://api.anthropic.com"
+
+[providers.google]
+api_key_env = "GOOGLE_API_KEY"
+
+[providers.openai-compatible]
+api_key_env = "DOUBAO_API_KEY"
+base_url = "https://ark.cn-beijing.volces.com/api/v3"
+
+# MCP servers
+
+# [[mcp_servers]]
+# name = "filesystem"
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
+# trust = "confirm"

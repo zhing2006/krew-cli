@@ -66,3 +66,5 @@ OpenAI agents have an `api_type` config field: `"responses"` (Responses API) or 
 - Config/session files use TOML format (via `toml` crate)
 - Static linking: `static_vcruntime` on Windows, musl + `mimalloc` on Linux, `crt-static` on macOS
 - All communication with user is in Chinese (中文)
+- All comments in code and config files must be in English
+- Always use the `git` agent (Task tool with subagent_type "git") for all git operations (commit, push, etc.)
