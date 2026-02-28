@@ -1,0 +1,45 @@
+{
+  "hooks": {
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "command": "$CLAUDE_PROJECT_DIR/.claude/scripts/notify-bg.exe -m \"Waiting for authorization.\"",
+            "type": "command"
+          }
+        ],
+        "matcher": "permission_prompt"
+      },
+      {
+        "hooks": [
+          {
+            "command": "$CLAUDE_PROJECT_DIR/.claude/scripts/notify-bg.exe -m \"MCP tool needs input.\"",
+            "type": "command"
+          }
+        ],
+        "matcher": "elicitation_dialog"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "$CLAUDE_PROJECT_DIR/.claude/scripts/notify-bg.exe -m \"Waiting for your answer.\"",
+            "type": "command"
+          }
+        ],
+        "matcher": "AskUserQuestion"
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "$CLAUDE_PROJECT_DIR/.claude/scripts/notify-bg.exe -m \"Task completed.\"",
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}
