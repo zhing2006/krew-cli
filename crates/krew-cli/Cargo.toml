@@ -1,0 +1,21 @@
+[package]
+name = "krew-cli"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "krew"
+path = "src/main.rs"
+
+[dependencies]
+krew-core = { workspace = true }
+krew-config = { workspace = true }
+clap = { version = "4", default-features = false, features = ["derive", "help", "usage", "std"] }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+static_vcruntime = "3"
