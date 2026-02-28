@@ -765,6 +765,63 @@ enum McpTrust {
 }
 ```
 
+#### 3.7.3 项目级指令文件（AGENTS.md）
+
+krew 启动时自动扫描工作目录及其父目录链中的 `AGENTS.md` 文件，将内容注入到所有 Agent 的系统提示词中。
+
+**常量定义（`krew-config`）：**
+
+```rust
+/// Filename to look for when loading project-level instructions.
+pub const PROJECT_INSTRUCTIONS_FILENAME: &str = "AGENTS.md";
+
+/// Maximum size in bytes for a single project instructions file (100KB).
+pub const PROJECT_INSTRUCTIONS_MAX_SIZE: usize = 102_400;
+```
+
+**加载函数（`krew-config::instructions`）：**
+
+```rust
+/// Load project instructions by walking from `cwd` up to the filesystem root.
+/// Files are merged ancestor-first (root → cwd) with a blank line separator.
+/// Returns `None` if no instruction files are found.
+pub fn load_project_instructions(cwd: &Path) -> Result<Option<String>, std::io::Error>;
+```
+
+**遍历策略：**
+
+1. 从 `cwd` 开始，收集从 cwd 到文件系统根的所有目录路径
+2. 反转列表得到祖先在前、cwd 在后的顺序
+3. 依次检查每个目录下是否存在 `AGENTS.md`
+4. 读取文件内容，跳过非 UTF-8 文件（记录 warning 日志）
+5. 超过 100KB 的文件截断并追加 `[WARNING: File truncated at 100KB limit]`
+6. 所有找到的内容以空行分隔合并
+
+**注入格式（`krew-core::agent::build_system_prompt`）：**
+
+```rust
+/// Build the final system prompt by merging project instructions
+/// with the agent's configured system_prompt.
+pub fn build_system_prompt(
+    project_instructions: Option<&str>,
+    agent_system_prompt: Option<&str>,
+) -> Option<String>;
+```
+
+输出格式：
+
+```txt
+<project-instructions>
+{AGENTS.md 合并内容}
+</project-instructions>
+
+{agent system_prompt}
+```
+
+当无项目指令时，直接使用 `system_prompt` 原值。
+
+**加载时机：** `App::new()` 中一次性加载，结果存储在 `App.project_instructions` 字段，所有 Agent 共享。文件不存在时静默返回 `None`。
+
 ---
 
 ## 4. 数据模型
