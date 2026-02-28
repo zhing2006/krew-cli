@@ -1,0 +1,12 @@
+# Windows: static_vcruntime crate handles static linking (via krew-cli Cargo.toml)
+# Linux musl: cargo build --target x86_64-unknown-linux-musl
+# macOS: crt-static via RUSTFLAGS
+
+[target.x86_64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "target-feature=+crt-static"]

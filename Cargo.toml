@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/krew-cli",
+    "crates/krew-core",
+    "crates/krew-llm",
+    "crates/krew-tools",
+    "crates/krew-storage",
+    "crates/krew-config",
+]
+
+# Versions locked to latest stable at dev start
+# Principle: default-features = false to minimize deps, avoid dup crates
+[workspace.dependencies]
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net", "io-util", "time", "fs", "process", "signal"] }
+serde = { version = "1", default-features = false, features = ["derive"] }
+serde_json = { version = "1", default-features = false }
+anyhow = { version = "1", default-features = false }
+thiserror = { version = "2", default-features = false }
+tracing = { version = "0.1", default-features = false }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
+chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
+uuid = { version = "1", default-features = false, features = ["v4"] }
+toml = { version = "0.9", default-features = false, features = ["parse", "display"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
+eventsource-stream = { version = "0.2", default-features = false }
+futures = { version = "0.3", default-features = false }
+async-trait = { version = "0.1", default-features = false }
+
+# Internal workspace crates
+krew-config = { path = "crates/krew-config" }
+krew-llm = { path = "crates/krew-llm" }
+krew-tools = { path = "crates/krew-tools" }
+krew-storage = { path = "crates/krew-storage" }
+krew-core = { path = "crates/krew-core" }
