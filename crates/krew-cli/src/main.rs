@@ -28,6 +28,16 @@ struct Cli {
     verbose: bool,
 }
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     let _cli = Cli::parse();
+
+    let cwd = std::env::current_dir()?;
+    let app = app::App::new(cwd)?;
+
+    // TEMP: should remove.
+    if app.project_instructions.is_some() {
+        tracing::info!(cwd = %app.cwd.display(), "Loaded project instructions from AGENTS.md");
+    }
+
+    Ok(())
 }

@@ -386,6 +386,36 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
 trust = "auto"                   # auto: 跳过审批 | confirm: 按审批策略确认（默认）
 ```
 
+#### 4.6.3 项目级指令文件（AGENTS.md）
+
+krew 支持通过项目目录中的 `AGENTS.md` 文件为所有 Agent 提供项目上下文（架构说明、编码规范、工作约定等）。该机制类似于 Claude Code 的 `CLAUDE.md` 和 OpenAI Codex 的 `AGENTS.md`。
+
+**文件位置与发现规则：**
+
+- 文件名固定为 `AGENTS.md`，放置在项目目录（工作目录）下
+- 支持层级化加载：krew 启动时从工作目录开始向上遍历父目录，收集所有找到的 `AGENTS.md` 文件
+- 合并顺序：祖先目录在前，子目录在后（子目录内容可补充或覆盖祖先的通用指令）
+- 该文件为可选项，不存在时静默跳过
+
+**注入行为：**
+
+- 加载的指令内容会自动注入到所有 Agent 的系统提示词中（在 `system_prompt` 之前）
+- 使用 `<project-instructions>` 标签包裹，与 Agent 个性化提示词区分
+- 单个文件大小限制 100KB，超出部分会被截断
+
+**示例：**
+
+```markdown
+# AGENTS.md
+
+## 项目架构
+本项目使用 Rust + tokio 异步运行时...
+
+## 编码规范
+- 使用 snake_case 命名
+- 所有 pub 函数需要文档注释
+```
+
 ---
 
 ## 5. 交互设计
