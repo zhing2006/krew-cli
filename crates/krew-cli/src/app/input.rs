@@ -191,9 +191,10 @@ impl<'a> App<'a> {
             return;
         };
         let line = line.clone();
+        let byte_col = Self::char_to_byte(&line, col);
 
         // Find the @token boundaries around the cursor.
-        let before = &line[..col.min(line.len())];
+        let before = &line[..byte_col];
         let at_pos = match before.rfind('@') {
             Some(pos) => pos,
             None => return,
@@ -209,10 +210,11 @@ impl<'a> App<'a> {
         // Build new line.
         let new_line = format!("{}{}{}", &line[..at_pos], replacement, &line[token_end..]);
 
-        // Rebuild all lines.
+        // Rebuild all lines — cursor position is in characters, not bytes.
+        let new_col_chars = line[..at_pos].chars().count() + replacement.chars().count();
+
         let mut all_lines: Vec<String> = lines.to_vec();
         all_lines[row] = new_line.clone();
-        let new_col = at_pos + replacement.len();
 
         let mut textarea = TextArea::new(all_lines);
         textarea.set_cursor_line_style(Style::default());
@@ -226,7 +228,7 @@ impl<'a> App<'a> {
             textarea.move_cursor(ratatui_textarea::CursorMove::Down);
         }
         textarea.move_cursor(ratatui_textarea::CursorMove::Head);
-        for _ in 0..new_col {
+        for _ in 0..new_col_chars {
             textarea.move_cursor(ratatui_textarea::CursorMove::Forward);
         }
         self.textarea = textarea;
@@ -289,25 +291,37 @@ impl<'a> App<'a> {
         self.popup = ActivePopup::None;
     }
 
+    /// Convert a character index to a byte offset within `s`.
+    /// Returns `s.len()` if `char_idx` is beyond the string.
+    fn char_to_byte(s: &str, char_idx: usize) -> usize {
+        s.char_indices()
+            .nth(char_idx)
+            .map(|(i, _)| i)
+            .unwrap_or(s.len())
+    }
+
     /// Extract the `@token` at the current cursor position, if any.
     /// Returns the text after `@` (may be empty for bare `@`).
     fn current_at_token(&self) -> Option<String> {
         let (row, col) = self.textarea.cursor();
         let lines = self.textarea.lines();
         let line = lines.get(row)?;
-        let safe_col = col.min(line.len());
-        let before = &line[..safe_col];
+        let byte_col = Self::char_to_byte(line, col);
+        let before = &line[..byte_col];
 
         // Find the last `@` not preceded by a non-whitespace char.
         let at_pos = before.rfind('@')?;
         // Check that `@` is at start or preceded by whitespace.
-        if at_pos > 0 && !line.as_bytes()[at_pos - 1].is_ascii_whitespace() {
-            return None;
+        if at_pos > 0 {
+            let prev_char = line[..at_pos].chars().next_back()?;
+            if !prev_char.is_whitespace() {
+                return None;
+            }
         }
 
         // Extract the token from @ to the next whitespace (or cursor).
-        let token_start = at_pos + 1;
-        let token = &line[token_start..safe_col];
+        let token_start = at_pos + 1; // '@' is 1 byte
+        let token = &line[token_start..byte_col];
 
         // Don't trigger if there's a space between @ and cursor.
         if token.contains(' ') {
