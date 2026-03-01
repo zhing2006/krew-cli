@@ -65,6 +65,9 @@ pub struct Settings {
     /// terminal does not support bracketed paste (e.g. Windows).
     #[serde(default = "default_true")]
     pub paste_burst_detection: bool,
+    /// Number of tokio worker threads (defaults to 4).
+    #[serde(default = "default_worker_threads")]
+    pub worker_threads: usize,
 }
 
 fn default_input_history_limit() -> usize {
@@ -73,6 +76,13 @@ fn default_input_history_limit() -> usize {
 
 fn default_true() -> bool {
     true
+}
+
+/// Default number of tokio worker threads.
+pub const DEFAULT_WORKER_THREADS: usize = 4;
+
+fn default_worker_threads() -> usize {
+    DEFAULT_WORKER_THREADS
 }
 
 /// Configuration for a single AI agent.

@@ -12,6 +12,8 @@ pub enum SlashCommand {
     Mcp,
     /// List available skills.
     Skills,
+    /// Show process stats (memory, threads).
+    Stats,
     /// Show available commands.
     Help,
     /// Exit the program (also aliased as /quit).
@@ -33,6 +35,7 @@ impl SlashCommand {
             "/compact" => Some(SlashCommand::Compact(arg)),
             "/mcp" => Some(SlashCommand::Mcp),
             "/skills" => Some(SlashCommand::Skills),
+            "/stats" => Some(SlashCommand::Stats),
             "/help" => Some(SlashCommand::Help),
             "/exit" | "/quit" => Some(SlashCommand::Exit),
             _ => None,
@@ -48,6 +51,7 @@ impl SlashCommand {
             SlashCommand::Compact(_) => "/compact",
             SlashCommand::Mcp => "/mcp",
             SlashCommand::Skills => "/skills",
+            SlashCommand::Stats => "/stats",
             SlashCommand::Help => "/help",
             SlashCommand::Exit => "/exit",
         }
@@ -62,6 +66,7 @@ impl SlashCommand {
             ("/compact", "Compact session context"),
             ("/mcp", "List MCP servers and tools"),
             ("/skills", "List available skills"),
+            ("/stats", "Show process stats (memory, threads)"),
             ("/help", "Show available commands"),
             ("/exit", "Exit the program (/quit)"),
         ]
@@ -76,6 +81,7 @@ impl SlashCommand {
             SlashCommand::Compact(_) => "Compact session context",
             SlashCommand::Mcp => "List MCP servers and tools",
             SlashCommand::Skills => "List available skills",
+            SlashCommand::Stats => "Show process stats (memory, threads)",
             SlashCommand::Help => "Show available commands",
             SlashCommand::Exit => "Exit the program (/quit)",
         }
