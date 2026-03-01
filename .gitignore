@@ -32,3 +32,5 @@ Cargo.lock
 
 # Custom
 .krew/*
+NUL
+nul
