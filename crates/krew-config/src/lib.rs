@@ -46,6 +46,9 @@ pub struct Config {
     pub mcp_servers: Vec<McpServerConfig>,
 }
 
+/// Default input history limit.
+pub const DEFAULT_INPUT_HISTORY_LIMIT: usize = 1000;
+
 /// Global settings controlling session behavior.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Settings {
@@ -55,6 +58,13 @@ pub struct Settings {
     pub reply_order: Vec<String>,
     /// Token threshold for auto-compact (0 or None = disabled).
     pub auto_compact_threshold: Option<u32>,
+    /// Maximum number of input history entries to keep.
+    #[serde(default = "default_input_history_limit")]
+    pub input_history_limit: usize,
+}
+
+fn default_input_history_limit() -> usize {
+    DEFAULT_INPUT_HISTORY_LIMIT
 }
 
 /// Configuration for a single AI agent.
