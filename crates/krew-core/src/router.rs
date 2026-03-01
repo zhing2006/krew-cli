@@ -40,19 +40,16 @@ pub fn parse_input(input: &str, known_agents: &[String]) -> anyhow::Result<(Addr
 
     if matched.is_empty() {
         Ok((Addressee::LastRespondent, message))
-    } else if matched.len() == 1 && matched[0] == "all" {
+    } else if matched.iter().any(|n| n == "all") {
+        // @all takes priority — even if mixed with specific names.
         Ok((Addressee::All, message))
+    } else if matched.len() == 1 {
+        Ok((
+            Addressee::Single(matched.into_iter().next().unwrap()),
+            message,
+        ))
     } else {
-        // Filter out "all" if mixed with specific names.
-        let agents: Vec<String> = matched.into_iter().filter(|n| n != "all").collect();
-        if agents.len() == 1 {
-            Ok((
-                Addressee::Single(agents.into_iter().next().unwrap()),
-                message,
-            ))
-        } else {
-            Ok((Addressee::Multiple(agents), message))
-        }
+        Ok((Addressee::Multiple(matched), message))
     }
 }
 
@@ -110,6 +107,13 @@ mod tests {
             Addressee::Multiple(vec!["gpt".to_string(), "opus".to_string()])
         );
         assert_eq!(msg, "hey @gpt what does @opus think");
+    }
+
+    #[test]
+    fn parse_all_mixed_with_specific() {
+        let (addr, msg) = parse_input("@gpt @all hello", &agents()).unwrap();
+        assert_eq!(addr, Addressee::All);
+        assert_eq!(msg, "@gpt @all hello");
     }
 
     #[test]
