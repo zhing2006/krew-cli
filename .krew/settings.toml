@@ -1,0 +1,22 @@
+[settings]
+approval_mode = "suggest"
+reply_order = ["gpt", "doubao"]
+
+[[agents]]
+name = "gpt"
+display_name = "ChatGPT"
+provider = "litellm"
+model = "gpt-5.2-chat"
+color = "green"
+
+[[agents]]
+name = "doubao"
+display_name = "豆包"
+provider = "litellm"
+model = "doubao-seed-2-0-lite"
+color = "yellow"
+
+[providers.litellm]
+type = "openai"
+api_key_env = "OPENAI_API_KEY"
+base_url = "http://litellm.tsd.xindong.com:4000"
