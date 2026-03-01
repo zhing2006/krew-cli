@@ -34,6 +34,9 @@ impl App {
             SlashCommand::Clear => {
                 self.execute_clear(terminal)?;
             }
+            SlashCommand::Stats => {
+                self.execute_stats(terminal)?;
+            }
             SlashCommand::Resume
             | SlashCommand::Compact(_)
             | SlashCommand::Mcp
@@ -98,6 +101,36 @@ impl App {
                 Span::styled(token_text, Style::default().fg(Color::DarkGray)),
             ]));
         }
+
+        render::insert_lines(terminal, lines)
+    }
+
+    /// Execute /stats: display process memory and thread count.
+    fn execute_stats(&self, terminal: &mut custom_terminal::Terminal) -> anyhow::Result<()> {
+        use krew_core::process_stats::ProcessStats;
+
+        let stats = ProcessStats::collect();
+        let thread_text = match stats.thread_count {
+            Some(n) => n.to_string(),
+            None => "N/A".to_string(),
+        };
+
+        let lines: Vec<Line<'static>> = vec![
+            Line::from(Span::styled(
+                "Process Stats:",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(vec![
+                Span::styled("  Memory    ", Style::default().fg(Color::Cyan)),
+                Span::styled(stats.format_memory(), Style::default().fg(Color::White)),
+            ]),
+            Line::from(vec![
+                Span::styled("  Threads   ", Style::default().fg(Color::Cyan)),
+                Span::styled(thread_text, Style::default().fg(Color::White)),
+            ]),
+        ];
 
         render::insert_lines(terminal, lines)
     }
