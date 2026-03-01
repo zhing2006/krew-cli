@@ -23,9 +23,11 @@ model = "claude-opus-4-6"
 color = "magenta"
 
 [providers.openai]
+type = "openai"
 api_key_env = "OPENAI_API_KEY"
 
 [providers.anthropic]
+type = "anthropic"
 api_key_env = "ANTHROPIC_API_KEY"
 "#;
 
@@ -112,6 +114,7 @@ model = "gpt-5"
 color = "green"
 
 [providers.openai]
+type = "openai"
 api_key_env = "KEY"
 "#;
     let mut f = NamedTempFile::new().unwrap();
@@ -172,6 +175,7 @@ model = "gpt-5"
 color = "blue"
 
 [providers.openai]
+type = "openai"
 api_key_env = "KEY"
 "#;
     let mut f = NamedTempFile::new().unwrap();

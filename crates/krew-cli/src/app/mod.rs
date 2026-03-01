@@ -1,3 +1,4 @@
+mod agent_display;
 mod commands;
 mod input;
 mod message;

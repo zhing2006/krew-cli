@@ -1,6 +1,10 @@
+use futures::StreamExt;
 use krew_config::AgentConfig;
-use krew_llm::LlmClient;
+use krew_llm::{ChatMessage, ChatRole, LlmClient, StreamEvent, ToolDefinition};
 use krew_tools::Tool;
+use tokio::sync::mpsc;
+
+use crate::event::AgentEvent;
 
 /// Runtime state for a single agent in a session.
 pub struct AgentRuntime {
@@ -12,6 +16,99 @@ pub struct AgentRuntime {
     pub tools: Vec<Box<dyn Tool>>,
     /// Whether the agent is currently generating a response.
     pub is_responding: bool,
+}
+
+impl AgentRuntime {
+    /// Start a streaming completion for this agent.
+    ///
+    /// Calls `chat_stream()` on the LLM client, then spawns a background
+    /// tokio task that consumes the stream and forwards `AgentEvent`s through
+    /// the returned channel.
+    pub async fn start_completion(
+        &self,
+        messages: Vec<ChatMessage>,
+        project_instructions: Option<&str>,
+    ) -> mpsc::UnboundedReceiver<AgentEvent> {
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        // Send ResponseStart immediately so TUI can render the header.
+        let _ = tx.send(AgentEvent::ResponseStart {
+            agent_name: self.config.name.clone(),
+            display_name: self.config.display_name.clone(),
+            color: self.config.color.clone(),
+        });
+
+        // Build the full message list with system prompt prepended.
+        let system_prompt =
+            build_system_prompt(project_instructions, self.config.system_prompt.as_deref());
+        let mut full_messages = Vec::with_capacity(messages.len() + 1);
+        if let Some(prompt) = system_prompt {
+            full_messages.push(ChatMessage {
+                role: ChatRole::System,
+                content: prompt,
+                name: None,
+            });
+        }
+        full_messages.extend(messages);
+
+        let sampling = self.config.sampling.clone().unwrap_or_default();
+        let tools: Vec<ToolDefinition> = vec![]; // Phase 4: no tools
+        let agent_name = self.config.name.clone();
+
+        // Call chat_stream while we still have &self.
+        let stream_result = self
+            .client
+            .chat_stream(&full_messages, &tools, &sampling)
+            .await;
+
+        match stream_result {
+            Ok(stream) => {
+                tokio::spawn(async move {
+                    consume_stream(stream, tx, &agent_name).await;
+                });
+            }
+            Err(e) => {
+                let _ = tx.send(AgentEvent::Error(e.to_string()));
+            }
+        }
+
+        rx
+    }
+}
+
+/// Consume an LLM stream and forward events through the channel.
+async fn consume_stream(
+    mut stream: std::pin::Pin<Box<dyn futures::Stream<Item = StreamEvent> + Send>>,
+    tx: mpsc::UnboundedSender<AgentEvent>,
+    agent_name: &str,
+) {
+    while let Some(event) = stream.next().await {
+        let agent_event = match event {
+            StreamEvent::TextDelta(text) => AgentEvent::TextDelta(text),
+            StreamEvent::Done(usage) => {
+                let _ = tx.send(AgentEvent::Done(usage));
+                return;
+            }
+            StreamEvent::Error(msg) => {
+                let _ = tx.send(AgentEvent::Error(msg));
+                return;
+            }
+            StreamEvent::ToolCall { .. } => {
+                // Phase 4: skip tool calls.
+                tracing::debug!(agent = agent_name, "skipping tool call (not implemented)");
+                continue;
+            }
+            StreamEvent::ThinkingDelta(_) => {
+                // Phase 4: skip thinking deltas.
+                continue;
+            }
+        };
+
+        if tx.send(agent_event).is_err() {
+            // Receiver dropped — stop consuming.
+            return;
+        }
+    }
 }
 
 /// Build the final system prompt by merging project instructions with the

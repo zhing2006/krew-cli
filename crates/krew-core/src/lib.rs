@@ -3,6 +3,7 @@
 
 pub mod agent;
 pub mod command;
+pub mod event;
 pub mod message;
 pub mod router;
 pub mod session;

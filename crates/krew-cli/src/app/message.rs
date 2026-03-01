@@ -5,6 +5,7 @@ use ratatui::text::{Line, Span};
 
 use krew_core::command::SlashCommand;
 use krew_core::router::{self, Addressee};
+use krew_llm::{ChatMessage, ChatRole};
 
 use crate::custom_terminal;
 use crate::render;
@@ -59,8 +60,80 @@ impl App {
         // Insert user message with colored routing dots: > ●●● message
         self.insert_user_message(terminal, &target_names, trimmed)?;
 
-        // Build route tag for echo display.
-        let route_tag = match &addressee {
+        // Add user message to conversation history.
+        self.messages.push(ChatMessage {
+            role: ChatRole::User,
+            content: body.to_string(),
+            name: None,
+        });
+
+        // Determine which agent to call.
+        let target_agent = match &addressee {
+            Addressee::Single(name) => Some(name.clone()),
+            Addressee::LastRespondent => {
+                // Use the first agent with an LLM client, or fall back to config order.
+                self.config
+                    .agents
+                    .iter()
+                    .find(|a| self.agents.contains_key(&a.name))
+                    .map(|a| a.name.clone())
+            }
+            // Phase 4: @all and @multiple not yet supported (Phase 6).
+            // For now, use the first agent in reply_order that has a client.
+            Addressee::All | Addressee::Multiple(_) => self
+                .config
+                .settings
+                .reply_order
+                .iter()
+                .find(|name| self.agents.contains_key(*name))
+                .cloned(),
+        };
+
+        if let Some(ref name) = target_agent {
+            if self.agents.contains_key(name) {
+                // Signal that we need to start a completion.
+                // The event loop will pick this up and call start_completion_async.
+                self.pending_completion = Some(name.clone());
+            } else {
+                // Builtin echo fallback.
+                self.echo_reply(terminal, &addressee, &body)?;
+            }
+        } else {
+            // No LLM agents available — echo.
+            self.echo_reply(terminal, &addressee, &body)?;
+        }
+
+        self.clear_textarea();
+        Ok(())
+    }
+
+    /// Start an async agent completion. Called from the event loop.
+    pub(crate) async fn start_completion_async(&mut self) {
+        let agent_name = match self.pending_completion.take() {
+            Some(name) => name,
+            None => return,
+        };
+
+        let agent = match self.agents.get(&agent_name) {
+            Some(a) => a,
+            None => return,
+        };
+
+        let rx = agent
+            .start_completion(self.messages.clone(), self.project_instructions.as_deref())
+            .await;
+
+        self.agent_event_rx = Some(rx);
+    }
+
+    /// Echo reply with yellow diamond prefix (for builtin agents).
+    fn echo_reply(
+        &self,
+        terminal: &mut custom_terminal::Terminal,
+        addressee: &Addressee,
+        body: &str,
+    ) -> anyhow::Result<()> {
+        let route_tag = match addressee {
             Addressee::All => "[→ @all]".to_string(),
             Addressee::Single(name) => format!("[→ @{name}]"),
             Addressee::Multiple(names) => {
@@ -70,7 +143,6 @@ impl App {
             Addressee::LastRespondent => "[→ last]".to_string(),
         };
 
-        // Echo reply with yellow diamond prefix (temporary, replaced by LLM in Phase 4).
         let diamond = Span::styled(
             "\u{25c6} ".to_string(), // ◆
             Style::default()
@@ -87,17 +159,10 @@ impl App {
         for line in body_lines {
             echo_lines.push(Line::from(Span::raw(line.to_string())));
         }
-        render::insert_lines(terminal, echo_lines)?;
-
-        self.clear_textarea();
-        Ok(())
+        render::insert_lines(terminal, echo_lines)
     }
 
     /// Insert user message with colored routing dots showing target agents.
-    ///
-    /// - Single agent: `> ● message` in agent's color
-    /// - Multiple/all agents: `> ●●● message` each dot in its agent's color
-    /// - No target (LastRespondent): `> message` (plain, no indicator)
     fn insert_user_message(
         &self,
         terminal: &mut custom_terminal::Terminal,
@@ -111,7 +176,6 @@ impl App {
         let mut spans: Vec<Span<'static>> = vec![Span::styled("> ".to_string(), green_bold)];
 
         if !target_names.is_empty() {
-            // Colored dots for each target agent.
             for name in target_names {
                 let color = self
                     .config
@@ -128,7 +192,6 @@ impl App {
             spans.push(Span::raw(" ".to_string()));
         }
 
-        // Build lines — first line gets the prefix, continuation lines flush left.
         let mut text_lines = text.lines();
         let first_text = text_lines.next().unwrap_or("");
         spans.push(Span::raw(first_text.to_string()));

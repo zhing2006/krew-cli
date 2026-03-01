@@ -1,4 +1,6 @@
 mod header;
+pub mod highlight;
+pub mod markdown;
 mod messages;
 mod popup;
 mod viewport;
