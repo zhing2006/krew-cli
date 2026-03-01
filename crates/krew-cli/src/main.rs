@@ -188,8 +188,7 @@ fn load_config(cwd: &Path, cli: &Cli) -> anyhow::Result<Config> {
     Ok(config)
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let cwd = std::env::current_dir()?;
 
@@ -200,6 +199,21 @@ async fn main() -> anyhow::Result<()> {
     // Load configuration (before terminal setup so errors print normally).
     let config = load_config(&cwd, &cli)?;
 
+    // Build tokio runtime with configurable worker thread count.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(config.settings.worker_threads)
+        .enable_all()
+        .build()?;
+
+    tracing::info!(
+        worker_threads = config.settings.worker_threads,
+        "Tokio runtime created"
+    );
+
+    runtime.block_on(async_main(config, cwd))
+}
+
+async fn async_main(config: Config, cwd: PathBuf) -> anyhow::Result<()> {
     // Install panic hook that restores the terminal before printing the panic.
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
