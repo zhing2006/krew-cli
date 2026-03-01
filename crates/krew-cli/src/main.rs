@@ -1,6 +1,7 @@
 mod app;
 mod completion;
 mod custom_terminal;
+mod frame_scheduler;
 mod render;
 mod textarea;
 
