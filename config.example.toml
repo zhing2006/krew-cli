@@ -5,6 +5,7 @@
 approval_mode = "suggest"              # suggest | auto-edit | full-auto
 reply_order = ["gpt", "opus", "sonnet", "gemini", "doubao"]
 auto_compact_threshold = 120000        # auto-compact token threshold (0 = disabled)
+paste_burst_detection = true           # timing-based paste detection for Windows (auto-disables if terminal supports bracketed paste)
 
 # Agent definitions
 

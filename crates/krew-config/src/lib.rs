@@ -61,10 +61,18 @@ pub struct Settings {
     /// Maximum number of input history entries to keep.
     #[serde(default = "default_input_history_limit")]
     pub input_history_limit: usize,
+    /// Enable timing-based paste burst detection as a fallback when the
+    /// terminal does not support bracketed paste (e.g. Windows).
+    #[serde(default = "default_true")]
+    pub paste_burst_detection: bool,
 }
 
 fn default_input_history_limit() -> usize {
     DEFAULT_INPUT_HISTORY_LIMIT
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Configuration for a single AI agent.
