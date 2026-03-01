@@ -2,7 +2,7 @@
 //!
 //! Only the input prompt + status bar live inside the ratatui viewport.
 //! All other content (header, messages) is inserted above the viewport
-//! via `insert_before`, scrolling naturally into terminal history.
+//! above the viewport, scrolling naturally into terminal history.
 
 mod header;
 mod messages;

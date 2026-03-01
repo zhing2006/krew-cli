@@ -2,7 +2,7 @@
 //!
 //! The popup replaces the status bar area when active and expands the
 //! viewport height downward (via `ensure_viewport_height`), pushing
-//! content above upward — matching codex's behavior.
+//! content above upward.
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};

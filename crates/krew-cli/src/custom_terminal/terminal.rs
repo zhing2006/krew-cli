@@ -1,51 +1,19 @@
-// Derived from ratatui::Terminal (MIT license) and codex-rs custom_terminal.rs.
-//
-// ratatui's built-in Terminal keeps `viewport_area` private and fixes the
-// inline height at creation time. This module provides a minimal terminal
-// that exposes `set_viewport_area` so the viewport can grow/shrink
-// dynamically as the input textarea changes height.
+//! Minimal inline terminal with dynamic viewport height.
 
-use std::io::{self, stdout};
+use std::io::{self, Write, stdout};
 
+use crossterm::cursor::MoveTo;
+use crossterm::queue;
+use crossterm::style::Print;
+use crossterm::terminal::{Clear, ClearType as CtClearType};
 use ratatui::backend::{Backend, ClearType, CrosstermBackend};
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::{Position, Rect, Size};
+use ratatui::text::Line;
 use unicode_width::UnicodeWidthStr;
 
-// ── Frame ────────────────────────────────────────────────────────────────
-
-/// Render frame backed by a [`Buffer`].
-pub struct Frame<'a> {
-    cursor_position: Option<Position>,
-    viewport_area: Rect,
-    buffer: &'a mut Buffer,
-}
-
-impl Frame<'_> {
-    /// Area available for rendering.
-    pub const fn area(&self) -> Rect {
-        self.viewport_area
-    }
-
-    /// Render any [`ratatui::widgets::Widget`] into the buffer.
-    pub fn render_widget<W: ratatui::widgets::Widget>(&mut self, widget: W, area: Rect) {
-        widget.render(area, self.buffer);
-    }
-
-    /// Request the cursor to be shown at `position` after this frame.
-    #[allow(dead_code)]
-    pub fn set_cursor_position<P: Into<Position>>(&mut self, position: P) {
-        self.cursor_position = Some(position.into());
-    }
-
-    /// Direct access to the underlying buffer.
-    #[allow(dead_code)]
-    pub fn buffer_mut(&mut self) -> &mut Buffer {
-        self.buffer
-    }
-}
-
-// ── Terminal ─────────────────────────────────────────────────────────────
+use super::Frame;
+use super::ansi::{ResetScrollRegion, SetScrollRegion, write_spans};
 
 /// Minimal inline terminal with dynamic viewport height.
 pub struct Terminal {
@@ -106,7 +74,7 @@ impl Terminal {
     }
 
     /// Adjust the viewport to the given height, scrolling the screen up
-    /// if necessary. Mirrors the approach in codex-rs `tui.rs::draw`.
+    /// if necessary.
     pub fn ensure_viewport_height(&mut self, height: u16) -> io::Result<()> {
         let size = self.size()?;
         self.last_known_size = size;
@@ -149,11 +117,7 @@ impl Terminal {
             self.last_known_size = size;
         }
 
-        let mut frame = Frame {
-            cursor_position: None,
-            viewport_area: self.viewport_area,
-            buffer: &mut self.buffers[self.current],
-        };
+        let mut frame = Frame::new(self.viewport_area, &mut self.buffers[self.current]);
         f(&mut frame);
         let cursor_position = frame.cursor_position;
 
@@ -189,9 +153,12 @@ impl Terminal {
         Ok(())
     }
 
-    /// Insert rendered content above the viewport (scrolls into terminal
-    /// scrollback). Algorithm from ratatui `insert_before_no_scrolling_regions`.
-    pub fn insert_before<F>(&mut self, height: u16, draw_fn: F) -> io::Result<()>
+    // ── Insert above viewport ────────────────────────────────────────
+
+    /// Insert rendered widget content above the viewport (scrolls into
+    /// terminal scrollback). Uses a ratatui Buffer for arbitrary widget
+    /// rendering (e.g. bordered boxes).
+    pub fn insert_widget_above<F>(&mut self, height: u16, draw_fn: F) -> io::Result<()>
     where
         F: FnOnce(&mut Buffer),
     {
@@ -229,6 +196,62 @@ impl Terminal {
             ..self.viewport_area
         });
         self.clear()?;
+
+        Ok(())
+    }
+
+    /// Insert styled lines above the viewport using scroll regions and
+    /// direct ANSI output. Each line is terminated with a real `\r\n`, so
+    /// the terminal emulator preserves newlines when the user copies text.
+    pub fn insert_lines_above(&mut self, lines: Vec<Line<'static>>) -> io::Result<()> {
+        if lines.is_empty() {
+            return Ok(());
+        }
+
+        let screen_size = self.size()?;
+        let mut area = self.viewport_area;
+        let last_cursor_pos = self.last_known_cursor_pos;
+        let mut out = stdout();
+        let line_count = lines.len() as u16;
+
+        let cursor_top = if area.bottom() < screen_size.height {
+            // Viewport is not at the bottom — scroll region downward to
+            // make room above the viewport.
+            let scroll_amount = line_count.min(screen_size.height - area.bottom());
+            let top_1based = area.top() + 1;
+            queue!(out, SetScrollRegion(top_1based..screen_size.height))?;
+            queue!(out, MoveTo(0, area.top()))?;
+            for _ in 0..scroll_amount {
+                // Reverse Index (RI): scroll region content down.
+                queue!(out, Print("\x1bM"))?;
+            }
+            queue!(out, ResetScrollRegion)?;
+
+            let cursor_top = area.top().saturating_sub(1);
+            area.y += scroll_amount;
+            cursor_top
+        } else {
+            area.top().saturating_sub(1)
+        };
+
+        // Limit scroll region to the area above the viewport so the
+        // viewport itself is not pushed off screen.
+        queue!(out, SetScrollRegion(1..area.top()))?;
+        queue!(out, MoveTo(0, cursor_top))?;
+
+        for line in &lines {
+            queue!(out, Print("\r\n"))?;
+            queue!(out, Clear(CtClearType::UntilNewLine))?;
+            write_spans(&mut out, line)?;
+        }
+
+        queue!(out, ResetScrollRegion)?;
+        queue!(out, MoveTo(last_cursor_pos.x, last_cursor_pos.y))?;
+        out.flush()?;
+
+        if area != self.viewport_area {
+            self.set_viewport_area(area);
+        }
 
         Ok(())
     }
