@@ -94,7 +94,7 @@ impl App<'_> {
     /// Execute /clear: clear visible content and re-display header.
     fn execute_clear(&self, terminal: &mut custom_terminal::Terminal) -> anyhow::Result<()> {
         terminal.clear()?;
-        // Reset viewport to the top so insert_before has space to render.
+        // Reset viewport to the top so the header has space to render.
         let size = terminal.size()?;
         terminal.set_viewport_area(ratatui::layout::Rect::new(0, 0, size.width, 0));
         render::insert_header(terminal, self)?;

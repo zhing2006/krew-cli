@@ -3,6 +3,7 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use krew_core::command::SlashCommand;
 use krew_core::router::{self, Addressee};
 
 use crate::custom_terminal;
@@ -28,8 +29,9 @@ impl App<'_> {
         // Push to input history.
         self.history_push(trimmed.to_string());
 
-        // Try slash command first.
-        if trimmed.starts_with('/') {
+        // Try slash command first — only if it matches a known command.
+        // Unknown `/...` falls through and is treated as plain text.
+        if trimmed.starts_with('/') && SlashCommand::from_input(trimmed).is_some() {
             self.clear_textarea();
             return self.execute_slash_command(trimmed, terminal);
         }

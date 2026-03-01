@@ -72,7 +72,7 @@ pub fn insert_header(terminal: &mut custom_terminal::Terminal, app: &App) -> any
     // Plus 1 blank line after = 6 total.
     let header_height = 6;
 
-    terminal.insert_before(header_height, |buf| {
+    terminal.insert_widget_above(header_height, |buf| {
         let inner_w = box_width.saturating_sub(2) as usize;
 
         // Build the third line with path truncation based on actual available width.

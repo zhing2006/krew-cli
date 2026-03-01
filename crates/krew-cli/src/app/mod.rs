@@ -152,10 +152,27 @@ impl<'a> App<'a> {
                 }
                 self.handle_key(key_event, terminal)?;
             }
+            Event::Paste(text) => {
+                self.handle_paste(text);
+            }
             Event::Resize(..) => {}
             _ => {}
         }
         Ok(())
+    }
+
+    /// Handle a bracketed paste event — insert text into the textarea
+    /// without triggering auto-send on newlines.
+    fn handle_paste(&mut self, text: String) {
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        let mut lines = text.split('\n');
+        if let Some(first) = lines.next() {
+            self.textarea.insert_str(first);
+        }
+        for line in lines {
+            self.textarea.insert_newline();
+            self.textarea.insert_str(line);
+        }
     }
 
     /// Clear the textarea and restore default styles.
