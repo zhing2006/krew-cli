@@ -5,9 +5,13 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures::StreamExt;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
 use ratatui_textarea::{Input, Key, TextArea};
 
 use krew_config::Config;
+use krew_core::command::SlashCommand;
+use krew_core::router::{self, Addressee};
 
 use crate::custom_terminal;
 use crate::render;
@@ -45,13 +49,7 @@ impl<'a> App<'a> {
             }
         };
 
-        let mut textarea = TextArea::default();
-        textarea.set_cursor_line_style(ratatui::style::Style::default());
-        textarea.set_cursor_style(
-            ratatui::style::Style::default()
-                .fg(ratatui::style::Color::White)
-                .add_modifier(ratatui::style::Modifier::REVERSED),
-        );
+        let textarea = Self::new_textarea();
 
         Ok(Self {
             cwd,
@@ -62,6 +60,18 @@ impl<'a> App<'a> {
             quit_shortcut_armed_at: None,
             quit_hint: None,
         })
+    }
+
+    /// Create a fresh TextArea with default styling.
+    fn new_textarea() -> TextArea<'a> {
+        let mut textarea = TextArea::default();
+        textarea.set_cursor_line_style(Style::default());
+        textarea.set_cursor_style(
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::REVERSED),
+        );
+        textarea
     }
 
     /// Run the main event loop.
@@ -201,7 +211,7 @@ impl<'a> App<'a> {
         self.quit_hint = Some("Press Ctrl+C again to quit".to_string());
     }
 
-    /// Send the current input as a message and produce an echo reply.
+    /// Send the current input as a message or execute a slash command.
     fn send_message(&mut self, terminal: &mut custom_terminal::Terminal) -> anyhow::Result<()> {
         let text = self.textarea.lines().join("\n");
 
@@ -210,33 +220,220 @@ impl<'a> App<'a> {
         }
 
         let trimmed = text.trim();
-        if trimmed == "/quit" || trimmed == "/exit" {
-            self.should_quit = true;
-            return Ok(());
+        tracing::debug!(input = %trimmed, "User sent message");
+
+        // Try slash command first.
+        if trimmed.starts_with('/') {
+            self.clear_textarea();
+            return self.execute_slash_command(trimmed, terminal);
         }
 
-        tracing::debug!(input = %text, "User sent message");
+        // Parse @ addressee (only known agents are recognized as addressees).
+        let agent_names: Vec<String> = self.config.agents.iter().map(|a| a.name.clone()).collect();
+        let (addressee, body) = match router::parse_input(trimmed, &agent_names) {
+            Ok(result) => result,
+            Err(e) => {
+                self.show_error(terminal, &e.to_string())?;
+                self.clear_textarea();
+                return Ok(());
+            }
+        };
 
-        // Insert the user message + echo reply above the viewport.
-        render::insert_message(terminal, "you", &text, "")?;
-        let echo_color = self
-            .config
-            .agents
-            .first()
-            .map(|a| a.color.as_str())
-            .unwrap_or("yellow");
-        render::insert_message(terminal, "echo", &text, echo_color)?;
+        // Resolve target agent names for colored dots on user message.
+        let target_names: Vec<&str> = match &addressee {
+            Addressee::All => self.config.agents.iter().map(|a| a.name.as_str()).collect(),
+            Addressee::Single(name) => vec![name.as_str()],
+            Addressee::Multiple(names) => names.iter().map(|n| n.as_str()).collect(),
+            Addressee::LastRespondent => vec![],
+        };
 
-        // Clear the textarea and restore styles.
-        self.textarea = TextArea::default();
-        self.textarea
-            .set_cursor_line_style(ratatui::style::Style::default());
-        self.textarea.set_cursor_style(
-            ratatui::style::Style::default()
-                .fg(ratatui::style::Color::White)
-                .add_modifier(ratatui::style::Modifier::REVERSED),
-        );
+        // Insert user message with colored routing dots: > ●●● message
+        self.insert_user_message(terminal, &target_names, trimmed)?;
 
+        // Build route tag for echo display.
+        let route_tag = match &addressee {
+            Addressee::All => "[→ @all]".to_string(),
+            Addressee::Single(name) => format!("[→ @{name}]"),
+            Addressee::Multiple(names) => {
+                let joined = names.iter().map(|n| format!("@{n}")).collect::<Vec<_>>();
+                format!("[→ {}]", joined.join(" "))
+            }
+            Addressee::LastRespondent => "[→ last]".to_string(),
+        };
+
+        // Echo reply with yellow diamond prefix (temporary, replaced by LLM in Phase 4).
+        let echo_text = format!("{route_tag} echo: {body}");
+        render::insert_system_message(
+            terminal,
+            vec![Line::from(vec![
+                Span::styled(
+                    "\u{25c6} ".to_string(), // ◆
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(echo_text),
+            ])],
+        )?;
+
+        self.clear_textarea();
         Ok(())
+    }
+
+    /// Insert user message with colored routing dots showing target agents.
+    ///
+    /// - Single agent: `> ● message` in agent's color
+    /// - Multiple/all agents: `> ●●● message` each dot in its agent's color
+    /// - No target (LastRespondent): `> message` (plain, no indicator)
+    fn insert_user_message(
+        &self,
+        terminal: &mut custom_terminal::Terminal,
+        target_names: &[&str],
+        text: &str,
+    ) -> anyhow::Result<()> {
+        let green_bold = Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD);
+
+        let mut spans: Vec<Span<'static>> = vec![Span::styled("> ".to_string(), green_bold)];
+
+        if !target_names.is_empty() {
+            // Colored dots for each target agent.
+            for name in target_names {
+                let color = self
+                    .config
+                    .agents
+                    .iter()
+                    .find(|a| a.name == *name)
+                    .map(|a| render::parse_color(&a.color))
+                    .unwrap_or(Color::White);
+                spans.push(Span::styled(
+                    "\u{25cf}".to_string(), // ●
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ));
+            }
+            spans.push(Span::raw(" ".to_string()));
+        }
+
+        spans.push(Span::raw(text.to_string()));
+        render::insert_system_message(terminal, vec![Line::from(spans)])
+    }
+
+    /// Execute a slash command.
+    fn execute_slash_command(
+        &mut self,
+        input: &str,
+        terminal: &mut custom_terminal::Terminal,
+    ) -> anyhow::Result<()> {
+        let Some(cmd) = SlashCommand::from_input(input) else {
+            return self.show_error(terminal, &format!("Unknown command: {input}"));
+        };
+
+        match cmd {
+            SlashCommand::Quit => {
+                self.should_quit = true;
+            }
+            SlashCommand::Help => {
+                self.execute_help(terminal)?;
+            }
+            SlashCommand::Agents => {
+                self.execute_agents(terminal)?;
+            }
+            SlashCommand::Clear => {
+                self.execute_clear(terminal)?;
+            }
+            SlashCommand::New | SlashCommand::Resume | SlashCommand::Compact(_) => {
+                self.show_info(terminal, &format!("{} — not yet implemented", cmd.name()))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Execute /help: display all available commands.
+    fn execute_help(&self, terminal: &mut custom_terminal::Terminal) -> anyhow::Result<()> {
+        let mut lines: Vec<Line<'static>> = vec![Line::from(Span::styled(
+            "Available commands:",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ))];
+
+        for &(name, desc) in SlashCommand::all_help() {
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {name:<12}"), Style::default().fg(Color::Cyan)),
+                Span::styled(desc.to_string(), Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+
+        render::insert_system_message(terminal, lines)
+    }
+
+    /// Execute /agents: display agent list with token stats.
+    fn execute_agents(&self, terminal: &mut custom_terminal::Terminal) -> anyhow::Result<()> {
+        let mut lines: Vec<Line<'static>> = vec![Line::from(Span::styled(
+            "Agents:",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ))];
+
+        for agent in &self.config.agents {
+            let color = render::parse_color(&agent.color);
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    format!("[{}]", agent.name),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(format!(
+                    "  {:<16} {}/{}",
+                    agent.display_name, agent.provider, agent.model
+                )),
+                Span::styled("  0 tokens", Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+
+        render::insert_system_message(terminal, lines)
+    }
+
+    /// Execute /clear: clear visible content and re-display header.
+    fn execute_clear(&self, terminal: &mut custom_terminal::Terminal) -> anyhow::Result<()> {
+        terminal.clear()?;
+        // Reset viewport to the top so insert_before has space to render.
+        let size = terminal.size()?;
+        terminal.set_viewport_area(ratatui::layout::Rect::new(0, 0, size.width, 0));
+        render::insert_header(terminal, self)?;
+        Ok(())
+    }
+
+    /// Display an error message above the viewport.
+    fn show_error(
+        &self,
+        terminal: &mut custom_terminal::Terminal,
+        msg: &str,
+    ) -> anyhow::Result<()> {
+        render::insert_system_message(
+            terminal,
+            vec![Line::from(Span::styled(
+                msg.to_string(),
+                Style::default().fg(Color::Red),
+            ))],
+        )
+    }
+
+    /// Display an info message above the viewport.
+    fn show_info(&self, terminal: &mut custom_terminal::Terminal, msg: &str) -> anyhow::Result<()> {
+        render::insert_system_message(
+            terminal,
+            vec![Line::from(Span::styled(
+                msg.to_string(),
+                Style::default().fg(Color::Yellow),
+            ))],
+        )
+    }
+
+    /// Clear the textarea and restore default styles.
+    fn clear_textarea(&mut self) {
+        self.textarea = Self::new_textarea();
     }
 }

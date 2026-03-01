@@ -31,7 +31,7 @@ impl SlashCommand {
             "/clear" => Some(SlashCommand::Clear),
             "/compact" => Some(SlashCommand::Compact(arg)),
             "/help" => Some(SlashCommand::Help),
-            "/quit" => Some(SlashCommand::Quit),
+            "/quit" | "/exit" => Some(SlashCommand::Quit),
             _ => None,
         }
     }
@@ -47,6 +47,19 @@ impl SlashCommand {
             SlashCommand::Help => "/help",
             SlashCommand::Quit => "/quit",
         }
+    }
+
+    /// Return all command names and descriptions (for `/help` listing).
+    pub fn all_help() -> &'static [(&'static str, &'static str)] {
+        &[
+            ("/new", "Start a new session"),
+            ("/resume", "Resume a previous session"),
+            ("/agents", "List agents and token usage"),
+            ("/clear", "Clear the screen"),
+            ("/compact", "Compact session context"),
+            ("/help", "Show available commands"),
+            ("/quit", "Quit the program"),
+        ]
     }
 
     /// Return a short description of the command.
