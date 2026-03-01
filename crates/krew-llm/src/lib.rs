@@ -1,10 +1,14 @@
 pub mod types;
 
-mod anthropic;
-mod google;
+pub mod anthropic;
+pub mod common;
+pub mod google;
 pub mod openai_chat;
-mod openai_responses;
+pub mod openai_responses;
 
+pub use anthropic::AnthropicClient;
+pub use google::GoogleClient;
+pub use openai_responses::OpenAiResponsesClient;
 pub use types::*;
 
 use futures::Stream;

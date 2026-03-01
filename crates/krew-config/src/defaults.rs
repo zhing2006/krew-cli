@@ -30,6 +30,8 @@ impl Default for Config {
                 tools: false,
                 enable_web_search: false,
                 sampling: None,
+                enable_thinking: false,
+                thinking_effort: None,
             }],
             providers: HashMap::new(),
             mcp_servers: Vec::new(),

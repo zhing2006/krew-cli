@@ -110,6 +110,11 @@ pub struct AgentConfig {
     pub enable_web_search: bool,
     /// Optional sampling parameters for generation control.
     pub sampling: Option<SamplingConfig>,
+    /// Whether to enable thinking/reasoning for this agent.
+    #[serde(default)]
+    pub enable_thinking: bool,
+    /// Thinking effort level (Low/Medium/High). Only used when enable_thinking is true.
+    pub thinking_effort: Option<ThinkingEffort>,
 }
 
 /// Sampling parameters for LLM generation.
@@ -153,6 +158,10 @@ pub struct ProviderConfig {
     /// `[agent_name]` instead.
     #[serde(default)]
     pub use_name_field: bool,
+    /// Google Vertex AI project ID (enables Vertex AI mode when set).
+    pub vertex_project: Option<String>,
+    /// Google Vertex AI location (e.g. "us-central1").
+    pub vertex_location: Option<String>,
 }
 
 /// Supported LLM provider types.
@@ -230,6 +239,15 @@ pub enum ApiType {
     Responses,
     /// OpenAI Chat Completions API (`POST /v1/chat/completions`).
     Chat,
+}
+
+/// Thinking/reasoning effort level for LLM providers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThinkingEffort {
+    Low,
+    Medium,
+    High,
 }
 
 /// MCP server trust level.
@@ -336,5 +354,144 @@ impl Config {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper to deserialize a TOML value string into a type.
+    #[derive(Deserialize)]
+    struct Wrapper {
+        val: ThinkingEffort,
+    }
+
+    #[test]
+    fn thinking_effort_deserialize_low() {
+        let w: Wrapper = toml::from_str("val = \"low\"").unwrap();
+        assert_eq!(w.val, ThinkingEffort::Low);
+    }
+
+    #[test]
+    fn thinking_effort_deserialize_medium() {
+        let w: Wrapper = toml::from_str("val = \"medium\"").unwrap();
+        assert_eq!(w.val, ThinkingEffort::Medium);
+    }
+
+    #[test]
+    fn thinking_effort_deserialize_high() {
+        let w: Wrapper = toml::from_str("val = \"high\"").unwrap();
+        assert_eq!(w.val, ThinkingEffort::High);
+    }
+
+    #[test]
+    fn thinking_effort_deserialize_invalid() {
+        let result: Result<Wrapper, _> = toml::from_str("val = \"extreme\"");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn agent_config_enable_thinking_default_false() {
+        let toml_str = r#"
+            name = "test"
+            display_name = "Test"
+            provider = "openai"
+            model = "gpt-4"
+            color = "blue"
+        "#;
+        let agent: AgentConfig = toml::from_str(toml_str).unwrap();
+        assert!(!agent.enable_thinking);
+    }
+
+    #[test]
+    fn agent_config_enable_thinking_with_effort() {
+        let toml_str = r#"
+            name = "test"
+            display_name = "Test"
+            provider = "openai"
+            model = "gpt-4"
+            color = "blue"
+            enable_thinking = true
+            thinking_effort = "high"
+        "#;
+        let agent: AgentConfig = toml::from_str(toml_str).unwrap();
+        assert!(agent.enable_thinking);
+        assert_eq!(agent.thinking_effort, Some(ThinkingEffort::High));
+    }
+
+    #[test]
+    fn agent_config_enable_thinking_without_effort() {
+        let toml_str = r#"
+            name = "test"
+            display_name = "Test"
+            provider = "openai"
+            model = "gpt-4"
+            color = "blue"
+            enable_thinking = true
+        "#;
+        let agent: AgentConfig = toml::from_str(toml_str).unwrap();
+        assert!(agent.enable_thinking);
+        assert!(agent.thinking_effort.is_none());
+    }
+
+    #[test]
+    fn provider_config_vertex_fields() {
+        let toml_str = r#"
+            type = "google"
+            api_key_env = "GOOGLE_API_KEY"
+            vertex_project = "my-proj"
+            vertex_location = "us-central1"
+        "#;
+        let provider: ProviderConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(provider.vertex_project.as_deref(), Some("my-proj"));
+        assert_eq!(provider.vertex_location.as_deref(), Some("us-central1"));
+    }
+
+    #[test]
+    fn provider_config_vertex_fields_missing() {
+        let toml_str = r#"
+            type = "google"
+            api_key_env = "GOOGLE_API_KEY"
+        "#;
+        let provider: ProviderConfig = toml::from_str(toml_str).unwrap();
+        assert!(provider.vertex_project.is_none());
+        assert!(provider.vertex_location.is_none());
+    }
+
+    #[test]
+    fn full_config_e2e_with_new_fields() {
+        let toml_str = r#"
+            [settings]
+            approval_mode = "suggest"
+            reply_order = ["agent1"]
+
+            [[agents]]
+            name = "agent1"
+            display_name = "Agent 1"
+            provider = "anthropic"
+            model = "claude-opus-4-6"
+            color = "green"
+            enable_thinking = true
+            thinking_effort = "medium"
+
+            [providers.anthropic]
+            type = "anthropic"
+            api_key_env = "ANTHROPIC_API_KEY"
+
+            [providers.google]
+            type = "google"
+            api_key_env = "GOOGLE_API_KEY"
+            vertex_project = "my-proj"
+            vertex_location = "us-central1"
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let agent = &config.agents[0];
+        assert!(agent.enable_thinking);
+        assert_eq!(agent.thinking_effort, Some(ThinkingEffort::Medium));
+
+        let google = &config.providers["google"];
+        assert_eq!(google.vertex_project.as_deref(), Some("my-proj"));
+        assert_eq!(google.vertex_location.as_deref(), Some("us-central1"));
     }
 }
