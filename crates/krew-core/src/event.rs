@@ -9,6 +9,8 @@ pub enum AgentEvent {
         display_name: String,
         color: String,
     },
+    /// Incremental thinking/reasoning content from the model.
+    ThinkingDelta(String),
     /// Incremental text content from the model.
     TextDelta(String),
     /// Stream completed with final token usage.

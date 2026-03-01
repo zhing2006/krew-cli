@@ -3,7 +3,6 @@ pub mod types;
 mod anthropic;
 mod google;
 pub mod openai_chat;
-mod openai_compatible;
 mod openai_responses;
 
 pub use types::*;

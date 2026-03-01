@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use futures::StreamExt;
 use krew_config::AgentConfig;
 use krew_llm::{ChatMessage, ChatRole, LlmClient, StreamEvent, ToolDefinition};
@@ -11,20 +13,22 @@ pub struct AgentRuntime {
     /// Agent configuration from settings.
     pub config: AgentConfig,
     /// LLM client for this agent's provider.
-    pub client: Box<dyn LlmClient>,
+    pub client: Arc<dyn LlmClient>,
     /// Tools available to this agent.
     pub tools: Vec<Box<dyn Tool>>,
     /// Whether the agent is currently generating a response.
     pub is_responding: bool,
+    /// Whether this agent's provider uses the `name` field on messages.
+    pub use_name_field: bool,
 }
 
 impl AgentRuntime {
     /// Start a streaming completion for this agent.
     ///
-    /// Calls `chat_stream()` on the LLM client, then spawns a background
-    /// tokio task that consumes the stream and forwards `AgentEvent`s through
-    /// the returned channel.
-    pub async fn start_completion(
+    /// Returns a channel receiver immediately. The HTTP request and stream
+    /// consumption run in a spawned background task so the caller's event
+    /// loop is never blocked.
+    pub fn start_completion(
         &self,
         messages: Vec<ChatMessage>,
         project_instructions: Option<&str>,
@@ -38,9 +42,28 @@ impl AgentRuntime {
             color: self.config.color.clone(),
         });
 
-        // Build the full message list with system prompt prepended.
-        let system_prompt =
-            build_system_prompt(project_instructions, self.config.system_prompt.as_deref());
+        // Build agent identity + optional custom system prompt.
+        let other_agent_hint = if self.use_name_field {
+            "Their messages carry a \"name\" field identifying the source agent."
+        } else {
+            "Their messages are prefixed with [agent_name] in the content."
+        };
+        let identity = format!(
+            "You are {display_name}, powered by the {model} model.\n\
+             Your agent name in this conversation is \"{name}\".\n\
+             You are participating in a multi-agent conversation hosted by krew-cli.\n\
+             Other agents in this conversation are DIFFERENT AI models, not you. \
+             {other_agent_hint}\n\
+             Respond as yourself — do not role-play or impersonate other agents.",
+            display_name = self.config.display_name,
+            model = self.config.model,
+            name = self.config.name,
+        );
+        let agent_prompt = match &self.config.system_prompt {
+            Some(prompt) if !prompt.is_empty() => format!("{identity}\n\n{prompt}"),
+            _ => identity,
+        };
+        let system_prompt = build_system_prompt(project_instructions, Some(&agent_prompt));
         let mut full_messages = Vec::with_capacity(messages.len() + 1);
         if let Some(prompt) = system_prompt {
             full_messages.push(ChatMessage {
@@ -54,23 +77,20 @@ impl AgentRuntime {
         let sampling = self.config.sampling.clone().unwrap_or_default();
         let tools: Vec<ToolDefinition> = vec![]; // Phase 4: no tools
         let agent_name = self.config.name.clone();
+        let client = Arc::clone(&self.client);
 
-        // Call chat_stream while we still have &self.
-        let stream_result = self
-            .client
-            .chat_stream(&full_messages, &tools, &sampling)
-            .await;
-
-        match stream_result {
-            Ok(stream) => {
-                tokio::spawn(async move {
+        // Spawn the HTTP request + stream consumption so the event loop
+        // is free to redraw immediately.
+        tokio::spawn(async move {
+            match client.chat_stream(&full_messages, &tools, &sampling).await {
+                Ok(stream) => {
                     consume_stream(stream, tx, &agent_name).await;
-                });
+                }
+                Err(e) => {
+                    let _ = tx.send(AgentEvent::Error(e.to_string()));
+                }
             }
-            Err(e) => {
-                let _ = tx.send(AgentEvent::Error(e.to_string()));
-            }
-        }
+        });
 
         rx
     }
@@ -98,10 +118,7 @@ async fn consume_stream(
                 tracing::debug!(agent = agent_name, "skipping tool call (not implemented)");
                 continue;
             }
-            StreamEvent::ThinkingDelta(_) => {
-                // Phase 4: skip thinking deltas.
-                continue;
-            }
+            StreamEvent::ThinkingDelta(text) => AgentEvent::ThinkingDelta(text),
         };
 
         if tx.send(agent_event).is_err() {
