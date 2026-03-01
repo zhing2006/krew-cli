@@ -31,25 +31,44 @@ pub fn parse_color(name: &str) -> Color {
 
 // ── Viewport rendering (input + status bar only) ───────────────────────
 
-/// Render the inline viewport: input prompt + status bar.
+/// Render the inline viewport: input prompt + status bar (or popup).
 pub fn render_input_viewport(frame: &mut custom_terminal::Frame, app: &mut App) {
     let area = frame.area();
 
     let textarea_lines = app.textarea.lines().len() as u16;
     let input_height = textarea_lines.max(1);
 
-    let chunks = Layout::vertical([
-        Constraint::Length(1),            // Top separator
-        Constraint::Length(input_height), // Input prompt
-        Constraint::Length(1),            // Bottom separator
-        Constraint::Length(1),            // Status bar
-    ])
-    .split(area);
+    if app.popup.is_active() {
+        // Popup replaces the status bar and may take multiple rows.
+        let popup_lines = app.popup.render_lines(area.width);
+        let popup_height = popup_lines.len() as u16;
 
-    render_separator(frame, chunks[0]);
-    render_input(frame, app, chunks[1]);
-    render_separator(frame, chunks[2]);
-    render_status_bar(frame, app, chunks[3]);
+        let chunks = Layout::vertical([
+            Constraint::Length(1),            // Top separator
+            Constraint::Length(input_height), // Input prompt
+            Constraint::Length(1),            // Bottom separator
+            Constraint::Length(popup_height), // Popup rows
+        ])
+        .split(area);
+
+        render_separator(frame, chunks[0]);
+        render_input(frame, app, chunks[1]);
+        render_separator(frame, chunks[2]);
+        render_popup(frame, popup_lines, chunks[3]);
+    } else {
+        let chunks = Layout::vertical([
+            Constraint::Length(1),            // Top separator
+            Constraint::Length(input_height), // Input prompt
+            Constraint::Length(1),            // Bottom separator
+            Constraint::Length(1),            // Status bar
+        ])
+        .split(area);
+
+        render_separator(frame, chunks[0]);
+        render_input(frame, app, chunks[1]);
+        render_separator(frame, chunks[2]);
+        render_status_bar(frame, app, chunks[3]);
+    }
 }
 
 /// Render the input prompt — `› ` prefix, no border.
@@ -114,6 +133,12 @@ fn render_status_bar(frame: &mut custom_terminal::Frame, app: &App, area: Rect) 
     };
 
     frame.render_widget(Paragraph::new(content), area);
+}
+
+/// Render completion popup lines in the given area.
+fn render_popup(frame: &mut custom_terminal::Frame, lines: Vec<Line<'static>>, area: Rect) {
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, area);
 }
 
 // ── Content inserted above viewport (scrolls into history) ─────────────
