@@ -80,13 +80,12 @@ pub struct App {
     pub(crate) chunking_policy: AdaptiveChunkingPolicy,
     /// Whether commit tick animation is active.
     pub(crate) commit_tick_active: bool,
+    /// Whether the agent is currently in thinking phase.
+    pub(crate) is_thinking: bool,
     /// Accumulated response text for the current streaming agent.
     pub(crate) current_response_text: String,
     /// Name of the agent currently streaming.
     pub(crate) current_agent_name: Option<String>,
-    /// Agent name pending async completion start (set by send_message,
-    /// consumed by the event loop).
-    pub(crate) pending_completion: Option<String>,
     /// Accumulated token usage per agent (agent_name → total_tokens).
     pub(crate) agent_token_usage: HashMap<String, (u32, u32)>,
     /// Startup warnings to display after header.
@@ -130,9 +129,9 @@ impl App {
             stream_state: StreamState::new(),
             chunking_policy: AdaptiveChunkingPolicy::new(),
             commit_tick_active: false,
+            is_thinking: false,
             current_response_text: String::new(),
             current_agent_name: None,
-            pending_completion: None,
             agent_token_usage: HashMap::new(),
             startup_warnings: Vec::new(),
         })
@@ -173,15 +172,16 @@ impl App {
             };
 
             // Create LLM client based on provider type.
-            let client: Box<dyn krew_llm::LlmClient> = match provider_config.provider_type {
+            let client: Arc<dyn krew_llm::LlmClient> = match provider_config.provider_type {
                 krew_config::ProviderType::OpenAI => {
                     match krew_llm::openai_chat::OpenAiChatClient::new(
                         agent_config.name.clone(),
                         agent_config.model.clone(),
                         api_key_env,
                         provider_config.base_url.as_deref(),
+                        provider_config.use_name_field,
                     ) {
-                        Ok(c) => Box::new(c),
+                        Ok(c) => Arc::new(c),
                         Err(e) => {
                             tracing::warn!(
                                 agent = agent_config.name,
@@ -207,6 +207,7 @@ impl App {
                 client,
                 tools: Vec::new(),
                 is_responding: false,
+                use_name_field: provider_config.use_name_field,
             };
 
             agents.insert(agent_config.name.clone(), runtime);
@@ -256,13 +257,7 @@ impl App {
                     }
                 }
 
-                // Branch 2: Start pending completion (async).
-                _ = async {}, if self.pending_completion.is_some() => {
-                    self.start_completion_async().await;
-                    self.request_redraw();
-                }
-
-                // Branch 3: Agent events (streaming response).
+                // Branch 2: Agent events (streaming response).
                 Some(agent_event) = async {
                     match &mut self.agent_event_rx {
                         Some(rx) => rx.recv().await,
@@ -332,8 +327,38 @@ impl App {
                 self.current_response_text.clear();
                 self.insert_agent_header(terminal, &agent_name, &display_name, &color)?;
             }
+            AgentEvent::ThinkingDelta(text) => {
+                tracing::debug!(delta = ?text, "ThinkingDelta received");
+
+                if !self.is_thinking {
+                    self.is_thinking = true;
+                }
+
+                // Use the same streaming pipeline but content will be
+                // styled gray in insert_indented_lines_thinking.
+                let collector = self
+                    .stream_collector
+                    .get_or_insert_with(MarkdownStreamCollector::new);
+                collector.push_delta(&text);
+
+                if collector.has_pending_newline() {
+                    let lines = collector.commit_complete_lines();
+                    if !lines.is_empty() {
+                        self.stream_state.enqueue(lines);
+                    }
+                    if !self.commit_tick_active {
+                        self.commit_tick_active = true;
+                    }
+                }
+            }
             AgentEvent::TextDelta(text) => {
                 tracing::debug!(delta = ?text, "TextDelta received");
+
+                // Transition from thinking to text: finalize thinking content.
+                if self.is_thinking {
+                    self.finalize_thinking(terminal)?;
+                }
+
                 self.current_response_text.push_str(&text);
 
                 // Push delta into markdown stream collector.
@@ -356,6 +381,11 @@ impl App {
                 }
             }
             AgentEvent::Done(usage) => {
+                // Finalize thinking if still active.
+                if self.is_thinking {
+                    self.finalize_thinking(terminal)?;
+                }
+
                 // Finalize any remaining content in the collector.
                 if let Some(mut collector) = self.stream_collector.take() {
                     let remaining = collector.finalize();
@@ -398,6 +428,7 @@ impl App {
                 self.stream_collector = None;
                 self.agent_event_rx = None;
                 self.commit_tick_active = false;
+                self.is_thinking = false;
                 self.current_agent_name = None;
                 self.current_response_text.clear();
                 self.chunking_policy.reset();
@@ -419,7 +450,11 @@ impl App {
         );
 
         if !output.lines.is_empty() {
-            self.insert_indented_lines(terminal, output.lines)?;
+            if self.is_thinking {
+                self.insert_thinking_lines(terminal, output.lines)?;
+            } else {
+                self.insert_indented_lines(terminal, output.lines)?;
+            }
         }
 
         // Stop commit tick if idle and no active stream.
@@ -427,6 +462,30 @@ impl App {
             self.commit_tick_active = false;
         }
 
+        Ok(())
+    }
+
+    /// Finalize the thinking phase: drain remaining thinking lines and reset.
+    fn finalize_thinking(
+        &mut self,
+        terminal: &mut custom_terminal::Terminal,
+    ) -> anyhow::Result<()> {
+        // Finalize the thinking collector.
+        if let Some(mut collector) = self.stream_collector.take() {
+            let remaining = collector.finalize();
+            if !remaining.is_empty() {
+                self.stream_state.enqueue(remaining);
+            }
+        }
+
+        // Drain all remaining thinking lines.
+        let remaining = self.stream_state.drain_all();
+        if !remaining.is_empty() {
+            self.insert_thinking_lines(terminal, remaining)?;
+        }
+
+        self.is_thinking = false;
+        self.chunking_policy.reset();
         Ok(())
     }
 

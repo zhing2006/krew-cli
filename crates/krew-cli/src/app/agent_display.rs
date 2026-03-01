@@ -46,6 +46,28 @@ impl App {
         render::insert_lines(terminal, indented)
     }
 
+    /// Insert thinking content lines in gray with 2-space indentation.
+    pub(crate) fn insert_thinking_lines(
+        &self,
+        terminal: &mut custom_terminal::Terminal,
+        lines: Vec<Line<'static>>,
+    ) -> anyhow::Result<()> {
+        let gray = Style::default().fg(Color::DarkGray);
+        let indented: Vec<Line<'static>> = lines
+            .into_iter()
+            .map(|line| {
+                let mut spans = vec![Span::raw("  ".to_string())];
+                // Override all span styles to gray.
+                for span in line.spans {
+                    spans.push(Span::styled(span.content, gray));
+                }
+                Line::from(spans)
+            })
+            .collect();
+
+        render::insert_lines(terminal, indented)
+    }
+
     /// Insert error line: `  ✗ {message}`
     pub(crate) fn insert_agent_error(
         &self,

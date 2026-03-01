@@ -138,6 +138,11 @@ pub struct ProviderConfig {
     pub azure_endpoint: Option<String>,
     /// Azure OpenAI API version string.
     pub azure_api_version: Option<String>,
+    /// Use the `name` field on messages to identify other agents.
+    /// When false (default), other agents' content is prefixed with
+    /// `[agent_name]` instead.
+    #[serde(default)]
+    pub use_name_field: bool,
 }
 
 /// Supported LLM provider types.
