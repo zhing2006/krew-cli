@@ -13,6 +13,7 @@ use krew_config::Config;
 use krew_core::command::SlashCommand;
 use krew_core::router::{self, Addressee};
 
+use crate::completion::{ActivePopup, CompletionItem, CompletionState};
 use crate::custom_terminal;
 use crate::render;
 
@@ -36,6 +37,8 @@ pub struct App<'a> {
     quit_shortcut_armed_at: Option<Instant>,
     /// Transient hint shown in the status bar.
     pub quit_hint: Option<String>,
+    /// Active completion popup state.
+    pub popup: ActivePopup,
     /// Input history (most recent last).
     history: Vec<String>,
     /// Current position in history navigation (None = not browsing).
@@ -65,6 +68,7 @@ impl<'a> App<'a> {
             should_quit: false,
             quit_shortcut_armed_at: None,
             quit_hint: None,
+            popup: ActivePopup::None,
             history: Vec::new(),
             history_index: None,
             history_draft: String::new(),
@@ -91,9 +95,13 @@ impl<'a> App<'a> {
         let mut event_stream = EventStream::new();
 
         loop {
-            // Adjust viewport height to fit the current textarea content.
+            // Sync completion popup based on current input.
+            self.sync_popup();
+
+            // Adjust viewport height to fit textarea + popup.
             let input_lines = self.textarea.lines().len() as u16;
-            let needed = input_lines.max(1) + 3; // separators (2) + status bar (1)
+            let needed = input_lines.max(1) + 3 + self.popup.extra_height();
+            // separators (2) + status bar or popup bottom row (1) + extra popup rows
             terminal.ensure_viewport_height(needed)?;
 
             // Render input prompt + status bar inside the inline viewport.
@@ -169,6 +177,11 @@ impl<'a> App<'a> {
             self.quit_hint = None;
         }
 
+        // If popup is active, intercept navigation keys.
+        if self.popup.is_active() && self.handle_popup_key(key_event, terminal)? {
+            return Ok(());
+        }
+
         let input: Input = key_event.into();
         match input {
             // Enter (no modifiers) => send message.
@@ -223,6 +236,244 @@ impl<'a> App<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Handle keys when popup is active. Returns true if the key was consumed.
+    fn handle_popup_key(
+        &mut self,
+        key_event: KeyEvent,
+        terminal: &mut custom_terminal::Terminal,
+    ) -> anyhow::Result<bool> {
+        match key_event.code {
+            KeyCode::Up => {
+                match &mut self.popup {
+                    ActivePopup::SlashCommand(s) | ActivePopup::AgentName(s) => s.move_up(),
+                    ActivePopup::None => {}
+                }
+                Ok(true)
+            }
+            KeyCode::Down => {
+                match &mut self.popup {
+                    ActivePopup::SlashCommand(s) | ActivePopup::AgentName(s) => s.move_down(),
+                    ActivePopup::None => {}
+                }
+                Ok(true)
+            }
+            KeyCode::Tab => {
+                self.accept_completion();
+                Ok(true)
+            }
+            KeyCode::Enter => {
+                // For slash commands, execute directly. For agent names, insert.
+                match &self.popup {
+                    ActivePopup::SlashCommand(state) => {
+                        if let Some(item) = state.selected_item() {
+                            let cmd_input = item.value.clone();
+                            self.popup = ActivePopup::None;
+                            self.clear_textarea();
+                            self.execute_slash_command(&cmd_input, terminal)?;
+                            return Ok(true);
+                        }
+                    }
+                    ActivePopup::AgentName(_) => {
+                        self.accept_completion();
+                        return Ok(true);
+                    }
+                    ActivePopup::None => {}
+                }
+                Ok(false)
+            }
+            KeyCode::Esc => {
+                self.popup = ActivePopup::None;
+                Ok(true)
+            }
+            _ => Ok(false), // Let other keys pass through to textarea.
+        }
+    }
+
+    /// Accept the currently selected completion item.
+    fn accept_completion(&mut self) {
+        match &self.popup {
+            ActivePopup::SlashCommand(state) => {
+                if let Some(item) = state.selected_item() {
+                    // Replace entire input with the slash command + trailing space.
+                    let text = format!("{} ", item.value);
+                    self.set_textarea_content(&text);
+                }
+            }
+            ActivePopup::AgentName(state) => {
+                if let Some(item) = state.selected_item() {
+                    let insert_text = format!("@{} ", item.value);
+                    // Replace the @token at cursor with the selected name.
+                    self.replace_at_token(&insert_text);
+                }
+            }
+            ActivePopup::None => {}
+        }
+        self.popup = ActivePopup::None;
+    }
+
+    /// Replace the `@token` at the cursor position with `replacement`.
+    fn replace_at_token(&mut self, replacement: &str) {
+        let (row, col) = self.textarea.cursor();
+        let lines = self.textarea.lines();
+        let Some(line) = lines.get(row) else {
+            return;
+        };
+        let line = line.clone();
+
+        // Find the @token boundaries around the cursor.
+        let before = &line[..col.min(line.len())];
+        let at_pos = match before.rfind('@') {
+            Some(pos) => pos,
+            None => return,
+        };
+
+        // Find the end of the token (next whitespace or end of line).
+        let after_at = &line[at_pos..];
+        let token_end = after_at
+            .find(|c: char| c.is_whitespace())
+            .map(|i| at_pos + i)
+            .unwrap_or(line.len());
+
+        // Build new line.
+        let new_line = format!("{}{}{}", &line[..at_pos], replacement, &line[token_end..]);
+
+        // Rebuild all lines.
+        let mut all_lines: Vec<String> = lines.to_vec();
+        all_lines[row] = new_line.clone();
+        let new_col = at_pos + replacement.len();
+
+        let mut textarea = TextArea::new(all_lines);
+        textarea.set_cursor_line_style(Style::default());
+        textarea.set_cursor_style(
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::REVERSED),
+        );
+        // Move cursor to the correct position.
+        for _ in 0..row {
+            textarea.move_cursor(ratatui_textarea::CursorMove::Down);
+        }
+        textarea.move_cursor(ratatui_textarea::CursorMove::Head);
+        for _ in 0..new_col {
+            textarea.move_cursor(ratatui_textarea::CursorMove::Forward);
+        }
+        self.textarea = textarea;
+    }
+
+    // ── Completion popup sync ────────────────────────────────────────
+
+    /// Detect whether a completion popup should be shown based on current input.
+    fn sync_popup(&mut self) {
+        let lines = self.textarea.lines();
+        let first_line = lines.first().map(|s| s.as_str()).unwrap_or("");
+
+        // Slash command popup: first line starts with `/`.
+        if first_line.starts_with('/') && lines.len() == 1 {
+            let filter = first_line; // include `/` so it matches "/agents" etc.
+            match &mut self.popup {
+                ActivePopup::SlashCommand(state) => {
+                    state.set_filter(filter);
+                    if state.is_empty() {
+                        self.popup = ActivePopup::None;
+                    }
+                }
+                _ => {
+                    let mut state = CompletionState::new(self.slash_command_items());
+                    state.set_filter(filter);
+                    if state.is_empty() {
+                        self.popup = ActivePopup::None;
+                    } else {
+                        self.popup = ActivePopup::SlashCommand(state);
+                    }
+                }
+            }
+            return;
+        }
+
+        // Agent name popup: detect @token at cursor position.
+        if let Some(token) = self.current_at_token() {
+            let filter = &token; // text after `@`
+            match &mut self.popup {
+                ActivePopup::AgentName(state) => {
+                    state.set_filter(filter);
+                    if state.is_empty() {
+                        self.popup = ActivePopup::None;
+                    }
+                }
+                _ => {
+                    let mut state = CompletionState::new(self.agent_name_items());
+                    state.set_filter(filter);
+                    if state.is_empty() {
+                        self.popup = ActivePopup::None;
+                    } else {
+                        self.popup = ActivePopup::AgentName(state);
+                    }
+                }
+            }
+            return;
+        }
+
+        // No trigger condition — close popup.
+        self.popup = ActivePopup::None;
+    }
+
+    /// Extract the `@token` at the current cursor position, if any.
+    /// Returns the text after `@` (may be empty for bare `@`).
+    fn current_at_token(&self) -> Option<String> {
+        let (row, col) = self.textarea.cursor();
+        let lines = self.textarea.lines();
+        let line = lines.get(row)?;
+        let safe_col = col.min(line.len());
+        let before = &line[..safe_col];
+
+        // Find the last `@` not preceded by a non-whitespace char.
+        let at_pos = before.rfind('@')?;
+        // Check that `@` is at start or preceded by whitespace.
+        if at_pos > 0 && !line.as_bytes()[at_pos - 1].is_ascii_whitespace() {
+            return None;
+        }
+
+        // Extract the token from @ to the next whitespace (or cursor).
+        let token_start = at_pos + 1;
+        let token = &line[token_start..safe_col];
+
+        // Don't trigger if there's a space between @ and cursor.
+        if token.contains(' ') {
+            return None;
+        }
+
+        Some(token.to_string())
+    }
+
+    /// Build completion items for slash commands.
+    fn slash_command_items(&self) -> Vec<CompletionItem> {
+        SlashCommand::all_help()
+            .iter()
+            .map(|&(name, desc)| CompletionItem {
+                value: name.to_string(),
+                description: desc.to_string(),
+            })
+            .collect()
+    }
+
+    /// Build completion items for agent names (including "all").
+    fn agent_name_items(&self) -> Vec<CompletionItem> {
+        let mut items = vec![CompletionItem {
+            value: "all".to_string(),
+            description: "Broadcast to all agents".to_string(),
+        }];
+        for agent in &self.config.agents {
+            items.push(CompletionItem {
+                value: agent.name.clone(),
+                description: format!(
+                    "{} ({}/{})",
+                    agent.display_name, agent.provider, agent.model
+                ),
+            });
+        }
+        items
     }
 
     /// Handle Ctrl+C press with double-press detection.
@@ -371,7 +622,7 @@ impl<'a> App<'a> {
         };
 
         match cmd {
-            SlashCommand::Quit => {
+            SlashCommand::Exit => {
                 self.should_quit = true;
             }
             SlashCommand::Help => {
@@ -383,7 +634,10 @@ impl<'a> App<'a> {
             SlashCommand::Clear => {
                 self.execute_clear(terminal)?;
             }
-            SlashCommand::New | SlashCommand::Resume | SlashCommand::Compact(_) => {
+            SlashCommand::Resume
+            | SlashCommand::Compact(_)
+            | SlashCommand::Mcp
+            | SlashCommand::Skills => {
                 self.show_info(terminal, &format!("{} — not yet implemented", cmd.name()))?;
             }
         }

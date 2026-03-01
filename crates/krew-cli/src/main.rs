@@ -1,4 +1,5 @@
 mod app;
+mod completion;
 mod custom_terminal;
 mod render;
 
