@@ -2,6 +2,7 @@ mod app;
 mod completion;
 mod custom_terminal;
 mod render;
+mod textarea;
 
 use std::io::{self, stdout};
 use std::path::{Path, PathBuf};

@@ -18,9 +18,10 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
 crossterm = { workspace = true }
-ratatui-textarea = { workspace = true }
 futures = { workspace = true }
 unicode-width = { workspace = true }
+unicode-segmentation = { workspace = true }
+textwrap = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 static_vcruntime = "3"

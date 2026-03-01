@@ -5,14 +5,13 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::StreamExt;
-use ratatui::style::{Color, Modifier, Style};
-use ratatui_textarea::TextArea;
 
 use krew_config::Config;
 
 use crate::completion::ActivePopup;
 use crate::custom_terminal;
 use crate::render;
+use crate::textarea::TextArea;
 
 use super::paste_burst::{FlushResult, PasteBurst};
 
@@ -20,7 +19,7 @@ use super::paste_burst::{FlushResult, PasteBurst};
 pub(super) const QUIT_SHORTCUT_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Top-level application state.
-pub struct App<'a> {
+pub struct App {
     /// Current working directory for the session.
     pub cwd: PathBuf,
     /// Loaded configuration.
@@ -29,7 +28,7 @@ pub struct App<'a> {
     #[allow(dead_code)]
     pub project_instructions: Option<String>,
     /// Multi-line text input component.
-    pub textarea: TextArea<'a>,
+    pub textarea: TextArea,
     /// Whether the app should quit.
     pub should_quit: bool,
     /// Timestamp when the first Ctrl+C was pressed (for double-press detection).
@@ -48,7 +47,7 @@ pub struct App<'a> {
     pub(crate) paste_burst: PasteBurst,
 }
 
-impl<'a> App<'a> {
+impl App {
     /// Initialize the application with the given config and working directory.
     pub fn new(cwd: PathBuf, config: Config) -> anyhow::Result<Self> {
         let project_instructions = match krew_config::load_project_instructions(&cwd) {
@@ -59,13 +58,11 @@ impl<'a> App<'a> {
             }
         };
 
-        let textarea = Self::new_textarea();
-
         Ok(Self {
             cwd,
             config,
             project_instructions,
-            textarea,
+            textarea: TextArea::new(),
             should_quit: false,
             quit_shortcut_armed_at: None,
             quit_hint: None,
@@ -75,18 +72,6 @@ impl<'a> App<'a> {
             history_draft: String::new(),
             paste_burst: PasteBurst::default(),
         })
-    }
-
-    /// Create a fresh TextArea with default styling.
-    pub(crate) fn new_textarea() -> TextArea<'a> {
-        let mut textarea = TextArea::default();
-        textarea.set_cursor_line_style(Style::default());
-        textarea.set_cursor_style(
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::REVERSED),
-        );
-        textarea
     }
 
     /// Run the main event loop.
@@ -101,7 +86,9 @@ impl<'a> App<'a> {
             self.sync_popup();
 
             // Adjust viewport height to fit textarea + popup.
-            let input_lines = self.textarea.lines().len() as u16;
+            // Use visual line count (after word wrapping) for accurate height.
+            let term_width = terminal.size()?.width.saturating_sub(2); // minus prompt "› "
+            let input_lines = self.textarea.desired_height(term_width.max(1));
             let needed = input_lines.max(1) + 3 + self.popup.extra_height();
             // separators (2) + status bar or popup bottom row (1) + extra popup rows
             terminal.ensure_viewport_height(needed)?;
@@ -177,14 +164,7 @@ impl<'a> App<'a> {
     pub(crate) fn handle_paste(&mut self, text: String) {
         self.paste_burst.clear_after_explicit_paste();
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
-        let mut lines = text.split('\n');
-        if let Some(first) = lines.next() {
-            self.textarea.insert_str(first);
-        }
-        for line in lines {
-            self.textarea.insert_newline();
-            self.textarea.insert_str(line);
-        }
+        self.textarea.insert_str(&text);
     }
 
     /// Flush any pending paste burst that has timed out.
@@ -200,29 +180,15 @@ impl<'a> App<'a> {
         }
     }
 
-    /// Clear the textarea and restore default styles.
+    /// Clear the textarea.
     pub(crate) fn clear_textarea(&mut self) {
-        self.textarea = Self::new_textarea();
+        self.textarea = TextArea::new();
         self.history_index = None;
     }
 
     /// Replace textarea content with the given text (supports multiline).
     pub(crate) fn set_textarea_content(&mut self, content: &str) {
-        let lines: Vec<String> = if content.is_empty() {
-            vec![String::new()]
-        } else {
-            content.lines().map(String::from).collect()
-        };
-        let mut textarea = TextArea::new(lines);
-        textarea.set_cursor_line_style(Style::default());
-        textarea.set_cursor_style(
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::REVERSED),
-        );
-        // Move cursor to end.
-        textarea.move_cursor(ratatui_textarea::CursorMove::Bottom);
-        textarea.move_cursor(ratatui_textarea::CursorMove::End);
-        self.textarea = textarea;
+        self.textarea.set_text_clearing_elements(content);
+        self.textarea.set_cursor(content.len());
     }
 }

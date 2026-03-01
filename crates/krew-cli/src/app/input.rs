@@ -3,8 +3,6 @@
 use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::style::{Color, Modifier, Style};
-use ratatui_textarea::{Input, Key, TextArea};
 
 use krew_core::command::SlashCommand;
 
@@ -14,7 +12,7 @@ use crate::custom_terminal;
 use super::App;
 use super::paste_burst::CharDecision;
 
-impl<'a> App<'a> {
+impl App {
     /// Handle a key press event.
     pub(crate) fn handle_key(
         &mut self,
@@ -95,19 +93,16 @@ impl<'a> App<'a> {
                             return Ok(());
                         }
                         CharDecision::BeginBuffer { retro_chars } => {
-                            let lines = self.textarea.lines();
-                            let (row, col) = self.textarea.cursor();
-                            if let Some(line) = lines.get(row) {
-                                let byte_col = Self::char_to_byte(line, col);
-                                let before = &line[..byte_col];
-                                if self
-                                    .paste_burst
-                                    .decide_begin_buffer(now, before, retro_chars as usize)
-                                    .is_some()
-                                {
-                                    self.paste_burst.append_char_to_buffer(ch, now);
-                                    return Ok(());
-                                }
+                            let cursor = self.textarea.cursor();
+                            let text = self.textarea.text();
+                            let before = &text[..cursor];
+                            if self
+                                .paste_burst
+                                .decide_begin_buffer(now, before, retro_chars as usize)
+                                .is_some()
+                            {
+                                self.paste_burst.append_char_to_buffer(ch, now);
+                                return Ok(());
                             }
                             // Not paste-like enough, fall through to normal insertion.
                         }
@@ -130,55 +125,43 @@ impl<'a> App<'a> {
             self.flush_and_apply_burst();
         }
 
-        let input: Input = key_event.into();
-        match input {
+        // Match key events directly via crossterm KeyEvent.
+        match key_event {
             // Enter (no modifiers) => send message.
-            Input {
-                key: Key::Enter,
-                shift: false,
-                ctrl: false,
-                alt: false,
+            KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                ..
             } => {
                 self.send_message(terminal)?;
             }
             // Shift+Enter => insert newline.
-            Input {
-                key: Key::Enter,
-                shift: true,
+            KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::SHIFT,
                 ..
             } => {
                 self.textarea.insert_newline();
             }
-            // Ctrl+J => insert newline (fallback for terminals without
-            // keyboard enhancement where Shift+Enter is indistinguishable
-            // from Enter).
-            Input {
-                key: Key::Char('j'),
-                ctrl: true,
-                shift: false,
-                alt: false,
-            } => {
-                self.textarea.insert_newline();
-            }
-            // Up arrow: history prev when cursor is on the first row.
-            Input {
-                key: Key::Up,
-                shift: false,
-                ctrl: false,
-                alt: false,
-            } if self.textarea.cursor().0 == 0 => {
+            // Up arrow (no modifiers): history prev when cursor is on the first row.
+            KeyEvent {
+                code: KeyCode::Up,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if self.textarea.cursor_row_col().0 == 0 => {
                 self.history_prev();
             }
-            // Down arrow: history next when cursor is on the last row.
-            Input {
-                key: Key::Down,
-                shift: false,
-                ctrl: false,
-                alt: false,
-            } if self.textarea.cursor().0 == self.textarea.lines().len() - 1 => {
+            // Down arrow (no modifiers): history next when cursor is on the last row.
+            KeyEvent {
+                code: KeyCode::Down,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if self.textarea.cursor_row_col().0
+                == self.textarea.line_count().saturating_sub(1) =>
+            {
                 self.history_next();
             }
-            // All other keys => forward to textarea.
+            // All other keys => forward to textarea's built-in handler.
             other => {
                 self.textarea.input(other);
             }
@@ -228,19 +211,16 @@ impl<'a> App<'a> {
                     return Ok(());
                 }
                 CharDecision::BeginBuffer { retro_chars } => {
-                    let lines = self.textarea.lines();
-                    let (row, col) = self.textarea.cursor();
-                    if let Some(line) = lines.get(row) {
-                        let byte_col = Self::char_to_byte(line, col);
-                        let before = &line[..byte_col];
-                        if self
-                            .paste_burst
-                            .decide_begin_buffer(now, before, retro_chars as usize)
-                            .is_some()
-                        {
-                            self.paste_burst.append_char_to_buffer(ch, now);
-                            return Ok(());
-                        }
+                    let cursor = self.textarea.cursor();
+                    let text = self.textarea.text();
+                    let before = &text[..cursor];
+                    if self
+                        .paste_burst
+                        .decide_begin_buffer(now, before, retro_chars as usize)
+                        .is_some()
+                    {
+                        self.paste_burst.append_char_to_buffer(ch, now);
+                        return Ok(());
                     }
                     // Retro-grab rejected (e.g. short CJK text without
                     // whitespace), but the input speed is paste-like.
@@ -255,7 +235,7 @@ impl<'a> App<'a> {
 
         // Normal insertion for non-ASCII chars.
         self.flush_and_apply_burst();
-        self.textarea.input(Input::from(key_event));
+        self.textarea.input(key_event);
         Ok(())
     }
 
@@ -371,65 +351,49 @@ impl<'a> App<'a> {
 
     /// Replace the `@token` at the cursor position with `replacement`.
     fn replace_at_token(&mut self, replacement: &str) {
-        let (row, col) = self.textarea.cursor();
-        let lines = self.textarea.lines();
-        let Some(line) = lines.get(row) else {
-            return;
-        };
-        let line = line.clone();
-        let byte_col = Self::char_to_byte(&line, col);
+        let cursor = self.textarea.cursor();
+        let text = self.textarea.text();
+        let before = &text[..cursor];
 
-        // Find the @token boundaries around the cursor.
-        let before = &line[..byte_col];
+        // Find the last `@` before the cursor.
         let at_pos = match before.rfind('@') {
             Some(pos) => pos,
             None => return,
         };
 
-        // Find the end of the token (next whitespace or end of line).
-        let after_at = &line[at_pos..];
+        // Check that `@` is at start or preceded by whitespace.
+        if at_pos > 0 {
+            let Some(prev_char) = text[..at_pos].chars().next_back() else {
+                return;
+            };
+            if !prev_char.is_whitespace() {
+                return;
+            }
+        }
+
+        // Find the end of the token (next whitespace or end of text from @).
+        let after_at = &text[at_pos..];
         let token_end = after_at
             .find(|c: char| c.is_whitespace())
             .map(|i| at_pos + i)
-            .unwrap_or(line.len());
+            .unwrap_or(text.len());
 
-        // Build new line.
-        let new_line = format!("{}{}{}", &line[..at_pos], replacement, &line[token_end..]);
-
-        // Rebuild all lines — cursor position is in characters, not bytes.
-        let new_col_chars = line[..at_pos].chars().count() + replacement.chars().count();
-
-        let mut all_lines: Vec<String> = lines.to_vec();
-        all_lines[row] = new_line.clone();
-
-        let mut textarea = TextArea::new(all_lines);
-        textarea.set_cursor_line_style(Style::default());
-        textarea.set_cursor_style(
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::REVERSED),
-        );
-        // Move cursor to the correct position.
-        for _ in 0..row {
-            textarea.move_cursor(ratatui_textarea::CursorMove::Down);
-        }
-        textarea.move_cursor(ratatui_textarea::CursorMove::Head);
-        for _ in 0..new_col_chars {
-            textarea.move_cursor(ratatui_textarea::CursorMove::Forward);
-        }
-        self.textarea = textarea;
+        let new_cursor = at_pos + replacement.len();
+        self.textarea.replace_range(at_pos..token_end, replacement);
+        self.textarea.set_cursor(new_cursor);
     }
 
     // ── Completion popup sync ────────────────────────────────────────
 
     /// Detect whether a completion popup should be shown based on current input.
     pub(crate) fn sync_popup(&mut self) {
-        let lines = self.textarea.lines();
-        let first_line = lines.first().map(|s| s.as_str()).unwrap_or("");
+        let text = self.textarea.text();
+        let first_line = text.lines().next().unwrap_or("");
+        let is_single_line = self.textarea.line_count() == 1;
 
-        // Slash command popup: first line starts with `/`.
-        if first_line.starts_with('/') && lines.len() == 1 {
-            let filter = first_line; // include `/` so it matches "/agents" etc.
+        // Slash command popup: first line starts with `/` and single line.
+        if first_line.starts_with('/') && is_single_line {
+            let filter = first_line;
             match &mut self.popup {
                 ActivePopup::SlashCommand(state) => {
                     state.set_filter(filter);
@@ -452,7 +416,7 @@ impl<'a> App<'a> {
 
         // Agent name popup: detect @token at cursor position.
         if let Some(token) = self.current_at_token() {
-            let filter = &token; // text after `@`
+            let filter = &token;
             match &mut self.popup {
                 ActivePopup::AgentName(state) => {
                     state.set_filter(filter);
@@ -477,40 +441,29 @@ impl<'a> App<'a> {
         self.popup = ActivePopup::None;
     }
 
-    /// Convert a character index to a byte offset within `s`.
-    /// Returns `s.len()` if `char_idx` is beyond the string.
-    fn char_to_byte(s: &str, char_idx: usize) -> usize {
-        s.char_indices()
-            .nth(char_idx)
-            .map(|(i, _)| i)
-            .unwrap_or(s.len())
-    }
-
     /// Extract the `@token` at the current cursor position, if any.
     /// Returns the text after `@` (may be empty for bare `@`).
     fn current_at_token(&self) -> Option<String> {
-        let (row, col) = self.textarea.cursor();
-        let lines = self.textarea.lines();
-        let line = lines.get(row)?;
-        let byte_col = Self::char_to_byte(line, col);
-        let before = &line[..byte_col];
+        let cursor = self.textarea.cursor();
+        let text = self.textarea.text();
+        let before = &text[..cursor];
 
-        // Find the last `@` not preceded by a non-whitespace char.
+        // Find the last `@` before the cursor.
         let at_pos = before.rfind('@')?;
+
         // Check that `@` is at start or preceded by whitespace.
         if at_pos > 0 {
-            let prev_char = line[..at_pos].chars().next_back()?;
+            let prev_char = text[..at_pos].chars().next_back()?;
             if !prev_char.is_whitespace() {
                 return None;
             }
         }
 
-        // Extract the token from @ to the next whitespace (or cursor).
-        let token_start = at_pos + 1; // '@' is 1 byte
-        let token = &line[token_start..byte_col];
+        // Extract the token from @ to cursor (byte range).
+        let token = &text[at_pos + 1..cursor];
 
         // Don't trigger if there's a space between @ and cursor.
-        if token.contains(' ') {
+        if token.contains(' ') || token.contains('\n') {
             return None;
         }
 
@@ -571,7 +524,7 @@ impl<'a> App<'a> {
             Some(_) => return, // already at oldest
             None => {
                 // Entering history — save current input as draft.
-                self.history_draft = self.textarea.lines().join("\n");
+                self.history_draft = self.textarea.text().to_string();
                 self.history.len() - 1
             }
         };
