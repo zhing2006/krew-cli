@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use crossterm::event::{
-    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    DisableBracketedPaste, EnableBracketedPaste, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use krew_config::Config;
@@ -113,9 +114,13 @@ fn clean_old_logs(log_dir: &Path, retention_days: u64) {
 
 /// Set up the terminal with a dynamic inline viewport.
 ///
-/// No alternate screen — messages are inserted above the viewport via
-/// `insert_before` and scroll into the terminal's normal scrollback buffer.
+/// No alternate screen — messages are inserted above the viewport and
+/// scroll into the terminal's normal scrollback buffer.
 fn setup_terminal() -> io::Result<custom_terminal::Terminal> {
+    // Enable bracketed paste so multi-line pastes arrive as a single
+    // Event::Paste instead of individual key events.
+    execute!(stdout(), EnableBracketedPaste)?;
+
     enable_raw_mode()?;
 
     // Keyboard enhancement is optional — some terminals (legacy Windows console)
@@ -139,6 +144,7 @@ fn setup_terminal() -> io::Result<custom_terminal::Terminal> {
 /// Restore the terminal to its original state.
 fn restore_terminal() {
     let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
+    let _ = execute!(stdout(), DisableBracketedPaste);
     let _ = disable_raw_mode();
 }
 
