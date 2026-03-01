@@ -1,0 +1,229 @@
+## 1. Config 类型扩展
+
+- [x] 1.1 在 `krew-config` 中添加 `ThinkingEffort` 枚举（Low/Medium/High），支持 TOML 反序列化
+- [x] 1.2 在 `AgentConfig` 中新增 `enable_thinking: bool`（默认 false）和 `thinking_effort: Option<ThinkingEffort>` 字段
+- [x] 1.3 在 `ProviderConfig` 中新增 `vertex_project: Option<String>` 和 `vertex_location: Option<String>` 字段
+- [x] 1.4 Config 类型扩展测试：
+  - ThinkingEffort 从 TOML 字符串 "low"/"medium"/"high" 反序列化
+  - ThinkingEffort 无效值反序列化失败
+  - AgentConfig enable_thinking 默认 false
+  - AgentConfig 同时设置 enable_thinking + thinking_effort 正确反序列化
+  - AgentConfig 只设置 enable_thinking 不设置 thinking_effort 时 effort 为 None
+  - ProviderConfig vertex_project/vertex_location 可选字段正确反序列化
+  - ProviderConfig vertex 字段缺失时为 None
+  - 完整 Config 端到端 TOML 反序列化（含新字段）
+
+## 2. 公共模块提取
+
+- [x] 2.1 在 `krew-llm` 中新建 `common.rs` 模块，定义 `RetryAction` 枚举和 `classify_status()` 函数
+- [x] 2.2 将 `openai_chat.rs` 中的 `extract_error_message()` 迁移到 `common.rs`
+- [x] 2.3 将 `openai_chat.rs` 中的 retry 逻辑提取为通用 `send_with_retry()` 函数
+- [x] 2.4 在 `common.rs` 中实现 `merge_consecutive_same_role()` 消息合并函数
+- [x] 2.5 重构 `openai_chat.rs` 调用公共函数，验证现有测试全部通过
+- [x] 2.6 公共模块测试：
+  - classify_status: 429 → RateLimit
+  - classify_status: 500/502/503 → ServerError
+  - classify_status: 401/403 → AuthError
+  - classify_status: 400/404/422 → NoRetry
+  - classify_status: 200 (success) 行为
+  - merge_consecutive_same_role: 两条连续 user 消息合并为一条，content 用 \n\n 连接
+  - merge_consecutive_same_role: 三条连续 user 消息全部合并
+  - merge_consecutive_same_role: user/assistant 交替不合并
+  - merge_consecutive_same_role: user/user/assistant/assistant/user → 3 条消息
+  - merge_consecutive_same_role: 单条消息原样返回
+  - merge_consecutive_same_role: 空列表返回空列表
+
+## 3. OpenAI Responses API Client
+
+- [x] 3.1 实现 `OpenAiResponsesClient` 结构体和 `new()` 构造函数（含 Azure 模式检测）
+- [x] 3.2 实现 `convert_messages()` 将 ChatMessage 转换为 Responses API input 格式（system→developer role，assistant→output_text 格式）
+- [x] 3.3 实现 `build_sampling_params()` 采样参数映射（temperature、top_p、max_output_tokens）
+- [x] 3.4 实现 SSE 事件解析（处理 response.output_text.delta、reasoning_summary_text.delta、function_call_arguments.done、response.completed、response.failed）
+- [x] 3.5 实现 thinking/reasoning 参数注入（enable_thinking→reasoning.effort + summary）
+- [x] 3.6 实现 tool 定义转换为 Responses API 格式（type: function、strict: true）
+- [x] 3.7 实现 `LlmClient` trait（chat_stream 方法），串联请求构建→retry→SSE 解析
+- [x] 3.8 SSE 解析测试：
+  - response.output_text.delta → StreamEvent::TextDelta
+  - response.output_text.done 事件正确处理（不产出重复 event）
+  - response.reasoning_summary_text.delta → StreamEvent::ThinkingDelta
+  - response.reasoning_summary_text.done 事件正确处理
+  - response.function_call_arguments.done → StreamEvent::ToolCall（含 call_id、name、arguments）
+  - response.output_item.added（type: function_call）正确缓存 call_id 和 name
+  - response.completed → StreamEvent::Done（含 usage: input_tokens→prompt_tokens, output_tokens→completion_tokens）
+  - response.completed 中 output_tokens_details.reasoning_tokens 正确处理
+  - response.failed → StreamEvent::Error
+  - response.incomplete → StreamEvent::Error
+  - 无关事件（response.queued, response.in_progress, response.content_part.added 等）安全忽略
+  - 空 delta 内容不产出 event
+- [x] 3.9 消息转换测试：
+  - ChatRole::User → {"type":"message","role":"user","content":"..."}
+  - ChatRole::System → {"type":"message","role":"developer","content":"..."}
+  - ChatRole::Assistant（当前 agent）→ {"type":"message","role":"assistant","content":[{"type":"output_text","text":"..."}],"status":"completed"}
+  - ChatRole::Assistant（其他 agent）→ {"type":"message","role":"user","content":"[agent_name] ..."}
+  - 多条消息完整转换顺序正确
+  - 空消息列表返回空数组
+- [x] 3.10 采样参数测试：
+  - 全部参数设置时正确映射（temperature、top_p、max_output_tokens）
+  - 全部参数为 None 时不输出任何字段
+  - max_tokens 映射为 max_output_tokens（非 max_completion_tokens）
+  - 不支持的参数（frequency_penalty、presence_penalty、stop_sequences、top_k）被忽略
+- [x] 3.11 Azure 模式测试：
+  - 有 azure_endpoint 时 URL 为 {azure_endpoint}/openai/v1/responses
+  - 有 azure_endpoint 时使用 api-key header 而非 Bearer
+  - 无 azure_endpoint 时 URL 为 {base_url}/v1/responses
+  - 无 azure_endpoint 时使用 Authorization: Bearer
+- [x] 3.12 Thinking/Reasoning 参数测试：
+  - enable_thinking=true, effort=High → {"reasoning":{"effort":"high","summary":"auto"}}
+  - enable_thinking=true, effort=Low → {"reasoning":{"effort":"low","summary":"auto"}}
+  - enable_thinking=true, effort=None → {"reasoning":{"effort":"medium","summary":"auto"}}
+  - enable_thinking=false → 请求中不包含 reasoning 字段
+- [x] 3.13 Tool 定义转换测试：
+  - 单个 tool → {"type":"function","name":"...","description":"...","parameters":{...},"strict":true}
+  - 多个 tools 转换正确
+  - 空 tools 列表不包含 tools 字段
+
+## 4. Google Gemini Client
+
+- [x] 4.1 实现 `GoogleClient` 结构体和 `new()` 构造函数（含 Vertex AI 模式检测）
+- [x] 4.2 实现 `convert_messages()` 将 ChatMessage 转换为 Gemini contents 格式（system→systemInstruction、assistant→model role、连续消息合并）
+- [x] 4.3 实现 `build_generation_config()` 采样参数映射（temperature、topP、topK、maxOutputTokens、stopSequences）
+- [x] 4.4 实现 SSE 事件解析（data-only JSON，检查 thought 布尔标记、functionCall、finishReason、usageMetadata）
+- [x] 4.5 实现 thinking 参数注入（Gemini 3.x→thinkingLevel 枚举，Gemini 2.5→thinkingBudget 数值，按模型名前缀判断）
+- [x] 4.6 实现 tool 定义转换为 functionDeclarations 格式
+- [x] 4.7 实现 `LlmClient` trait（chat_stream 方法），含 Vertex AI URL/认证切换
+- [x] 4.8 SSE 解析测试：
+  - 普通 text part → StreamEvent::TextDelta
+  - thought:true 的 text part → StreamEvent::ThinkingDelta
+  - thought:false 的 text part → StreamEvent::TextDelta（非 thinking）
+  - thought 字段缺失时视为普通 text
+  - functionCall part → StreamEvent::ToolCall（name、args 序列化为 JSON 字符串、自动生成 id）
+  - finishReason:"STOP" + usageMetadata → StreamEvent::Done（promptTokenCount→prompt_tokens, candidatesTokenCount→completion_tokens）
+  - usageMetadata 含 thoughtsTokenCount 时正确处理（不影响 Usage 映射）
+  - 多个 parts 在同一 chunk 中（text + functionCall 混合）
+  - 空 candidates 数组安全忽略
+  - 无效 JSON 数据 → StreamEvent::Error
+  - 流意外断开（无 finishReason）→ StreamEvent::Error
+- [x] 4.9 消息转换测试：
+  - ChatRole::User → {"role":"user","parts":[{"text":"..."}]}
+  - ChatRole::System → 分离到 systemInstruction 字段，不放入 contents
+  - 多条 System 消息合并为一个 systemInstruction
+  - ChatRole::Assistant（当前 agent）→ {"role":"model","parts":[{"text":"..."}]}
+  - ChatRole::Assistant（其他 agent）→ {"role":"user","parts":[{"text":"[agent_name] ..."}]}
+  - 连续两条 user role 消息合并（parts text 用 \n\n 连接）
+  - 连续三条不同 agent 回复（均转为 user）合并为一条
+  - user/model 交替不合并
+  - 空消息列表返回空 contents
+- [x] 4.10 采样参数测试：
+  - 全部参数设置时正确映射到 generationConfig 中对应字段（temperature、topP、topK、maxOutputTokens、frequencyPenalty、presencePenalty、stopSequences）
+  - 全部参数为 None 时 generationConfig 为空或不设
+  - 参数名使用 camelCase（topP 非 top_p、topK 非 top_k、maxOutputTokens 非 max_tokens）
+- [x] 4.11 URL 构建测试：
+  - 标准模式：https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse&key={key}
+  - 自定义 base_url 替换默认 URL
+  - Vertex AI 模式：https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/google/models/{model}:streamGenerateContent?alt=sse
+  - Vertex AI 模式不在 URL 中包含 API key
+- [x] 4.12 认证测试：
+  - 标准模式使用 URL query param key={api_key}
+  - Vertex AI 模式使用 Authorization: Bearer {token}
+  - 环境变量缺失返回 LlmError::Auth
+  - 环境变量为空返回 LlmError::Auth
+- [x] 4.13 Thinking 参数测试：
+  - Gemini 3.x 模型（gemini-3.1-pro-preview）: enable_thinking=true, effort=High → thinkingConfig: {includeThoughts:true, thinkingLevel:"high"}
+  - Gemini 3.x 模型: enable_thinking=true, effort=Medium → thinkingLevel:"medium"
+  - Gemini 3.x 模型: enable_thinking=true, effort=Low → thinkingLevel:"low"
+  - Gemini 3.x 模型: enable_thinking=true, effort=None → thinkingLevel:"high"（默认）
+  - Gemini 2.5 模型（gemini-2.5-pro）: enable_thinking=true, effort=High → thinkingConfig: {includeThoughts:true, thinkingBudget:24576}
+  - Gemini 2.5 模型: enable_thinking=true, effort=Medium → thinkingBudget:8192
+  - Gemini 2.5 模型: enable_thinking=true, effort=Low → thinkingBudget:1024
+  - Gemini 2.5 模型: enable_thinking=true, effort=None → thinkingBudget:-1（动态）
+  - 未知模型名: enable_thinking=true → 默认使用 thinkingLevel 方式
+  - enable_thinking=false → generationConfig 中不包含 thinkingConfig
+  - 验证 thinkingLevel 和 thinkingBudget 不会同时出现
+- [x] 4.14 Tool 定义转换测试：
+  - 单个 tool → {"tools":[{"functionDeclarations":[{"name":"...","description":"...","parameters":{...}}]}]}
+  - 多个 tools 在同一个 functionDeclarations 数组中
+  - 空 tools 列表不包含 tools 字段
+
+## 5. Anthropic Messages API Client
+
+- [x] 5.1 实现 `AnthropicClient` 结构体和 `new()` 构造函数（含 max_tokens 默认值查表）
+- [x] 5.2 实现 `convert_messages()` 将 ChatMessage 转换为 Anthropic 格式（system 分离到顶层、其他 Agent→user role、连续消息合并）
+- [x] 5.3 实现 `build_sampling_params()` 采样参数映射（temperature clamp 到 0-1、top_k、stop_sequences、忽略 frequency/presence_penalty）
+- [x] 5.4 实现 SSE 事件解析（按 event type 分发：content_block_start/delta/stop、message_delta、message_stop、tool_use 的 input_json_delta 累积）
+- [x] 5.5 实现 thinking 参数注入（adaptive vs budget_tokens 按模型选择、temperature 强制为 1.0）
+- [x] 5.6 实现 tool 定义转换为 Anthropic 格式（name、description、input_schema）
+- [x] 5.7 实现 `LlmClient` trait（chat_stream 方法），含 x-api-key 认证和 anthropic-version header
+- [x] 5.8 SSE 解析测试：
+  - event:message_start → 正确提取初始 usage（input_tokens）
+  - event:content_block_start type:text → 初始化 text block
+  - event:content_block_delta type:text_delta → StreamEvent::TextDelta
+  - event:content_block_delta type:thinking_delta → StreamEvent::ThinkingDelta
+  - event:content_block_delta type:signature_delta → 不产出 StreamEvent（内部缓存）
+  - event:content_block_start type:tool_use → 缓存 tool id 和 name
+  - event:content_block_delta type:input_json_delta → 累积 JSON 片段（不产出 event）
+  - event:content_block_stop（tool_use block）→ StreamEvent::ToolCall（id、name、累积的 arguments）
+  - event:content_block_stop（text block）→ 不产出额外 event
+  - event:message_delta → 正确提取 stop_reason 和 cumulative usage（output_tokens）
+  - event:message_stop → StreamEvent::Done（usage 中 input_tokens→prompt_tokens, output_tokens→completion_tokens, 计算 total_tokens）
+  - event:ping → 安全忽略
+  - event:error → StreamEvent::Error（提取 error message）
+  - 多个 content block 交错（thinking → text → tool_use）按 index 正确跟踪
+  - 空 text_delta（空字符串）不产出 event
+- [x] 5.9 消息转换测试：
+  - ChatRole::System → 分离到请求 body 顶层 "system" 字段
+  - 多条 System 消息合并为单个 system 字段
+  - ChatRole::User → {"role":"user","content":"..."}
+  - ChatRole::Assistant（当前 agent）→ {"role":"assistant","content":"..."}
+  - ChatRole::Assistant（其他 agent）→ {"role":"user","content":"[agent_name] ..."}
+  - 连续两条 user role 消息合并（content 用 \n\n 连接）
+  - 连续三条不同 agent 回复（均转为 user）合并为一条
+  - user → assistant 交替不合并
+  - 消息列表中 system 消息在中间位置时仍正确分离
+  - 空消息列表返回空 messages 且 system 为 None
+- [x] 5.10 采样参数测试：
+  - temperature 在范围内（0.5）→ 原样传递
+  - temperature 超出范围（1.5）→ clamp 到 1.0
+  - temperature 为 0 → 原样传递 0
+  - max_tokens 有值 → 映射为 "max_tokens"
+  - max_tokens 为 None → 根据模型自动填入默认值
+  - top_k 有值 → 映射为 "top_k"
+  - top_p 有值 → 映射为 "top_p"
+  - stop_sequences 有值 → 映射为 "stop_sequences"
+  - frequency_penalty 有值 → 忽略不包含
+  - presence_penalty 有值 → 忽略不包含
+  - 全部参数为 None → 仅输出必填的 max_tokens（取默认值）
+- [x] 5.11 max_tokens 默认值测试：
+  - 模型名含 "opus-4-6" → 默认 128000
+  - 模型名含 "sonnet-4-6" → 默认 64000
+  - 模型名含 "haiku-4-5" → 默认 64000
+  - 模型名含 "opus-4-5" 或 "sonnet-4-5" → 默认 64000
+  - 模型名含 "opus-4-0" 或 "opus-4-1" → 默认 32000
+  - 未知模型名 → 默认 32000（fallback）
+  - 用户设置了 max_tokens 时优先使用用户值
+- [x] 5.12 认证测试：
+  - x-api-key header 正确设置
+  - anthropic-version: 2023-06-01 header 正确设置
+  - content-type: application/json header 正确设置
+  - 环境变量缺失返回 LlmError::Auth
+  - 环境变量为空返回 LlmError::Auth
+- [x] 5.13 Thinking 参数测试：
+  - enable_thinking=true, 模型含 "opus-4-6" → {"thinking":{"type":"adaptive"}}
+  - enable_thinking=true, 模型含 "opus-4-6", effort=High → {"thinking":{"type":"adaptive"}} + {"output_config":{"effort":"high"}}
+  - enable_thinking=true, 模型含 "sonnet-4-6", effort=Low → {"thinking":{"type":"adaptive"}} + {"output_config":{"effort":"low"}}
+  - enable_thinking=true, 模型含 "opus-4-5"（旧模型）, effort=High → {"thinking":{"type":"enabled","budget_tokens":32768}}
+  - enable_thinking=true, 旧模型, effort=Medium → budget_tokens:8192
+  - enable_thinking=true, 旧模型, effort=Low → budget_tokens:1024
+  - enable_thinking=true, 旧模型, effort=None → budget_tokens:8192（默认）
+  - enable_thinking=false → 请求中不包含 thinking 字段
+  - enable_thinking=true 且 temperature 设为 0.5 → 请求中 temperature 被强制为 1.0
+  - enable_thinking=true 且 temperature 未设置 → 不设置 temperature（API 默认 1.0）
+- [x] 5.14 Tool 定义转换测试：
+  - 单个 tool → {"name":"...","description":"...","input_schema":{...}}（注意 input_schema 而非 parameters）
+  - 多个 tools 转换正确
+  - 空 tools 列表不包含 tools 字段
+
+## 6. 模块注册与集成
+
+- [x] 6.1 更新 `krew-llm/src/lib.rs` 导出新的 Client 类型（AnthropicClient、GoogleClient、OpenAiResponsesClient）和 common 模块
+- [x] 6.2 运行全量测试验证无回归（cargo test -p krew-llm、cargo test -p krew-config）
+- [x] 6.3 运行 cargo clippy 和 cargo fmt 确保代码质量
