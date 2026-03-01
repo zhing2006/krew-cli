@@ -1,4 +1,4 @@
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: main.rs 入口
 `krew-cli` SHALL 有一个 `main.rs`，使用 clap 解析 CLI 参数。解析完成后 SHALL 初始化日志系统，然后**加载配置文件**（从 `--config` 指定路径或默认 `.krew/settings.toml`），**应用 CLI 覆盖**（`--agents`、`--approval-mode`），**校验配置**，最后启动 tokio 异步运行时运行 TUI 应用主循环。当 `--config` 显式指定的路径不存在时 SHALL 报错退出；默认路径不存在时 SHALL 静默使用内置默认配置。配置加载 SHALL 在终端初始化之前完成，以便错误信息正常打印到 stderr。终端 SHALL 使用 inline viewport（不切换 alternate screen）。
@@ -30,10 +30,3 @@
 #### Scenario: --approval-mode 覆盖
 - **WHEN** 执行 `cargo run -- --approval-mode full-auto`
 - **THEN** SHALL 将审批模式设为 `FullAuto`
-
-### Requirement: app、render 和 custom_terminal 模块存在
-`krew-cli` SHALL 包含 `app.rs`、`render.rs` 和 `custom_terminal.rs` 源文件。`app.rs` SHALL 包含 App 状态机和主事件循环逻辑。`render.rs` SHALL 包含 TUI 渲染逻辑。`custom_terminal.rs` SHALL 提供支持动态 viewport 高度的自定义 Terminal 实现。
-
-#### Scenario: CLI 模块编译通过
-- **WHEN** 构建 `krew-cli`
-- **THEN** `app`、`render` 和 `custom_terminal` 三个模块 SHALL 编译通过并包含功能实现

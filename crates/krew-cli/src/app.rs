@@ -7,6 +7,8 @@ use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyM
 use futures::StreamExt;
 use ratatui_textarea::{Input, Key, TextArea};
 
+use krew_config::Config;
+
 use crate::custom_terminal;
 use crate::render;
 
@@ -17,6 +19,8 @@ const QUIT_SHORTCUT_TIMEOUT: Duration = Duration::from_secs(1);
 pub struct App<'a> {
     /// Current working directory for the session.
     pub cwd: PathBuf,
+    /// Loaded configuration.
+    pub config: Config,
     /// Project-level instructions loaded from AGENTS.md files (if any).
     #[allow(dead_code)]
     pub project_instructions: Option<String>,
@@ -31,8 +35,8 @@ pub struct App<'a> {
 }
 
 impl<'a> App<'a> {
-    /// Initialize the application, loading config and project instructions.
-    pub fn new(cwd: PathBuf) -> anyhow::Result<Self> {
+    /// Initialize the application with the given config and working directory.
+    pub fn new(cwd: PathBuf, config: Config) -> anyhow::Result<Self> {
         let project_instructions = match krew_config::load_project_instructions(&cwd) {
             Ok(instructions) => instructions,
             Err(e) => {
@@ -51,6 +55,7 @@ impl<'a> App<'a> {
 
         Ok(Self {
             cwd,
+            config,
             project_instructions,
             textarea,
             should_quit: false,
@@ -213,8 +218,14 @@ impl<'a> App<'a> {
         tracing::debug!(input = %text, "User sent message");
 
         // Insert the user message + echo reply above the viewport.
-        render::insert_message(terminal, "you", &text)?;
-        render::insert_message(terminal, "echo", &text)?;
+        render::insert_message(terminal, "you", &text, "")?;
+        let echo_color = self
+            .config
+            .agents
+            .first()
+            .map(|a| a.color.as_str())
+            .unwrap_or("yellow");
+        render::insert_message(terminal, "echo", &text, echo_color)?;
 
         // Clear the textarea and restore styles.
         self.textarea = TextArea::default();
