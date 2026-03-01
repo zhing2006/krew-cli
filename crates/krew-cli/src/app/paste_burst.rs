@@ -259,6 +259,16 @@ impl PasteBurst {
         self.active || !self.buffer.is_empty()
     }
 
+    /// Return the appropriate flush delay based on current burst state.
+    /// Used by the frame scheduler to schedule follow-up ticks.
+    pub fn recommended_flush_delay(&self) -> Duration {
+        if self.is_active_internal() {
+            PASTE_BURST_ACTIVE_IDLE_TIMEOUT
+        } else {
+            PASTE_BURST_CHAR_INTERVAL
+        }
+    }
+
     /// Start buffering without retro-grabbing any already-inserted text.
     /// Used when the burst heuristic detects paste-like input speed but the
     /// retro-grab check rejects the already-inserted prefix (e.g. short

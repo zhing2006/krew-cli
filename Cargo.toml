@@ -12,7 +12,7 @@ members = [
 # Versions locked to latest stable at dev start
 # Principle: default-features = false to minimize deps, avoid dup crates
 [workspace.dependencies]
-tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net", "io-util", "time", "fs", "process", "signal"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net", "io-util", "time", "fs", "process", "signal", "sync"] }
 serde = { version = "1", default-features = false, features = ["derive", "std"] }
 serde_json = { version = "1", default-features = false }
 anyhow = { version = "1", default-features = false }
