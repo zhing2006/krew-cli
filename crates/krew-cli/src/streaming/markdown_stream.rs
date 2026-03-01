@@ -14,6 +14,8 @@ pub struct MarkdownStreamCollector {
     buffer: String,
     /// Number of lines already committed (rendered and returned).
     committed_line_count: usize,
+    /// Byte offset after the last committed newline boundary.
+    committed_byte_offset: usize,
     /// Whether there are uncommitted newlines in the buffer.
     pending_newline: bool,
 }
@@ -23,6 +25,7 @@ impl MarkdownStreamCollector {
         Self {
             buffer: String::new(),
             committed_line_count: 0,
+            committed_byte_offset: 0,
             pending_newline: false,
         }
     }
@@ -64,6 +67,7 @@ impl MarkdownStreamCollector {
         };
 
         self.committed_line_count = all_lines.len();
+        self.committed_byte_offset = last_newline + 1;
         new_lines
     }
 
@@ -79,7 +83,18 @@ impl MarkdownStreamCollector {
         let all_lines = render_markdown(&self.buffer);
 
         let new_lines = if all_lines.len() > self.committed_line_count {
+            // Normal case: new content produced additional lines.
             all_lines[self.committed_line_count..].to_vec()
+        } else if self.committed_byte_offset < self.buffer.len() {
+            // Paragraph merge: new content was absorbed into existing lines
+            // by markdown soft-break rules. Render the uncommitted tail
+            // as standalone text so it doesn't get lost.
+            let tail = &self.buffer[self.committed_byte_offset..];
+            if tail.trim().is_empty() {
+                Vec::new()
+            } else {
+                render_markdown(tail)
+            }
         } else {
             Vec::new()
         };
@@ -87,6 +102,7 @@ impl MarkdownStreamCollector {
         // Reset state.
         self.buffer.clear();
         self.committed_line_count = 0;
+        self.committed_byte_offset = 0;
 
         new_lines
     }
@@ -177,6 +193,28 @@ mod tests {
         // New newline sets it again.
         collector.push_delta("more\n");
         assert!(collector.has_pending_newline());
+    }
+
+    #[test]
+    fn finalize_after_soft_break() {
+        // Regression: when committed text is followed by content without
+        // any newline, markdown treats single \n as a soft break and merges
+        // them into one paragraph.  finalize() must still return the tail.
+        let mut collector = MarkdownStreamCollector::new();
+        collector.push_delta("name=doubao\n");
+        let first = collector.commit_complete_lines();
+        assert!(!first.is_empty());
+
+        // Push a long paragraph without any \n.
+        collector.push_delta("hello world this is a long response");
+        let remaining = collector.finalize();
+        assert!(!remaining.is_empty());
+        let text: String = remaining
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(text.contains("hello world"));
     }
 
     #[test]

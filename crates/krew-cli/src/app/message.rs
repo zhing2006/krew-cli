@@ -90,10 +90,12 @@ impl App {
         };
 
         if let Some(ref name) = target_agent {
-            if self.agents.contains_key(name) {
-                // Signal that we need to start a completion.
-                // The event loop will pick this up and call start_completion_async.
-                self.pending_completion = Some(name.clone());
+            if let Some(agent) = self.agents.get(name) {
+                // Start completion immediately — the HTTP request runs in a
+                // spawned task so the event loop is not blocked.
+                let rx = agent
+                    .start_completion(self.messages.clone(), self.project_instructions.as_deref());
+                self.agent_event_rx = Some(rx);
             } else {
                 // Builtin echo fallback.
                 self.echo_reply(terminal, &addressee, &body)?;
@@ -105,25 +107,6 @@ impl App {
 
         self.clear_textarea();
         Ok(())
-    }
-
-    /// Start an async agent completion. Called from the event loop.
-    pub(crate) async fn start_completion_async(&mut self) {
-        let agent_name = match self.pending_completion.take() {
-            Some(name) => name,
-            None => return,
-        };
-
-        let agent = match self.agents.get(&agent_name) {
-            Some(a) => a,
-            None => return,
-        };
-
-        let rx = agent
-            .start_completion(self.messages.clone(), self.project_instructions.as_deref())
-            .await;
-
-        self.agent_event_rx = Some(rx);
     }
 
     /// Echo reply with yellow diamond prefix (for builtin agents).

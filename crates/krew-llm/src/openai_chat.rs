@@ -21,6 +21,8 @@ pub struct OpenAiChatClient {
     model: String,
     /// Agent name for multi-agent message role attribution.
     agent_name: String,
+    /// Whether to use the `name` field on messages for other agents.
+    use_name_field: bool,
 }
 
 impl OpenAiChatClient {
@@ -28,11 +30,14 @@ impl OpenAiChatClient {
     ///
     /// `api_key_env` is the environment variable name holding the API key.
     /// `base_url` overrides the default `https://api.openai.com`.
+    /// `use_name_field` controls whether other agents' messages use the `name`
+    /// field or a `[name]` content prefix.
     pub fn new(
         agent_name: String,
         model: String,
         api_key_env: &str,
         base_url: Option<&str>,
+        use_name_field: bool,
     ) -> Result<Self, LlmError> {
         let api_key = std::env::var(api_key_env).map_err(|_| {
             LlmError::Auth(format!(
@@ -56,6 +61,7 @@ impl OpenAiChatClient {
             api_key,
             model,
             agent_name,
+            use_name_field,
         })
     }
 }
@@ -65,37 +71,57 @@ impl OpenAiChatClient {
 // ---------------------------------------------------------------------------
 
 /// Convert unified ChatMessages to OpenAI Chat Completions message format.
+///
+/// - The current agent's own messages are always `role: assistant` with no
+///   `name` field.
+/// - User messages are always `role: user` with no `name` field.
+/// - Other agents' messages use `other_agent_role` for the role. When
+///   `use_name_field` is true, the `name` field is set; otherwise the
+///   content is prefixed with `[agent_name]`.
 pub fn convert_messages(
     messages: &[ChatMessage],
     self_agent_name: &str,
     other_agent_role: &OtherAgentRole,
+    use_name_field: bool,
 ) -> Vec<serde_json::Value> {
     messages
         .iter()
         .map(|msg| {
+            let is_other_agent = matches!(&msg.role, ChatRole::Assistant)
+                && msg
+                    .name
+                    .as_ref()
+                    .is_some_and(|name| name != self_agent_name);
+
             let role = match &msg.role {
                 ChatRole::System => "system",
                 ChatRole::User => "user",
                 ChatRole::Tool => "tool",
-                ChatRole::Assistant => {
-                    // If this message is from another agent, apply the configured role.
-                    match &msg.name {
-                        Some(name) if name != self_agent_name => match other_agent_role {
-                            OtherAgentRole::User => "user",
-                            OtherAgentRole::Assistant => "assistant",
-                        },
-                        _ => "assistant",
-                    }
-                }
+                ChatRole::Assistant if is_other_agent => match other_agent_role {
+                    OtherAgentRole::User => "user",
+                    OtherAgentRole::Assistant => "assistant",
+                },
+                ChatRole::Assistant => "assistant",
+            };
+
+            let content = if is_other_agent && !use_name_field {
+                // Prefix content with [agent_name] for disambiguation.
+                let name = msg.name.as_deref().unwrap_or("unknown");
+                format!("[{name}] {}", msg.content)
+            } else {
+                msg.content.clone()
             };
 
             let mut obj = serde_json::json!({
                 "role": role,
-                "content": msg.content,
+                "content": content,
             });
 
-            // Include the agent name for multi-agent context disambiguation.
-            if let Some(name) = &msg.name {
+            // Only set name field for other agents when explicitly enabled.
+            if is_other_agent
+                && use_name_field
+                && let Some(name) = &msg.name
+            {
                 obj["name"] = serde_json::Value::String(name.clone());
             }
 
@@ -166,6 +192,16 @@ fn parse_sse_data(data: &str) -> Option<SseChunk> {
 
     let choice = &choices[0];
     let delta = choice.get("delta")?;
+
+    // Check for reasoning/thinking content (e.g. DeepSeek, Doubao).
+    if let Some(reasoning) = delta.get("reasoning_content").and_then(|c| c.as_str())
+        && !reasoning.is_empty()
+    {
+        return Some(SseChunk {
+            event: Some(StreamEvent::ThinkingDelta(reasoning.to_string())),
+            usage,
+        });
+    }
 
     // Check for text content.
     if let Some(content) = delta.get("content").and_then(|c| c.as_str())
@@ -280,7 +316,12 @@ impl LlmClient for OpenAiChatClient {
         let url = format!("{}/v1/chat/completions", self.base_url);
 
         // Build messages array.
-        let openai_messages = convert_messages(messages, &self.agent_name, &OtherAgentRole::User);
+        let openai_messages = convert_messages(
+            messages,
+            &self.agent_name,
+            &OtherAgentRole::User,
+            self.use_name_field,
+        );
 
         // Build request body.
         let mut body = serde_json::json!({
@@ -541,6 +582,16 @@ mod tests {
         assert_eq!(usage.prompt_tokens, 100);
         assert_eq!(usage.completion_tokens, 50);
         assert_eq!(usage.total_tokens, 150);
+    }
+
+    #[test]
+    fn sse_reasoning_content() {
+        let data = r#"{"choices":[{"delta":{"reasoning_content":"Let me think..."}}]}"#;
+        let chunk = parse_sse_data(data).unwrap();
+        match chunk.event.unwrap() {
+            StreamEvent::ThinkingDelta(text) => assert_eq!(text, "Let me think..."),
+            other => panic!("expected ThinkingDelta, got {other:?}"),
+        }
     }
 
     #[test]
