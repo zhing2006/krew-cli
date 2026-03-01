@@ -339,9 +339,14 @@ impl App {
             }
             ActivePopup::AgentName(state) => {
                 if let Some(item) = state.selected_item() {
-                    let insert_text = format!("@{} ", item.value);
-                    // Replace the @token at cursor with the selected name.
-                    self.replace_at_token(&insert_text);
+                    let mention = format!("@{}", item.value);
+                    let insert_text = format!("{mention} ");
+                    // Replace the @token at cursor with the selected name,
+                    // then mark the @name part as an atomic element.
+                    if let Some(at_pos) = self.replace_at_token(&insert_text) {
+                        let mention_range = at_pos..(at_pos + mention.len());
+                        self.textarea.add_element_range(mention_range);
+                    }
                 }
             }
             ActivePopup::None => {}
@@ -350,24 +355,20 @@ impl App {
     }
 
     /// Replace the `@token` at the cursor position with `replacement`.
-    fn replace_at_token(&mut self, replacement: &str) {
+    /// Returns the byte position of the `@` if successful.
+    fn replace_at_token(&mut self, replacement: &str) -> Option<usize> {
         let cursor = self.textarea.cursor();
         let text = self.textarea.text();
         let before = &text[..cursor];
 
         // Find the last `@` before the cursor.
-        let at_pos = match before.rfind('@') {
-            Some(pos) => pos,
-            None => return,
-        };
+        let at_pos = before.rfind('@')?;
 
         // Check that `@` is at start or preceded by whitespace.
         if at_pos > 0 {
-            let Some(prev_char) = text[..at_pos].chars().next_back() else {
-                return;
-            };
+            let prev_char = text[..at_pos].chars().next_back()?;
             if !prev_char.is_whitespace() {
-                return;
+                return None;
             }
         }
 
@@ -381,6 +382,7 @@ impl App {
         let new_cursor = at_pos + replacement.len();
         self.textarea.replace_range(at_pos..token_end, replacement);
         self.textarea.set_cursor(new_cursor);
+        Some(at_pos)
     }
 
     // ── Completion popup sync ────────────────────────────────────────
