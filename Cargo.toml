@@ -31,6 +31,9 @@ async-trait = { version = "0.1", default-features = false }
 unicode-width = { version = "0.2", default-features = false }
 unicode-segmentation = { version = "1", default-features = false }
 textwrap = { version = "0.16", default-features = false }
+pulldown-cmark = { version = "0.13", default-features = false }
+syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
+two-face = { version = "0.4", default-features = false, features = ["syntect-default-fancy"] }
 
 # Internal workspace crates
 krew-config = { path = "crates/krew-config" }

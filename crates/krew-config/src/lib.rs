@@ -125,6 +125,9 @@ pub struct SamplingConfig {
 /// LLM provider SDK configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProviderConfig {
+    /// Provider type: openai, anthropic, google.
+    #[serde(rename = "type")]
+    pub provider_type: ProviderType,
     /// API key value (not recommended; prefer `api_key_env`).
     pub api_key: Option<String>,
     /// Environment variable name holding the API key.
@@ -135,6 +138,19 @@ pub struct ProviderConfig {
     pub azure_endpoint: Option<String>,
     /// Azure OpenAI API version string.
     pub azure_api_version: Option<String>,
+}
+
+/// Supported LLM provider types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProviderType {
+    /// OpenAI API (Chat Completions / Responses). Also covers Azure
+    /// (via `azure_endpoint`) and OpenAI-compatible services (via `base_url`).
+    OpenAI,
+    /// Anthropic Messages API.
+    Anthropic,
+    /// Google Gemini API.
+    Google,
 }
 
 /// MCP (Model Context Protocol) server configuration.
@@ -257,6 +273,20 @@ impl Config {
         }
 
         Ok(())
+    }
+
+    /// Normalize config: auto-append agents missing from `reply_order`.
+    ///
+    /// Returns a list of agent names that were appended (for warning display).
+    pub fn normalize(&mut self) -> Vec<String> {
+        let mut appended = Vec::new();
+        for agent in &self.agents {
+            if !self.settings.reply_order.contains(&agent.name) {
+                appended.push(agent.name.clone());
+                self.settings.reply_order.push(agent.name.clone());
+            }
+        }
+        appended
     }
 
     /// Apply CLI argument overrides to the configuration.

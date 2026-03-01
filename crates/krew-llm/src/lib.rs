@@ -2,7 +2,7 @@ pub mod types;
 
 mod anthropic;
 mod google;
-mod openai_chat;
+pub mod openai_chat;
 mod openai_compatible;
 mod openai_responses;
 

@@ -55,7 +55,7 @@ enable_web_search = false
 [[agents]]
 name = "doubao"
 display_name = "Doubao Seed 2.0"
-provider = "openai-compatible"
+provider = "doubao"
 model = "doubao-seed-2.0-pro"
 color = "yellow"
 system_prompt = ""
@@ -65,19 +65,23 @@ enable_web_search = false
 # Provider SDK configuration
 
 [providers.openai]
+type = "openai"
 api_key_env = "OPENAI_API_KEY"
-base_url = "https://api.openai.com/v1"
+# base_url = "https://api.openai.com"     # default, can omit
 # azure_endpoint = "https://xxx.openai.azure.com"
 # azure_api_version = "2025-01-01"
 
 [providers.anthropic]
+type = "anthropic"
 api_key_env = "ANTHROPIC_API_KEY"
-base_url = "https://api.anthropic.com"
+# base_url = "https://api.anthropic.com"  # default, can omit
 
 [providers.google]
+type = "google"
 api_key_env = "GOOGLE_API_KEY"
 
-[providers.openai-compatible]
+[providers.doubao]
+type = "openai"                            # OpenAI-compatible service
 api_key_env = "DOUBAO_API_KEY"
 base_url = "https://ark.cn-beijing.volces.com/api/v3"
 

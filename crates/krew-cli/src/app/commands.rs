@@ -74,6 +74,17 @@ impl App {
 
         for agent in &self.config.agents {
             let color = render::parse_color(&agent.color);
+            let (prompt_tokens, completion_tokens) = self
+                .agent_token_usage
+                .get(&agent.name)
+                .copied()
+                .unwrap_or((0, 0));
+            let total = prompt_tokens + completion_tokens;
+            let token_text = if total > 0 {
+                format!("  {total} tokens ({prompt_tokens} in / {completion_tokens} out)")
+            } else {
+                "  0 tokens".to_string()
+            };
             lines.push(Line::from(vec![
                 Span::raw("  "),
                 Span::styled(
@@ -84,7 +95,7 @@ impl App {
                     "  {:<16} {}/{}",
                     agent.display_name, agent.provider, agent.model
                 )),
-                Span::styled("  0 tokens", Style::default().fg(Color::DarkGray)),
+                Span::styled(token_text, Style::default().fg(Color::DarkGray)),
             ]));
         }
 
@@ -112,6 +123,21 @@ impl App {
             vec![Line::from(Span::styled(
                 msg.to_string(),
                 Style::default().fg(Color::Red),
+            ))],
+        )
+    }
+
+    /// Display a warning message above the viewport.
+    pub(crate) fn show_warning(
+        &self,
+        terminal: &mut custom_terminal::Terminal,
+        msg: &str,
+    ) -> anyhow::Result<()> {
+        render::insert_lines(
+            terminal,
+            vec![Line::from(Span::styled(
+                format!("\u{26a0} {msg}"), // ⚠
+                Style::default().fg(Color::Yellow),
             ))],
         )
     }

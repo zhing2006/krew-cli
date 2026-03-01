@@ -7,20 +7,30 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::StreamExt;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, mpsc};
 
 use krew_config::Config;
+use krew_core::agent::AgentRuntime;
+use krew_core::event::AgentEvent;
+use krew_llm::{ChatMessage, ChatRole};
 
 use crate::completion::ActivePopup;
 use crate::custom_terminal;
 use crate::frame_scheduler::FrameRequester;
 use crate::render;
+use crate::streaming::StreamState;
+use crate::streaming::chunking::AdaptiveChunkingPolicy;
+use crate::streaming::commit_tick::run_commit_tick;
+use crate::streaming::markdown_stream::MarkdownStreamCollector;
 use crate::textarea::TextArea;
 
 use super::paste_burst::{FlushResult, PasteBurst};
 
 /// Duration within which a second Ctrl+C triggers quit.
 pub(super) const QUIT_SHORTCUT_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Commit tick interval (~60 Hz).
+const COMMIT_TICK_INTERVAL: Duration = Duration::from_millis(16);
 
 /// Top-level application state.
 pub struct App {
@@ -29,7 +39,6 @@ pub struct App {
     /// Loaded configuration.
     pub config: Config,
     /// Project-level instructions loaded from AGENTS.md files (if any).
-    #[allow(dead_code)]
     pub project_instructions: Option<String>,
     /// Multi-line text input component.
     pub textarea: TextArea,
@@ -55,6 +64,33 @@ pub struct App {
     pub(crate) paste_counter: usize,
     /// Frame scheduler handle for coalesced rendering.
     pub(crate) frame_requester: Option<FrameRequester>,
+
+    // --- Phase 4: Agent integration ---
+    /// Agent runtimes keyed by agent name.
+    pub(crate) agents: HashMap<String, AgentRuntime>,
+    /// Conversation message history.
+    pub(crate) messages: Vec<ChatMessage>,
+    /// Active agent event receiver (Some while streaming).
+    pub(crate) agent_event_rx: Option<mpsc::UnboundedReceiver<AgentEvent>>,
+    /// Streaming pipeline: markdown collector.
+    pub(crate) stream_collector: Option<MarkdownStreamCollector>,
+    /// Streaming pipeline: line queue.
+    pub(crate) stream_state: StreamState,
+    /// Streaming pipeline: adaptive chunking policy.
+    pub(crate) chunking_policy: AdaptiveChunkingPolicy,
+    /// Whether commit tick animation is active.
+    pub(crate) commit_tick_active: bool,
+    /// Accumulated response text for the current streaming agent.
+    pub(crate) current_response_text: String,
+    /// Name of the agent currently streaming.
+    pub(crate) current_agent_name: Option<String>,
+    /// Agent name pending async completion start (set by send_message,
+    /// consumed by the event loop).
+    pub(crate) pending_completion: Option<String>,
+    /// Accumulated token usage per agent (agent_name → total_tokens).
+    pub(crate) agent_token_usage: HashMap<String, (u32, u32)>,
+    /// Startup warnings to display after header.
+    pub(crate) startup_warnings: Vec<String>,
 }
 
 impl App {
@@ -67,6 +103,9 @@ impl App {
                 None
             }
         };
+
+        // Initialize agent runtimes.
+        let agents = Self::init_agents(&config);
 
         Ok(Self {
             cwd,
@@ -84,13 +123,107 @@ impl App {
             pending_pastes: HashMap::new(),
             paste_counter: 0,
             frame_requester: None,
+            agents,
+            messages: Vec::new(),
+            agent_event_rx: None,
+            stream_collector: None,
+            stream_state: StreamState::new(),
+            chunking_policy: AdaptiveChunkingPolicy::new(),
+            commit_tick_active: false,
+            current_response_text: String::new(),
+            current_agent_name: None,
+            pending_completion: None,
+            agent_token_usage: HashMap::new(),
+            startup_warnings: Vec::new(),
         })
+    }
+
+    /// Build AgentRuntime instances from config.
+    fn init_agents(config: &Config) -> HashMap<String, AgentRuntime> {
+        let mut agents = HashMap::new();
+
+        for agent_config in &config.agents {
+            if agent_config.provider == "builtin" {
+                // Skip builtin echo agents — they don't need an LLM client.
+                continue;
+            }
+
+            let provider_config = match config.providers.get(&agent_config.provider) {
+                Some(p) => p,
+                None => {
+                    tracing::warn!(
+                        agent = agent_config.name,
+                        provider = agent_config.provider,
+                        "Provider not found, skipping agent"
+                    );
+                    continue;
+                }
+            };
+
+            // Determine API key env var.
+            let api_key_env = match &provider_config.api_key_env {
+                Some(env) => env.as_str(),
+                None => {
+                    tracing::warn!(
+                        agent = agent_config.name,
+                        "No api_key_env configured, skipping agent"
+                    );
+                    continue;
+                }
+            };
+
+            // Create LLM client based on provider type.
+            let client: Box<dyn krew_llm::LlmClient> = match provider_config.provider_type {
+                krew_config::ProviderType::OpenAI => {
+                    match krew_llm::openai_chat::OpenAiChatClient::new(
+                        agent_config.name.clone(),
+                        agent_config.model.clone(),
+                        api_key_env,
+                        provider_config.base_url.as_deref(),
+                    ) {
+                        Ok(c) => Box::new(c),
+                        Err(e) => {
+                            tracing::warn!(
+                                agent = agent_config.name,
+                                error = %e,
+                                "Failed to create LLM client, skipping agent"
+                            );
+                            continue;
+                        }
+                    }
+                }
+                other => {
+                    tracing::warn!(
+                        agent = agent_config.name,
+                        provider_type = ?other,
+                        "Provider type not yet supported, skipping agent"
+                    );
+                    continue;
+                }
+            };
+
+            let runtime = AgentRuntime {
+                config: agent_config.clone(),
+                client,
+                tools: Vec::new(),
+                is_responding: false,
+            };
+
+            agents.insert(agent_config.name.clone(), runtime);
+        }
+
+        agents
     }
 
     /// Run the main event loop.
     pub async fn run(&mut self, terminal: &mut custom_terminal::Terminal) -> anyhow::Result<()> {
         // Print the header above the viewport (scrolls into scrollback).
         render::insert_header(terminal, self)?;
+
+        // Display startup warnings.
+        for warning in std::mem::take(&mut self.startup_warnings) {
+            self.show_warning(terminal, &warning)?;
+        }
 
         // Set up the frame scheduler for coalesced rendering (max 120 FPS).
         let draw_signal = Arc::new(Notify::new());
@@ -101,6 +234,10 @@ impl App {
         self.request_redraw();
 
         let mut event_stream = EventStream::new();
+
+        // Commit tick interval for streaming animation.
+        let mut commit_tick = tokio::time::interval(COMMIT_TICK_INTERVAL);
+        commit_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             tokio::select! {
@@ -118,7 +255,31 @@ impl App {
                         None => break,
                     }
                 }
-                // Branch 2: Draw frame (coalesced by scheduler, max 120 FPS).
+
+                // Branch 2: Start pending completion (async).
+                _ = async {}, if self.pending_completion.is_some() => {
+                    self.start_completion_async().await;
+                    self.request_redraw();
+                }
+
+                // Branch 3: Agent events (streaming response).
+                Some(agent_event) = async {
+                    match &mut self.agent_event_rx {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    self.handle_agent_event(agent_event, terminal)?;
+                    self.request_redraw();
+                }
+
+                // Branch 3: Commit tick (drives streaming queue drain).
+                _ = commit_tick.tick(), if self.commit_tick_active => {
+                    self.handle_commit_tick(terminal)?;
+                    self.request_redraw();
+                }
+
+                // Branch 4: Draw frame (coalesced by scheduler, max 120 FPS).
                 _ = draw_signal.notified() => {
                     // Skip render during active paste burst.
                     if self.handle_paste_burst_tick() {
@@ -150,6 +311,120 @@ impl App {
             if self.should_quit {
                 break;
             }
+        }
+
+        Ok(())
+    }
+
+    /// Handle an incoming agent event.
+    fn handle_agent_event(
+        &mut self,
+        event: AgentEvent,
+        terminal: &mut custom_terminal::Terminal,
+    ) -> anyhow::Result<()> {
+        match event {
+            AgentEvent::ResponseStart {
+                agent_name,
+                display_name,
+                color,
+            } => {
+                self.current_agent_name = Some(agent_name.clone());
+                self.current_response_text.clear();
+                self.insert_agent_header(terminal, &agent_name, &display_name, &color)?;
+            }
+            AgentEvent::TextDelta(text) => {
+                tracing::debug!(delta = ?text, "TextDelta received");
+                self.current_response_text.push_str(&text);
+
+                // Push delta into markdown stream collector.
+                let collector = self
+                    .stream_collector
+                    .get_or_insert_with(MarkdownStreamCollector::new);
+                collector.push_delta(&text);
+
+                // If we have pending newlines, commit and enqueue.
+                if collector.has_pending_newline() {
+                    let lines = collector.commit_complete_lines();
+                    if !lines.is_empty() {
+                        self.stream_state.enqueue(lines);
+                    }
+
+                    // Start commit tick animation on first content.
+                    if !self.commit_tick_active {
+                        self.commit_tick_active = true;
+                    }
+                }
+            }
+            AgentEvent::Done(usage) => {
+                // Finalize any remaining content in the collector.
+                if let Some(mut collector) = self.stream_collector.take() {
+                    let remaining = collector.finalize();
+                    if !remaining.is_empty() {
+                        self.stream_state.enqueue(remaining);
+                    }
+                }
+
+                // Drain all remaining lines.
+                let remaining_lines = self.stream_state.drain_all();
+                if !remaining_lines.is_empty() {
+                    self.insert_indented_lines(terminal, remaining_lines)?;
+                }
+
+                // Accumulate token usage for /agents display.
+                if let Some(ref name) = self.current_agent_name {
+                    let entry = self.agent_token_usage.entry(name.clone()).or_insert((0, 0));
+                    entry.0 += usage.prompt_tokens;
+                    entry.1 += usage.completion_tokens;
+                }
+
+                // Add assistant message to history.
+                if let Some(agent_name) = self.current_agent_name.take() {
+                    self.messages.push(ChatMessage {
+                        role: ChatRole::Assistant,
+                        content: std::mem::take(&mut self.current_response_text),
+                        name: Some(agent_name),
+                    });
+                }
+
+                // Reset streaming state.
+                self.agent_event_rx = None;
+                self.commit_tick_active = false;
+                self.chunking_policy.reset();
+            }
+            AgentEvent::Error(msg) => {
+                self.insert_agent_error(terminal, &msg)?;
+
+                // Reset streaming state.
+                self.stream_collector = None;
+                self.agent_event_rx = None;
+                self.commit_tick_active = false;
+                self.current_agent_name = None;
+                self.current_response_text.clear();
+                self.chunking_policy.reset();
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Handle a commit tick: drain queued lines per adaptive chunking policy.
+    fn handle_commit_tick(
+        &mut self,
+        terminal: &mut custom_terminal::Terminal,
+    ) -> anyhow::Result<()> {
+        let output = run_commit_tick(
+            &mut self.chunking_policy,
+            &mut self.stream_state,
+            Instant::now(),
+        );
+
+        if !output.lines.is_empty() {
+            self.insert_indented_lines(terminal, output.lines)?;
+        }
+
+        // Stop commit tick if idle and no active stream.
+        if output.is_idle && self.agent_event_rx.is_none() {
+            self.commit_tick_active = false;
         }
 
         Ok(())
