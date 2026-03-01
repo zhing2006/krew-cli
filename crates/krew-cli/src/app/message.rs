@@ -11,13 +11,13 @@ use crate::render;
 
 use super::App;
 
-impl App<'_> {
+impl App {
     /// Send the current input as a message or execute a slash command.
     pub(crate) fn send_message(
         &mut self,
         terminal: &mut custom_terminal::Terminal,
     ) -> anyhow::Result<()> {
-        let text = self.textarea.lines().join("\n");
+        let text = self.textarea.text().to_string();
 
         if text.trim().is_empty() {
             return Ok(());

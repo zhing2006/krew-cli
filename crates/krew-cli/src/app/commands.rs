@@ -10,7 +10,7 @@ use crate::render;
 
 use super::App;
 
-impl App<'_> {
+impl App {
     /// Execute a slash command.
     pub(crate) fn execute_slash_command(
         &mut self,
