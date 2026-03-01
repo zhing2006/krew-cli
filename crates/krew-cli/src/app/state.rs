@@ -2,15 +2,18 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::StreamExt;
+use tokio::sync::Notify;
 
 use krew_config::Config;
 
 use crate::completion::ActivePopup;
 use crate::custom_terminal;
+use crate::frame_scheduler::FrameRequester;
 use crate::render;
 use crate::textarea::TextArea;
 
@@ -50,6 +53,8 @@ pub struct App {
     pub(crate) pending_pastes: HashMap<u64, String>,
     /// Counter for paste placeholder display numbering.
     pub(crate) paste_counter: usize,
+    /// Frame scheduler handle for coalesced rendering.
+    pub(crate) frame_requester: Option<FrameRequester>,
 }
 
 impl App {
@@ -78,6 +83,7 @@ impl App {
             paste_burst: PasteBurst::default(),
             pending_pastes: HashMap::new(),
             paste_counter: 0,
+            frame_requester: None,
         })
     }
 
@@ -86,35 +92,25 @@ impl App {
         // Print the header above the viewport (scrolls into scrollback).
         render::insert_header(terminal, self)?;
 
+        // Set up the frame scheduler for coalesced rendering (max 120 FPS).
+        let draw_signal = Arc::new(Notify::new());
+        let frame_requester = FrameRequester::spawn(Arc::clone(&draw_signal));
+        self.frame_requester = Some(frame_requester);
+
+        // Schedule the initial frame.
+        self.request_redraw();
+
         let mut event_stream = EventStream::new();
 
         loop {
-            // Sync completion popup based on current input.
-            self.sync_popup();
-
-            // Adjust viewport height to fit textarea + popup.
-            // Use visual line count (after word wrapping) for accurate height.
-            let term_width = terminal.size()?.width.saturating_sub(2); // minus prompt "› "
-            let input_lines = self.textarea.desired_height(term_width.max(1));
-            let needed = input_lines.max(1) + 3 + self.popup.extra_height();
-            // separators (2) + status bar or popup bottom row (1) + extra popup rows
-            terminal.ensure_viewport_height(needed)?;
-
-            // Render input prompt + status bar inside the inline viewport.
-            terminal.draw(|frame| render::render_input_viewport(frame, self))?;
-
-            // Check if quit hint has expired.
-            if let Some(armed_at) = self.quit_shortcut_armed_at
-                && armed_at.elapsed() >= QUIT_SHORTCUT_TIMEOUT
-            {
-                self.quit_shortcut_armed_at = None;
-                self.quit_hint = None;
-            }
-
             tokio::select! {
+                // Branch 1: Terminal events (key, paste, resize).
                 maybe_event = event_stream.next() => {
                     match maybe_event {
-                        Some(Ok(event)) => self.handle_event(event, terminal)?,
+                        Some(Ok(event)) => {
+                            self.handle_event(event, terminal)?;
+                            self.request_redraw();
+                        }
                         Some(Err(e)) => {
                             tracing::error!(error = %e, "Terminal event stream error");
                             break;
@@ -122,11 +118,32 @@ impl App {
                         None => break,
                     }
                 }
-                // Tick for quit hint expiry and paste burst flush.
-                _ = tokio::time::sleep(Duration::from_millis(16)) => {
-                    if self.config.settings.paste_burst_detection {
-                        self.flush_paste_burst();
+                // Branch 2: Draw frame (coalesced by scheduler, max 120 FPS).
+                _ = draw_signal.notified() => {
+                    // Skip render during active paste burst.
+                    if self.handle_paste_burst_tick() {
+                        continue;
                     }
+
+                    // Check if quit hint has expired.
+                    if let Some(armed_at) = self.quit_shortcut_armed_at
+                        && armed_at.elapsed() >= QUIT_SHORTCUT_TIMEOUT
+                    {
+                        self.quit_shortcut_armed_at = None;
+                        self.quit_hint = None;
+                    }
+
+                    // Sync completion popup based on current input.
+                    self.sync_popup();
+
+                    // Adjust viewport height to fit textarea + popup.
+                    let term_width = terminal.size()?.width.saturating_sub(2);
+                    let input_lines = self.textarea.desired_height(term_width.max(1));
+                    let needed = input_lines.max(1) + 3 + self.popup.extra_height();
+                    terminal.ensure_viewport_height(needed)?;
+
+                    // Render input prompt + status bar inside the inline viewport.
+                    terminal.draw(|frame| render::render_input_viewport(frame, self))?;
                 }
             }
 
@@ -136,6 +153,44 @@ impl App {
         }
 
         Ok(())
+    }
+
+    /// Request a redraw via the frame scheduler.
+    fn request_redraw(&self) {
+        if let Some(fr) = &self.frame_requester {
+            fr.schedule_frame();
+        }
+    }
+
+    /// Handle paste burst tick during draw. Returns true to skip rendering.
+    fn handle_paste_burst_tick(&mut self) -> bool {
+        if !self.config.settings.paste_burst_detection {
+            return false;
+        }
+        // Try flushing timed-out burst.
+        let flushed = match self.paste_burst.flush_if_due(Instant::now()) {
+            FlushResult::Paste(p) => {
+                self.handle_paste(p);
+                true
+            }
+            FlushResult::Typed(c) => {
+                self.textarea.insert_str(c.to_string().as_str());
+                true
+            }
+            FlushResult::None => false,
+        };
+        if flushed {
+            self.request_redraw();
+            return true;
+        }
+        if self.paste_burst.is_active() {
+            // Still buffering — schedule follow-up tick, skip render.
+            if let Some(fr) = &self.frame_requester {
+                fr.schedule_frame_in(self.paste_burst.recommended_flush_delay());
+            }
+            return true;
+        }
+        false
     }
 
     /// Handle a single terminal event.
@@ -185,19 +240,6 @@ impl App {
             self.pending_pastes.insert(elem_id, text);
         } else {
             self.textarea.insert_str(&text);
-        }
-    }
-
-    /// Flush any pending paste burst that has timed out.
-    fn flush_paste_burst(&mut self) {
-        match self.paste_burst.flush_if_due(Instant::now()) {
-            FlushResult::Paste(pasted) => {
-                self.handle_paste(pasted);
-            }
-            FlushResult::Typed(ch) => {
-                self.textarea.insert_str(ch.to_string().as_str());
-            }
-            FlushResult::None => {}
         }
     }
 
