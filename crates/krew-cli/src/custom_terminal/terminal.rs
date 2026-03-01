@@ -80,7 +80,10 @@ impl Terminal {
         self.last_known_size = size;
 
         let mut area = self.viewport_area;
-        area.height = height.min(size.height);
+        // Cap viewport to half the terminal height so content inserted
+        // above always has room in the scroll region.
+        let max_height = (size.height / 2).max(4);
+        area.height = height.min(max_height);
         area.width = size.width;
 
         // If the viewport extends beyond the screen bottom, scroll up.
