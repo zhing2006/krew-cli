@@ -22,16 +22,21 @@ impl<'a> App<'a> {
         terminal: &mut custom_terminal::Terminal,
     ) -> anyhow::Result<()> {
         let now = Instant::now();
+        let burst_enabled = self.config.settings.paste_burst_detection;
 
         // Flush any due paste burst before handling a new key.
-        self.flush_paste_burst_now(now);
+        if burst_enabled {
+            self.flush_paste_burst_now(now);
+        }
 
         // Ctrl+C: double-press to quit.
         if key_event.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key_event.code, KeyCode::Char('c') | KeyCode::Char('C'))
         {
-            self.flush_and_apply_burst();
-            self.paste_burst.clear_window_after_non_char();
+            if burst_enabled {
+                self.flush_and_apply_burst();
+                self.paste_burst.clear_window_after_non_char();
+            }
             self.on_ctrl_c();
             return Ok(());
         }
@@ -44,79 +49,84 @@ impl<'a> App<'a> {
 
         // If popup is active, intercept navigation keys.
         if self.popup.is_active() && self.handle_popup_key(key_event, terminal)? {
-            self.flush_and_apply_burst();
-            self.paste_burst.clear_window_after_non_char();
-            return Ok(());
-        }
-
-        // If capturing a burst and Enter is pressed, buffer it as newline.
-        if matches!(key_event.code, KeyCode::Enter)
-            && self.paste_burst.is_active()
-            && self.paste_burst.append_newline_if_active(now)
-        {
-            return Ok(());
-        }
-
-        // During the burst enter-suppress window, treat Enter as newline.
-        if matches!(key_event.code, KeyCode::Enter)
-            && !key_event.modifiers.contains(KeyModifiers::SHIFT)
-            && !key_event.modifiers.contains(KeyModifiers::CONTROL)
-            && self
-                .paste_burst
-                .newline_should_insert_instead_of_submit(now)
-        {
-            self.textarea.insert_newline();
-            self.paste_burst.extend_window(now);
-            return Ok(());
-        }
-
-        // Intercept plain chars (no Ctrl/Alt) for burst detection.
-        if let KeyCode::Char(ch) = key_event.code {
-            let has_ctrl_or_alt = key_event.modifiers.contains(KeyModifiers::CONTROL)
-                || key_event.modifiers.contains(KeyModifiers::ALT);
-
-            if !has_ctrl_or_alt {
-                if !ch.is_ascii() {
-                    return self.handle_non_ascii_char(key_event, ch, now);
-                }
-
-                match self.paste_burst.on_plain_char(ch, now) {
-                    CharDecision::BufferAppend => {
-                        self.paste_burst.append_char_to_buffer(ch, now);
-                        return Ok(());
-                    }
-                    CharDecision::BeginBuffer { retro_chars } => {
-                        let lines = self.textarea.lines();
-                        let (row, col) = self.textarea.cursor();
-                        if let Some(line) = lines.get(row) {
-                            let byte_col = Self::char_to_byte(line, col);
-                            let before = &line[..byte_col];
-                            if self
-                                .paste_burst
-                                .decide_begin_buffer(now, before, retro_chars as usize)
-                                .is_some()
-                            {
-                                self.paste_burst.append_char_to_buffer(ch, now);
-                                return Ok(());
-                            }
-                        }
-                        // Not paste-like enough, fall through to normal insertion.
-                    }
-                    CharDecision::BeginBufferFromPending => {
-                        self.paste_burst.append_char_to_buffer(ch, now);
-                        return Ok(());
-                    }
-                    CharDecision::RetainFirstChar => {
-                        return Ok(());
-                    }
-                }
+            if burst_enabled {
+                self.flush_and_apply_burst();
+                self.paste_burst.clear_window_after_non_char();
             }
-            // Flush burst before applying a modified char (Ctrl/Alt+char).
-            self.flush_and_apply_burst();
+            return Ok(());
+        }
+
+        // --- Paste burst detection (when enabled) ---
+        if burst_enabled {
+            // If capturing a burst and Enter is pressed, buffer it as newline.
+            if matches!(key_event.code, KeyCode::Enter)
+                && self.paste_burst.is_active()
+                && self.paste_burst.append_newline_if_active(now)
+            {
+                return Ok(());
+            }
+
+            // During the burst enter-suppress window, treat Enter as newline.
+            if matches!(key_event.code, KeyCode::Enter)
+                && !key_event.modifiers.contains(KeyModifiers::SHIFT)
+                && !key_event.modifiers.contains(KeyModifiers::CONTROL)
+                && self
+                    .paste_burst
+                    .newline_should_insert_instead_of_submit(now)
+            {
+                self.textarea.insert_newline();
+                self.paste_burst.extend_window(now);
+                return Ok(());
+            }
+
+            // Intercept plain chars (no Ctrl/Alt) for burst detection.
+            if let KeyCode::Char(ch) = key_event.code {
+                let has_ctrl_or_alt = key_event.modifiers.contains(KeyModifiers::CONTROL)
+                    || key_event.modifiers.contains(KeyModifiers::ALT);
+
+                if !has_ctrl_or_alt {
+                    if !ch.is_ascii() {
+                        return self.handle_non_ascii_char(key_event, ch, now);
+                    }
+
+                    match self.paste_burst.on_plain_char(ch, now) {
+                        CharDecision::BufferAppend => {
+                            self.paste_burst.append_char_to_buffer(ch, now);
+                            return Ok(());
+                        }
+                        CharDecision::BeginBuffer { retro_chars } => {
+                            let lines = self.textarea.lines();
+                            let (row, col) = self.textarea.cursor();
+                            if let Some(line) = lines.get(row) {
+                                let byte_col = Self::char_to_byte(line, col);
+                                let before = &line[..byte_col];
+                                if self
+                                    .paste_burst
+                                    .decide_begin_buffer(now, before, retro_chars as usize)
+                                    .is_some()
+                                {
+                                    self.paste_burst.append_char_to_buffer(ch, now);
+                                    return Ok(());
+                                }
+                            }
+                            // Not paste-like enough, fall through to normal insertion.
+                        }
+                        CharDecision::BeginBufferFromPending => {
+                            self.paste_burst.append_char_to_buffer(ch, now);
+                            return Ok(());
+                        }
+                        CharDecision::RetainFirstChar => {
+                            return Ok(());
+                        }
+                    }
+                }
+                // Flush burst before applying a modified char (Ctrl/Alt+char).
+                self.flush_and_apply_burst();
+            }
         }
 
         // Flush any buffered burst before applying non-char input.
-        if !matches!(key_event.code, KeyCode::Char(_) | KeyCode::Enter) {
+        if burst_enabled && !matches!(key_event.code, KeyCode::Char(_) | KeyCode::Enter) {
             self.flush_and_apply_burst();
         }
 
@@ -175,19 +185,21 @@ impl<'a> App<'a> {
         }
 
         // Update paste burst state after processing.
-        match key_event.code {
-            KeyCode::Char(_) => {
-                let has_ctrl_or_alt = key_event.modifiers.contains(KeyModifiers::CONTROL)
-                    || key_event.modifiers.contains(KeyModifiers::ALT);
-                if has_ctrl_or_alt {
+        if burst_enabled {
+            match key_event.code {
+                KeyCode::Char(_) => {
+                    let has_ctrl_or_alt = key_event.modifiers.contains(KeyModifiers::CONTROL)
+                        || key_event.modifiers.contains(KeyModifiers::ALT);
+                    if has_ctrl_or_alt {
+                        self.paste_burst.clear_window_after_non_char();
+                    }
+                }
+                KeyCode::Enter => {
+                    // Keep burst window alive (supports blank lines in paste).
+                }
+                _ => {
                     self.paste_burst.clear_window_after_non_char();
                 }
-            }
-            KeyCode::Enter => {
-                // Keep burst window alive (supports blank lines in paste).
-            }
-            _ => {
-                self.paste_burst.clear_window_after_non_char();
             }
         }
 
@@ -230,7 +242,12 @@ impl<'a> App<'a> {
                             return Ok(());
                         }
                     }
-                    // Not paste-like, fall through.
+                    // Retro-grab rejected (e.g. short CJK text without
+                    // whitespace), but the input speed is paste-like.
+                    // Start buffering from this point without retro-capture.
+                    self.paste_burst.force_start_buffer(now);
+                    self.paste_burst.append_char_to_buffer(ch, now);
+                    return Ok(());
                 }
                 _ => {}
             }
