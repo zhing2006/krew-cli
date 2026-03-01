@@ -167,9 +167,9 @@ impl TextArea {
         }
     }
 
-    // ── Compatibility helpers (ease migration from ratatui-textarea) ──
+    // ── Compatibility helpers ────────────────────────────────────────
 
-    /// Return text split by newlines (similar to ratatui-textarea's `lines()`).
+    /// Return text split by newlines.
     pub fn lines(&self) -> Vec<&str> {
         if self.text.is_empty() {
             vec![""]
@@ -803,6 +803,14 @@ impl TextArea {
         self.elements
             .iter()
             .filter_map(|e| self.text.get(e.range.clone()).map(str::to_string))
+            .collect()
+    }
+
+    /// Return (id, range) pairs for all tracked elements.
+    pub fn elements_snapshot(&self) -> Vec<(u64, Range<usize>)> {
+        self.elements
+            .iter()
+            .map(|e| (e.id, e.range.clone()))
             .collect()
     }
 

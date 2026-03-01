@@ -17,7 +17,8 @@ impl App {
         &mut self,
         terminal: &mut custom_terminal::Terminal,
     ) -> anyhow::Result<()> {
-        let text = self.textarea.text().to_string();
+        // Expand paste placeholders to actual pasted content.
+        let text = self.expanded_text();
 
         if text.trim().is_empty() {
             return Ok(());
