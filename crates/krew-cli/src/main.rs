@@ -3,6 +3,7 @@ mod completion;
 mod custom_terminal;
 mod frame_scheduler;
 mod render;
+mod streaming;
 mod textarea;
 
 use std::io::{self, stdout};
@@ -210,7 +211,18 @@ async fn main() -> anyhow::Result<()> {
     let mut terminal = setup_terminal()?;
 
     // Run the application.
-    let result = app::App::new(cwd, config)?.run(&mut terminal).await;
+    let mut app = app::App::new(cwd, config)?;
+
+    // Collect startup warnings from config normalization.
+    let appended = app.config.normalize();
+    if !appended.is_empty() {
+        let names = appended.join(", ");
+        app.startup_warnings.push(format!(
+            "settings.reply_order is missing agents, auto-appended: {names}"
+        ));
+    }
+
+    let result = app.run(&mut terminal).await;
 
     // Move cursor below the viewport while still in raw mode.
     // In raw mode, \r\n forces the terminal to scroll if at the bottom.
