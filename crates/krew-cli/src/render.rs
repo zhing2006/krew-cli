@@ -14,7 +14,7 @@ use crate::app::App;
 use crate::custom_terminal;
 
 /// Map a color name string to a ratatui `Color`.
-fn parse_color(name: &str) -> Color {
+pub fn parse_color(name: &str) -> Color {
     match name {
         "red" => Color::Red,
         "green" => Color::Green,
@@ -229,10 +229,32 @@ pub fn insert_header(terminal: &mut custom_terminal::Terminal, app: &App) -> any
     Ok(())
 }
 
+/// Insert a system/info message above the viewport.
+///
+/// Used for command output, error messages, and status notifications.
+/// `style` controls the color/modifier of the message text.
+pub fn insert_system_message(
+    terminal: &mut custom_terminal::Terminal,
+    lines: Vec<Line<'static>>,
+) -> anyhow::Result<()> {
+    if lines.is_empty() {
+        return Ok(());
+    }
+    // Message lines + 1 blank line after.
+    let height = (lines.len() + 1) as u16;
+    terminal.insert_before(height, |buf| {
+        let area = Rect::new(0, 0, buf.area.width, lines.len() as u16);
+        let paragraph = Paragraph::new(lines);
+        ratatui::widgets::Widget::render(paragraph, area, buf);
+    })?;
+    Ok(())
+}
+
 /// Insert a chat message above the viewport.
 ///
 /// `role` is `"you"` for user input, or an agent name for agent replies.
 /// `color_name` is the agent's configured color string (ignored for user).
+#[allow(dead_code)]
 pub fn insert_message(
     terminal: &mut custom_terminal::Terminal,
     role: &str,
