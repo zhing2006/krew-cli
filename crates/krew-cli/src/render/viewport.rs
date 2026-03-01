@@ -4,7 +4,7 @@
 //! All other content (header, messages) is inserted above the viewport
 //! above the viewport, scrolling naturally into terminal history.
 
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
@@ -36,7 +36,9 @@ pub fn parse_color(name: &str) -> Color {
 pub fn render_input_viewport(frame: &mut custom_terminal::Frame, app: &mut App) {
     let area = frame.area();
 
-    let textarea_lines = app.textarea.lines().len() as u16;
+    // Use visual line count (after word wrapping) for layout.
+    let textarea_width = area.width.saturating_sub(2); // minus prompt "› "
+    let textarea_lines = app.textarea.desired_height(textarea_width.max(1));
     let input_height = textarea_lines.max(1);
 
     if app.popup.is_active() {
@@ -89,6 +91,11 @@ fn render_input(frame: &mut custom_terminal::Frame, app: &mut App, area: Rect) {
     frame.render_widget(prompt, chunks[0]);
 
     frame.render_widget(&app.textarea, chunks[1]);
+
+    // Show real terminal cursor at the textarea cursor position.
+    if let Some((cx, cy)) = app.textarea.cursor_pos_in(chunks[1]) {
+        frame.set_cursor_position(Position::new(cx, cy));
+    }
 }
 
 /// Render a horizontal separator line.
