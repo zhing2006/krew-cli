@@ -13,6 +13,7 @@ impl Default for Config {
                 reply_order: vec!["echo".to_string()],
                 auto_compact_threshold: None,
                 input_history_limit: DEFAULT_INPUT_HISTORY_LIMIT,
+                paste_burst_detection: true,
             },
             agents: vec![AgentConfig {
                 name: "echo".to_string(),

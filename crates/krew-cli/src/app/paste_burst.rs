@@ -259,6 +259,15 @@ impl PasteBurst {
         self.active || !self.buffer.is_empty()
     }
 
+    /// Start buffering without retro-grabbing any already-inserted text.
+    /// Used when the burst heuristic detects paste-like input speed but the
+    /// retro-grab check rejects the already-inserted prefix (e.g. short
+    /// CJK text without whitespace).
+    pub fn force_start_buffer(&mut self, now: Instant) {
+        self.active = true;
+        self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
+    }
+
     fn begin_with_retro_grabbed(&mut self, grabbed: String, now: Instant) {
         if !grabbed.is_empty() {
             self.buffer.push_str(&grabbed);

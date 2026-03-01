@@ -130,7 +130,9 @@ impl<'a> App<'a> {
                 }
                 // Tick for quit hint expiry and paste burst flush.
                 _ = tokio::time::sleep(Duration::from_millis(16)) => {
-                    self.flush_paste_burst();
+                    if self.config.settings.paste_burst_detection {
+                        self.flush_paste_burst();
+                    }
                 }
             }
 
@@ -156,6 +158,12 @@ impl<'a> App<'a> {
                 self.handle_key(key_event, terminal)?;
             }
             Event::Paste(text) => {
+                // Receiving Event::Paste means the terminal supports
+                // bracketed paste — auto-disable burst detection.
+                if self.config.settings.paste_burst_detection {
+                    tracing::info!("Bracketed paste detected, disabling paste burst detection");
+                    self.config.settings.paste_burst_detection = false;
+                }
                 self.handle_paste(text);
             }
             Event::Resize(..) => {}
