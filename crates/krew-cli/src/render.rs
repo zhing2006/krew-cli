@@ -233,7 +233,7 @@ pub fn insert_header(terminal: &mut custom_terminal::Terminal, app: &App) -> any
 ///
 /// Used for command output, error messages, and status notifications.
 /// `style` controls the color/modifier of the message text.
-pub fn insert_system_message(
+pub fn insert_lines(
     terminal: &mut custom_terminal::Terminal,
     lines: Vec<Line<'static>>,
 ) -> anyhow::Result<()> {
@@ -247,60 +247,5 @@ pub fn insert_system_message(
         let paragraph = Paragraph::new(lines);
         ratatui::widgets::Widget::render(paragraph, area, buf);
     })?;
-    Ok(())
-}
-
-/// Insert a chat message above the viewport.
-///
-/// `role` is `"you"` for user input, or an agent name for agent replies.
-/// `color_name` is the agent's configured color string (ignored for user).
-#[allow(dead_code)]
-pub fn insert_message(
-    terminal: &mut custom_terminal::Terminal,
-    role: &str,
-    content: &str,
-    color_name: &str,
-) -> anyhow::Result<()> {
-    let (prefix_style, prefix_text): (Style, String) = if role == "you" {
-        (
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-            "> ".to_string(),
-        )
-    } else {
-        (
-            Style::default()
-                .fg(parse_color(color_name))
-                .add_modifier(Modifier::BOLD),
-            "\u{25cf} ".to_string(), // ●
-        )
-    };
-
-    let mut lines: Vec<Line> = Vec::new();
-    for (i, line) in content.lines().enumerate() {
-        if i == 0 {
-            lines.push(Line::from(vec![
-                Span::styled(prefix_text.clone(), prefix_style),
-                Span::raw(line.to_string()),
-            ]));
-        } else {
-            let indent = " ".repeat(prefix_text.width());
-            lines.push(Line::from(vec![
-                Span::raw(indent),
-                Span::raw(line.to_string()),
-            ]));
-        }
-    }
-
-    // Message lines + 1 blank line after.
-    let height = (lines.len() + 1) as u16;
-
-    terminal.insert_before(height, |buf| {
-        let area = Rect::new(0, 0, buf.area.width, lines.len() as u16);
-        let paragraph = Paragraph::new(lines);
-        ratatui::widgets::Widget::render(paragraph, area, buf);
-    })?;
-
     Ok(())
 }

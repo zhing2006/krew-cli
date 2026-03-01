@@ -36,6 +36,12 @@ pub struct App<'a> {
     quit_shortcut_armed_at: Option<Instant>,
     /// Transient hint shown in the status bar.
     pub quit_hint: Option<String>,
+    /// Input history (most recent last).
+    history: Vec<String>,
+    /// Current position in history navigation (None = not browsing).
+    history_index: Option<usize>,
+    /// Draft input saved when entering history navigation.
+    history_draft: String,
 }
 
 impl<'a> App<'a> {
@@ -59,6 +65,9 @@ impl<'a> App<'a> {
             should_quit: false,
             quit_shortcut_armed_at: None,
             quit_hint: None,
+            history: Vec::new(),
+            history_index: None,
+            history_draft: String::new(),
         })
     }
 
@@ -190,6 +199,24 @@ impl<'a> App<'a> {
             } => {
                 self.textarea.insert_newline();
             }
+            // Up arrow: history prev when cursor is on the first row.
+            Input {
+                key: Key::Up,
+                shift: false,
+                ctrl: false,
+                alt: false,
+            } if self.textarea.cursor().0 == 0 => {
+                self.history_prev();
+            }
+            // Down arrow: history next when cursor is on the last row.
+            Input {
+                key: Key::Down,
+                shift: false,
+                ctrl: false,
+                alt: false,
+            } if self.textarea.cursor().0 == self.textarea.lines().len() - 1 => {
+                self.history_next();
+            }
             // All other keys => forward to textarea.
             other => {
                 self.textarea.input(other);
@@ -221,6 +248,9 @@ impl<'a> App<'a> {
 
         let trimmed = text.trim();
         tracing::debug!(input = %trimmed, "User sent message");
+
+        // Push to input history.
+        self.history_push(trimmed.to_string());
 
         // Try slash command first.
         if trimmed.starts_with('/') {
@@ -262,19 +292,23 @@ impl<'a> App<'a> {
         };
 
         // Echo reply with yellow diamond prefix (temporary, replaced by LLM in Phase 4).
-        let echo_text = format!("{route_tag} echo: {body}");
-        render::insert_system_message(
-            terminal,
-            vec![Line::from(vec![
-                Span::styled(
-                    "\u{25c6} ".to_string(), // ◆
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(echo_text),
-            ])],
-        )?;
+        let diamond = Span::styled(
+            "\u{25c6} ".to_string(), // ◆
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        );
+        let echo_prefix = format!("{route_tag} echo: ");
+        let mut body_lines = body.lines();
+        let first_body = body_lines.next().unwrap_or("");
+        let mut echo_lines: Vec<Line<'static>> = vec![Line::from(vec![
+            diamond,
+            Span::raw(format!("{echo_prefix}{first_body}")),
+        ])];
+        for line in body_lines {
+            echo_lines.push(Line::from(Span::raw(line.to_string())));
+        }
+        render::insert_lines(terminal, echo_lines)?;
 
         self.clear_textarea();
         Ok(())
@@ -315,8 +349,15 @@ impl<'a> App<'a> {
             spans.push(Span::raw(" ".to_string()));
         }
 
-        spans.push(Span::raw(text.to_string()));
-        render::insert_system_message(terminal, vec![Line::from(spans)])
+        // Build lines — first line gets the prefix, continuation lines flush left.
+        let mut text_lines = text.lines();
+        let first_text = text_lines.next().unwrap_or("");
+        spans.push(Span::raw(first_text.to_string()));
+        let mut lines: Vec<Line<'static>> = vec![Line::from(spans)];
+        for line in text_lines {
+            lines.push(Line::from(Span::raw(line.to_string())));
+        }
+        render::insert_lines(terminal, lines)
     }
 
     /// Execute a slash command.
@@ -365,7 +406,7 @@ impl<'a> App<'a> {
             ]));
         }
 
-        render::insert_system_message(terminal, lines)
+        render::insert_lines(terminal, lines)
     }
 
     /// Execute /agents: display agent list with token stats.
@@ -393,7 +434,7 @@ impl<'a> App<'a> {
             ]));
         }
 
-        render::insert_system_message(terminal, lines)
+        render::insert_lines(terminal, lines)
     }
 
     /// Execute /clear: clear visible content and re-display header.
@@ -412,7 +453,7 @@ impl<'a> App<'a> {
         terminal: &mut custom_terminal::Terminal,
         msg: &str,
     ) -> anyhow::Result<()> {
-        render::insert_system_message(
+        render::insert_lines(
             terminal,
             vec![Line::from(Span::styled(
                 msg.to_string(),
@@ -423,7 +464,7 @@ impl<'a> App<'a> {
 
     /// Display an info message above the viewport.
     fn show_info(&self, terminal: &mut custom_terminal::Terminal, msg: &str) -> anyhow::Result<()> {
-        render::insert_system_message(
+        render::insert_lines(
             terminal,
             vec![Line::from(Span::styled(
                 msg.to_string(),
@@ -435,5 +476,82 @@ impl<'a> App<'a> {
     /// Clear the textarea and restore default styles.
     fn clear_textarea(&mut self) {
         self.textarea = Self::new_textarea();
+        self.history_index = None;
+    }
+
+    // ── Input history ────────────────────────────────────────────────
+
+    /// Push an entry to the input history, respecting the configured limit.
+    fn history_push(&mut self, entry: String) {
+        // Avoid consecutive duplicates.
+        if self.history.last().is_some_and(|last| last == &entry) {
+            return;
+        }
+        self.history.push(entry);
+        let limit = self.config.settings.input_history_limit;
+        if self.history.len() > limit {
+            self.history.drain(..self.history.len() - limit);
+        }
+    }
+
+    /// Navigate to the previous history entry (Up arrow).
+    fn history_prev(&mut self) {
+        if self.history.is_empty() {
+            return;
+        }
+        let idx = match self.history_index {
+            Some(i) if i > 0 => i - 1,
+            Some(_) => return, // already at oldest
+            None => {
+                // Entering history — save current input as draft.
+                self.history_draft = self.textarea.lines().join("\n");
+                self.history.len() - 1
+            }
+        };
+        self.history_index = Some(idx);
+        self.load_history_entry(idx);
+    }
+
+    /// Navigate to the next history entry (Down arrow).
+    fn history_next(&mut self) {
+        let Some(current) = self.history_index else {
+            return; // not browsing history
+        };
+        if current + 1 < self.history.len() {
+            let idx = current + 1;
+            self.history_index = Some(idx);
+            self.load_history_entry(idx);
+        } else {
+            // Past the newest entry — restore draft.
+            self.history_index = None;
+            self.set_textarea_content(&self.history_draft.clone());
+        }
+    }
+
+    /// Load a history entry into the textarea.
+    fn load_history_entry(&mut self, idx: usize) {
+        if let Some(entry) = self.history.get(idx) {
+            self.set_textarea_content(&entry.clone());
+        }
+    }
+
+    /// Replace textarea content with the given text (supports multiline).
+    fn set_textarea_content(&mut self, content: &str) {
+        let lines: Vec<String> = if content.is_empty() {
+            vec![String::new()]
+        } else {
+            content.lines().map(String::from).collect()
+        };
+        let mut textarea = TextArea::new(lines);
+        textarea.set_cursor_line_style(Style::default());
+        textarea.set_cursor_style(
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::REVERSED),
+        );
+        // Move cursor to end.
+        textarea.move_cursor(ratatui_textarea::CursorMove::Bottom);
+        textarea.move_cursor(ratatui_textarea::CursorMove::End);
+        self.textarea = textarea;
     }
 }
