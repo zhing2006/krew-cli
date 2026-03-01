@@ -1,5 +1,6 @@
 //! OpenAI Chat Completions API (`POST /v1/chat/completions`) implementation.
 
+use crate::common::{self, AuthMode, RequestConfig};
 use crate::{
     ChatMessage, ChatRole, LlmClient, LlmError, OtherAgentRole, StreamEvent, ToolDefinition, Usage,
 };
@@ -8,10 +9,6 @@ use krew_config::SamplingConfig;
 use std::pin::Pin;
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com";
-const MAX_RETRIES_429: u32 = 3;
-const MAX_RETRIES_5XX: u32 = 2;
-const RETRY_INTERVAL_5XX: std::time::Duration = std::time::Duration::from_secs(2);
-const FIRST_TOKEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// OpenAI Chat Completions API client.
 pub struct OpenAiChatClient {
@@ -253,55 +250,6 @@ struct SseChunk {
 }
 
 // ---------------------------------------------------------------------------
-// Retry helpers
-// ---------------------------------------------------------------------------
-
-/// Classify an HTTP status code for retry decisions.
-enum RetryAction {
-    /// Retry with exponential backoff (429 rate limit).
-    RateLimit,
-    /// Retry with fixed interval (5xx server error).
-    ServerError,
-    /// Do not retry (auth error).
-    AuthError,
-    /// Do not retry (other client error).
-    NoRetry,
-}
-
-fn classify_status(status: reqwest::StatusCode) -> RetryAction {
-    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-        RetryAction::RateLimit
-    } else if status.is_server_error() {
-        RetryAction::ServerError
-    } else if status == reqwest::StatusCode::UNAUTHORIZED
-        || status == reqwest::StatusCode::FORBIDDEN
-    {
-        RetryAction::AuthError
-    } else {
-        RetryAction::NoRetry
-    }
-}
-
-/// Extract error message from OpenAI error response body.
-async fn extract_error_message(resp: reqwest::Response) -> String {
-    let status = resp.status();
-    match resp.text().await {
-        Ok(body) => {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body)
-                && let Some(msg) = v
-                    .get("error")
-                    .and_then(|e| e.get("message"))
-                    .and_then(|m| m.as_str())
-            {
-                return format!("{status}: {msg}");
-            }
-            format!("{status}: {body}")
-        }
-        Err(_) => format!("{status}"),
-    }
-}
-
-// ---------------------------------------------------------------------------
 // LlmClient implementation
 // ---------------------------------------------------------------------------
 
@@ -358,97 +306,19 @@ impl LlmClient for OpenAiChatClient {
         }
 
         // Attempt request with retry logic.
-        let response = self.send_with_retry(&url, &body).await?;
+        let req_config = RequestConfig {
+            http: &self.http,
+            url: &url,
+            body: &body,
+            provider_name: "OpenAI",
+        };
+        let auth = AuthMode::Bearer(&self.api_key);
+        let response = common::send_with_retry(&req_config, &auth, None).await?;
 
         // Convert response into SSE event stream.
         let stream = build_event_stream(response);
 
         Ok(Box::pin(stream))
-    }
-}
-
-impl OpenAiChatClient {
-    /// Send request with retry logic for rate limits and server errors.
-    async fn send_with_retry(
-        &self,
-        url: &str,
-        body: &serde_json::Value,
-    ) -> Result<reqwest::Response, LlmError> {
-        let mut retries_429: u32 = 0;
-        let mut retries_5xx: u32 = 0;
-
-        loop {
-            let resp = tokio::time::timeout(
-                FIRST_TOKEN_TIMEOUT,
-                self.http
-                    .post(url)
-                    .bearer_auth(&self.api_key)
-                    .json(body)
-                    .send(),
-            )
-            .await;
-
-            let resp = match resp {
-                Ok(Ok(r)) => r,
-                Ok(Err(e)) => {
-                    // Network error — no retry.
-                    return Err(LlmError::Network(e));
-                }
-                Err(_) => {
-                    // Timeout — retry once.
-                    tracing::warn!(
-                        "OpenAI request timed out after {FIRST_TOKEN_TIMEOUT:?}, retrying once"
-                    );
-                    let retry = tokio::time::timeout(
-                        FIRST_TOKEN_TIMEOUT,
-                        self.http
-                            .post(url)
-                            .bearer_auth(&self.api_key)
-                            .json(body)
-                            .send(),
-                    )
-                    .await;
-                    match retry {
-                        Ok(Ok(r)) => r,
-                        Ok(Err(e)) => return Err(LlmError::Network(e)),
-                        Err(_) => {
-                            return Err(LlmError::Api("request timed out after retry".into()));
-                        }
-                    }
-                }
-            };
-
-            let status = resp.status();
-            if status.is_success() {
-                return Ok(resp);
-            }
-
-            match classify_status(status) {
-                RetryAction::RateLimit if retries_429 < MAX_RETRIES_429 => {
-                    retries_429 += 1;
-                    let delay = std::time::Duration::from_secs(1 << (retries_429 - 1));
-                    tracing::warn!(
-                        "OpenAI 429 rate limit, retry {retries_429}/{MAX_RETRIES_429} after {delay:?}"
-                    );
-                    tokio::time::sleep(delay).await;
-                }
-                RetryAction::ServerError if retries_5xx < MAX_RETRIES_5XX => {
-                    retries_5xx += 1;
-                    tracing::warn!(
-                        "OpenAI {status} server error, retry {retries_5xx}/{MAX_RETRIES_5XX} after {RETRY_INTERVAL_5XX:?}"
-                    );
-                    tokio::time::sleep(RETRY_INTERVAL_5XX).await;
-                }
-                RetryAction::AuthError => {
-                    let msg = extract_error_message(resp).await;
-                    return Err(LlmError::Auth(msg));
-                }
-                _ => {
-                    let msg = extract_error_message(resp).await;
-                    return Err(LlmError::Api(msg));
-                }
-            }
-        }
     }
 }
 
