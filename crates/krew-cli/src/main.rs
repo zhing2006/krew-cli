@@ -3,13 +3,14 @@ mod custom_terminal;
 mod render;
 
 use std::io::{self, stdout};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use crossterm::event::{
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use krew_config::Config;
 use ratatui::crossterm::execute;
 
 /// krew CLI argument definitions.
@@ -140,6 +141,43 @@ fn restore_terminal() {
     let _ = disable_raw_mode();
 }
 
+/// Load configuration from file, falling back to defaults.
+///
+/// When `--config` is explicitly provided, the file MUST exist (error if not).
+/// When using the default path, a missing file silently falls back to defaults.
+fn load_config(cwd: &Path, cli: &Cli) -> anyhow::Result<Config> {
+    let explicit = cli.config.is_some();
+    let config_path = match &cli.config {
+        Some(p) => PathBuf::from(p),
+        None => cwd.join(krew_config::CONFIG_FILENAME),
+    };
+
+    let mut config = if config_path.exists() {
+        tracing::info!(path = %config_path.display(), "Loading config");
+        Config::load(&config_path)
+            .map_err(|e| anyhow::anyhow!("Failed to load {}: {e}", config_path.display()))?
+    } else if explicit {
+        anyhow::bail!("Config file not found: {}", config_path.display());
+    } else {
+        tracing::info!("Config file not found, using defaults");
+        Config::default()
+    };
+
+    config
+        .apply_cli_overrides(cli.agents.as_deref(), cli.approval_mode.as_deref())
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    config.validate().map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    tracing::info!(
+        agents = config.agents.len(),
+        approval_mode = %config.settings.approval_mode,
+        "Config loaded"
+    );
+
+    Ok(config)
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -148,6 +186,9 @@ async fn main() -> anyhow::Result<()> {
     // Initialize logging — _guard must live until program exit.
     let _guard = init_logging(&cwd, cli.verbose)?;
     tracing::info!("krew starting");
+
+    // Load configuration (before terminal setup so errors print normally).
+    let config = load_config(&cwd, &cli)?;
 
     // Install panic hook that restores the terminal before printing the panic.
     let default_hook = std::panic::take_hook();
@@ -160,7 +201,7 @@ async fn main() -> anyhow::Result<()> {
     let mut terminal = setup_terminal()?;
 
     // Run the application.
-    let result = app::App::new(cwd)?.run(&mut terminal).await;
+    let result = app::App::new(cwd, config)?.run(&mut terminal).await;
 
     // Move cursor below the viewport while still in raw mode.
     // In raw mode, \r\n forces the terminal to scroll if at the bottom.

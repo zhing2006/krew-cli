@@ -10,6 +10,7 @@ use std::io::{self, stdout};
 use ratatui::backend::{Backend, ClearType, CrosstermBackend};
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::{Position, Rect, Size};
+use unicode_width::UnicodeWidthStr;
 
 // ── Frame ────────────────────────────────────────────────────────────────
 
@@ -265,6 +266,10 @@ impl Terminal {
     }
 
     /// Draw cells at a given y-offset, returning the unused tail.
+    ///
+    /// Wide characters (CJK, emoji) occupy multiple buffer cells but only the
+    /// first cell contains the actual symbol. Continuation cells must be
+    /// skipped to avoid overwriting the trailing columns of a wide glyph.
     fn draw_cells<'a>(
         &mut self,
         y_offset: u16,
@@ -275,11 +280,20 @@ impl Terminal {
         let count = width * lines as usize;
         let (to_draw, rest) = cells.split_at(count.min(cells.len()));
         if lines > 0 && !to_draw.is_empty() {
-            let iter = to_draw
+            let mut to_skip: usize = 0;
+            let items: Vec<_> = to_draw
                 .iter()
                 .enumerate()
-                .map(|(i, c)| ((i % width) as u16, y_offset + (i / width) as u16, c));
-            self.backend.draw(iter)?;
+                .filter_map(|(i, c)| {
+                    if to_skip > 0 {
+                        to_skip -= 1;
+                        return None;
+                    }
+                    to_skip = c.symbol().width().saturating_sub(1);
+                    Some(((i % width) as u16, y_offset + (i / width) as u16, c))
+                })
+                .collect();
+            self.backend.draw(items.into_iter())?;
             Backend::flush(&mut self.backend)?;
         }
         Ok(rest)
