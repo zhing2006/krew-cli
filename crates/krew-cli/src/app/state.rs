@@ -14,6 +14,8 @@ use crate::completion::ActivePopup;
 use crate::custom_terminal;
 use crate::render;
 
+use super::paste_burst::{FlushResult, PasteBurst};
+
 /// Duration within which a second Ctrl+C triggers quit.
 pub(super) const QUIT_SHORTCUT_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -42,6 +44,8 @@ pub struct App<'a> {
     pub(crate) history_index: Option<usize>,
     /// Draft input saved when entering history navigation.
     pub(crate) history_draft: String,
+    /// Non-bracketed paste burst tracker for Windows fallback.
+    pub(crate) paste_burst: PasteBurst,
 }
 
 impl<'a> App<'a> {
@@ -69,6 +73,7 @@ impl<'a> App<'a> {
             history: Vec::new(),
             history_index: None,
             history_draft: String::new(),
+            paste_burst: PasteBurst::default(),
         })
     }
 
@@ -123,8 +128,10 @@ impl<'a> App<'a> {
                         None => break,
                     }
                 }
-                // Tick so the quit hint can expire.
-                _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                // Tick for quit hint expiry and paste burst flush.
+                _ = tokio::time::sleep(Duration::from_millis(16)) => {
+                    self.flush_paste_burst();
+                }
             }
 
             if self.should_quit {
@@ -157,9 +164,10 @@ impl<'a> App<'a> {
         Ok(())
     }
 
-    /// Handle a bracketed paste event — insert text into the textarea
-    /// without triggering auto-send on newlines.
-    fn handle_paste(&mut self, text: String) {
+    /// Handle a paste event (bracketed paste or burst-detected paste) —
+    /// insert text into the textarea without triggering auto-send on newlines.
+    pub(crate) fn handle_paste(&mut self, text: String) {
+        self.paste_burst.clear_after_explicit_paste();
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
         let mut lines = text.split('\n');
         if let Some(first) = lines.next() {
@@ -168,6 +176,19 @@ impl<'a> App<'a> {
         for line in lines {
             self.textarea.insert_newline();
             self.textarea.insert_str(line);
+        }
+    }
+
+    /// Flush any pending paste burst that has timed out.
+    fn flush_paste_burst(&mut self) {
+        match self.paste_burst.flush_if_due(Instant::now()) {
+            FlushResult::Paste(pasted) => {
+                self.handle_paste(pasted);
+            }
+            FlushResult::Typed(ch) => {
+                self.textarea.insert_str(ch.to_string().as_str());
+            }
+            FlushResult::None => {}
         }
     }
 
