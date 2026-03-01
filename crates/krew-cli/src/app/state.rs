@@ -1,5 +1,6 @@
 //! App state machine and main event loop.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -45,6 +46,10 @@ pub struct App {
     pub(crate) history_draft: String,
     /// Non-bracketed paste burst tracker for Windows fallback.
     pub(crate) paste_burst: PasteBurst,
+    /// Stored full text for large paste placeholders (element_id → actual text).
+    pub(crate) pending_pastes: HashMap<u64, String>,
+    /// Counter for paste placeholder display numbering.
+    pub(crate) paste_counter: usize,
 }
 
 impl App {
@@ -71,6 +76,8 @@ impl App {
             history_index: None,
             history_draft: String::new(),
             paste_burst: PasteBurst::default(),
+            pending_pastes: HashMap::new(),
+            paste_counter: 0,
         })
     }
 
@@ -159,12 +166,26 @@ impl App {
         Ok(())
     }
 
+    /// Threshold in chars above which pasted text is collapsed into a
+    /// placeholder element.
+    const PASTE_PLACEHOLDER_THRESHOLD: usize = 100;
+
     /// Handle a paste event (bracketed paste or burst-detected paste) —
     /// insert text into the textarea without triggering auto-send on newlines.
     pub(crate) fn handle_paste(&mut self, text: String) {
         self.paste_burst.clear_after_explicit_paste();
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
-        self.textarea.insert_str(&text);
+
+        if text.chars().count() > Self::PASTE_PLACEHOLDER_THRESHOLD {
+            self.paste_counter += 1;
+            let n = self.paste_counter;
+            let char_count = text.chars().count();
+            let placeholder = format!("[Pasted text #{n} ({char_count} chars)]");
+            let elem_id = self.textarea.insert_element(&placeholder);
+            self.pending_pastes.insert(elem_id, text);
+        } else {
+            self.textarea.insert_str(&text);
+        }
     }
 
     /// Flush any pending paste burst that has timed out.
@@ -180,10 +201,42 @@ impl App {
         }
     }
 
-    /// Clear the textarea.
+    /// Clear the textarea and any pending paste placeholders.
     pub(crate) fn clear_textarea(&mut self) {
         self.textarea = TextArea::new();
         self.history_index = None;
+        self.pending_pastes.clear();
+        self.paste_counter = 0;
+    }
+
+    /// Return the textarea text with paste placeholders expanded to
+    /// their actual pasted content.
+    pub(crate) fn expanded_text(&self) -> String {
+        if self.pending_pastes.is_empty() {
+            return self.textarea.text().to_string();
+        }
+
+        let mut result = self.textarea.text().to_string();
+        // Expand in reverse order of element position so that earlier
+        // replacements don't shift later byte ranges.
+        let mut replacements: Vec<_> = self
+            .textarea
+            .elements_snapshot()
+            .into_iter()
+            .filter_map(|(id, range)| {
+                self.pending_pastes
+                    .get(&id)
+                    .map(|real| (range, real.clone()))
+            })
+            .collect();
+        replacements.sort_by(|a, b| b.0.start.cmp(&a.0.start));
+
+        for (range, real_text) in replacements {
+            if range.end <= result.len() {
+                result.replace_range(range, &real_text);
+            }
+        }
+        result
     }
 
     /// Replace textarea content with the given text (supports multiline).
