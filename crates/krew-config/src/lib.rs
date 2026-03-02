@@ -149,10 +149,6 @@ pub struct ProviderConfig {
     pub api_key_env: Option<String>,
     /// Base URL for the provider API.
     pub base_url: Option<String>,
-    /// Azure OpenAI endpoint URL (enables Azure mode when set).
-    pub azure_endpoint: Option<String>,
-    /// Azure OpenAI API version string.
-    pub azure_api_version: Option<String>,
     /// Use the `name` field on messages to identify other agents.
     /// When false (default), other agents' content is prefixed with
     /// `[agent_name]` instead.
@@ -169,7 +165,7 @@ pub struct ProviderConfig {
 #[serde(rename_all = "lowercase")]
 pub enum ProviderType {
     /// OpenAI API (Chat Completions / Responses). Also covers Azure
-    /// (via `azure_endpoint`) and OpenAI-compatible services (via `base_url`).
+    /// and OpenAI-compatible services (via `base_url`).
     OpenAI,
     /// Anthropic Messages API.
     Anthropic,

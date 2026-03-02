@@ -18,11 +18,12 @@ impl App {
         color_name: &str,
     ) -> anyhow::Result<()> {
         let color = render::parse_color(color_name);
-        let style = Style::default().fg(color).add_modifier(Modifier::BOLD);
+        let colored = Style::default().fg(color).add_modifier(Modifier::BOLD);
+        let plain = Style::default().add_modifier(Modifier::BOLD);
 
         let line = Line::from(vec![
-            Span::styled(format!("[{agent_name}] "), style),
-            Span::styled(format!("{display_name}:"), style),
+            Span::styled(format!("[{agent_name}] "), colored),
+            Span::styled(format!("{display_name}:"), plain),
         ]);
 
         render::insert_lines(terminal, vec![line])

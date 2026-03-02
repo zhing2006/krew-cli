@@ -4,9 +4,10 @@ reply_order = ["gpt", "doubao"]
 
 [[agents]]
 name = "gpt"
-display_name = "ChatGPT"
-provider = "litellm"
-model = "gpt-5.2-chat"
+display_name = "GPT"
+provider = "openai"
+model = "gpt-5.2"
+api_type = "responses"
 color = "green"
 
 [[agents]]
@@ -20,3 +21,8 @@ color = "yellow"
 type = "openai"
 api_key_env = "OPENAI_API_KEY"
 base_url = "http://litellm.tsd.xindong.com:4000"
+
+[providers.openai]
+type = "openai"
+api_key_env = "AZURE6_OPENAI_API_KEY"
+base_url = "https://xdts-dev-auto6.openai.azure.com/openai"
