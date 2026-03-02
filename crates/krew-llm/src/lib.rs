@@ -8,6 +8,7 @@ pub mod openai_responses;
 
 pub use anthropic::AnthropicClient;
 pub use google::GoogleClient;
+pub use krew_config::OtherAgentRole;
 pub use openai_chat::OpenAiChatClient;
 pub use openai_responses::OpenAiResponsesClient;
 pub use types::*;

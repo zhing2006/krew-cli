@@ -68,6 +68,9 @@ pub struct Settings {
     /// Number of tokio worker threads (defaults to 4).
     #[serde(default = "default_worker_threads")]
     pub worker_threads: usize,
+    /// How to present other agents' messages in the conversation history.
+    #[serde(default)]
+    pub other_agent_role: OtherAgentRole,
 }
 
 fn default_input_history_limit() -> usize {
@@ -149,15 +152,21 @@ pub struct ProviderConfig {
     pub api_key_env: Option<String>,
     /// Base URL for the provider API.
     pub base_url: Option<String>,
-    /// Use the `name` field on messages to identify other agents.
-    /// When false (default), other agents' content is prefixed with
-    /// `[agent_name]` instead.
-    #[serde(default)]
-    pub use_name_field: bool,
     /// Google Vertex AI project ID (enables Vertex AI mode when set).
     pub vertex_project: Option<String>,
     /// Google Vertex AI location (e.g. "us-central1").
     pub vertex_location: Option<String>,
+}
+
+/// How to present other agents' messages in the conversation history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OtherAgentRole {
+    /// Send other agents' replies as user-role messages (default).
+    #[default]
+    User,
+    /// Send other agents' replies as assistant-role messages.
+    Assistant,
 }
 
 /// Supported LLM provider types.
