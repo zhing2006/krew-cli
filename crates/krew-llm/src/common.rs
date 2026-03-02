@@ -3,23 +3,9 @@
 //! Contains retry logic, HTTP status classification, error extraction,
 //! and message merging for providers that require strict role alternation.
 
+use krew_config::RetryConfig;
+
 use crate::LlmError;
-
-// ---------------------------------------------------------------------------
-// Retry constants
-// ---------------------------------------------------------------------------
-
-/// Maximum retries for 429 rate limit responses (exponential backoff).
-pub const MAX_RETRIES_429: u32 = 3;
-
-/// Maximum retries for 5xx server error responses (fixed interval).
-pub const MAX_RETRIES_5XX: u32 = 2;
-
-/// Fixed retry interval for 5xx server errors.
-pub const RETRY_INTERVAL_5XX: std::time::Duration = std::time::Duration::from_secs(2);
-
-/// Timeout for first token / initial response.
-pub const FIRST_TOKEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 // ---------------------------------------------------------------------------
 // HTTP status classification
@@ -102,22 +88,41 @@ pub enum AuthMode<'a> {
     Header(&'a str, &'a str),
 }
 
-/// Send a request with retry logic for rate limits, server errors, and timeouts.
+// ---------------------------------------------------------------------------
+// Retry notification
+// ---------------------------------------------------------------------------
+
+/// Information about a retry attempt, passed to the `on_retry` callback.
+#[derive(Debug, Clone)]
+pub struct RetryInfo {
+    /// Current retry attempt (1-based).
+    pub attempt: u32,
+    /// Maximum attempts allowed for this error type.
+    pub max_attempts: u32,
+    /// Human-readable reason for the retry.
+    pub reason: String,
+    /// Delay in seconds before the retry.
+    pub delay_secs: f64,
+}
+
+/// Send a request with configurable retry logic for rate limits, server errors,
+/// and timeouts.
 ///
-/// Implements:
-/// - 429 exponential backoff: 1s → 2s → 4s, max 3 retries
-/// - 5xx fixed interval: 2s between retries, max 2 retries
-/// - Timeout: 60s, retry once on timeout
+/// Retry behavior is controlled by `retry_config`. The optional `on_retry`
+/// callback is invoked before each retry sleep to notify the caller (e.g. TUI).
 pub async fn send_with_retry(
     config: &RequestConfig<'_>,
     auth: &AuthMode<'_>,
     extra_headers: Option<&[(String, String)]>,
+    retry_config: &RetryConfig,
+    on_retry: Option<&(dyn Fn(RetryInfo) + Send + Sync)>,
 ) -> Result<reqwest::Response, LlmError> {
     let mut retries_429: u32 = 0;
     let mut retries_5xx: u32 = 0;
+    let timeout = std::time::Duration::from_secs(retry_config.request_timeout_secs);
 
     loop {
-        let resp = tokio::time::timeout(FIRST_TOKEN_TIMEOUT, {
+        let resp = tokio::time::timeout(timeout, {
             let mut req = config.http.post(config.url);
             req = apply_auth(req, auth);
             if let Some(headers) = extra_headers {
@@ -136,10 +141,18 @@ pub async fn send_with_retry(
             }
             Err(_) => {
                 tracing::warn!(
-                    "{} request timed out after {FIRST_TOKEN_TIMEOUT:?}, retrying once",
+                    "{} request timed out after {timeout:?}, retrying once",
                     config.provider_name,
                 );
-                let retry = tokio::time::timeout(FIRST_TOKEN_TIMEOUT, {
+                if let Some(cb) = &on_retry {
+                    cb(RetryInfo {
+                        attempt: 1,
+                        max_attempts: 1,
+                        reason: "timeout".into(),
+                        delay_secs: 0.0,
+                    });
+                }
+                let retry = tokio::time::timeout(timeout, {
                     let mut req = config.http.post(config.url);
                     req = apply_auth(req, auth);
                     if let Some(headers) = extra_headers {
@@ -165,23 +178,48 @@ pub async fn send_with_retry(
             return Ok(resp);
         }
 
+        let max_429 = retry_config.max_retries_rate_limit;
+        let max_5xx = retry_config.max_retries_server_error;
+
         match classify_status(status) {
-            RetryAction::RateLimit if retries_429 < MAX_RETRIES_429 => {
+            RetryAction::RateLimit if retries_429 < max_429 => {
                 retries_429 += 1;
-                let delay = std::time::Duration::from_secs(1 << (retries_429 - 1));
+                let delay_secs = retry_config.backoff_base_secs
+                    * retry_config
+                        .backoff_multiplier
+                        .powi((retries_429 - 1) as i32);
+                let delay = std::time::Duration::from_secs_f64(delay_secs);
                 tracing::warn!(
-                    "{} 429 rate limit, retry {retries_429}/{MAX_RETRIES_429} after {delay:?}",
+                    "{} 429 rate limit, retry {retries_429}/{max_429} after {delay:.1?}",
                     config.provider_name,
                 );
+                if let Some(cb) = &on_retry {
+                    cb(RetryInfo {
+                        attempt: retries_429,
+                        max_attempts: max_429,
+                        reason: "rate limit (429)".into(),
+                        delay_secs,
+                    });
+                }
                 tokio::time::sleep(delay).await;
             }
-            RetryAction::ServerError if retries_5xx < MAX_RETRIES_5XX => {
+            RetryAction::ServerError if retries_5xx < max_5xx => {
                 retries_5xx += 1;
+                let delay_secs = retry_config.server_error_interval_secs;
+                let delay = std::time::Duration::from_secs_f64(delay_secs);
                 tracing::warn!(
-                    "{} {status} server error, retry {retries_5xx}/{MAX_RETRIES_5XX} after {RETRY_INTERVAL_5XX:?}",
+                    "{} {status} server error, retry {retries_5xx}/{max_5xx} after {delay:.1?}",
                     config.provider_name,
                 );
-                tokio::time::sleep(RETRY_INTERVAL_5XX).await;
+                if let Some(cb) = &on_retry {
+                    cb(RetryInfo {
+                        attempt: retries_5xx,
+                        max_attempts: max_5xx,
+                        reason: format!("server error ({status})"),
+                        delay_secs,
+                    });
+                }
+                tokio::time::sleep(delay).await;
             }
             RetryAction::AuthError => {
                 let msg = extract_error_message(resp).await;

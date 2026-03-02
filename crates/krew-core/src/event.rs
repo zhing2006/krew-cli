@@ -17,4 +17,15 @@ pub enum AgentEvent {
     Done(Usage),
     /// An error occurred during the agent turn.
     Error(String),
+    /// A retry attempt is about to happen (for TUI status display).
+    Retrying {
+        /// Current retry attempt (1-based).
+        attempt: u32,
+        /// Maximum attempts allowed for this error type.
+        max_attempts: u32,
+        /// Human-readable reason (e.g. "rate limit (429)").
+        reason: String,
+        /// Delay in seconds before the retry.
+        delay_secs: f64,
+    },
 }
