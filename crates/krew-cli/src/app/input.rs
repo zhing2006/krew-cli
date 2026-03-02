@@ -127,13 +127,17 @@ impl App {
 
         // Match key events directly via crossterm KeyEvent.
         match key_event {
-            // Enter (no modifiers) => send message.
+            // Enter (no modifiers) => send message, or newline if agent is active.
             KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                self.send_message(terminal)?;
+                if self.agent_event_rx.is_some() {
+                    self.textarea.insert_newline();
+                } else {
+                    self.send_message(terminal)?;
+                }
             }
             // Shift+Enter => insert newline.
             KeyEvent {
