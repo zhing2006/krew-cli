@@ -90,6 +90,14 @@ pub struct App {
     pub(crate) agent_token_usage: HashMap<String, (u32, u32)>,
     /// Startup warnings to display after header.
     pub(crate) startup_warnings: Vec<String>,
+
+    // --- Agent status indicator ---
+    /// Timestamp when the current agent started processing (drives status line visibility).
+    pub agent_start_time: Option<Instant>,
+    /// Display name of the currently active agent (shown in status line).
+    pub agent_display_name: Option<String>,
+    /// Color name of the currently active agent (shown in status line).
+    pub agent_color: Option<String>,
 }
 
 impl App {
@@ -134,6 +142,9 @@ impl App {
             current_agent_name: None,
             agent_token_usage: HashMap::new(),
             startup_warnings: Vec::new(),
+            agent_start_time: None,
+            agent_display_name: None,
+            agent_color: None,
         })
     }
 
@@ -317,10 +328,13 @@ impl App {
                     // Sync completion popup based on current input.
                     self.sync_popup();
 
-                    // Adjust viewport height to fit textarea + popup.
+                    // Adjust viewport height to fit textarea + status line + popup.
                     let term_width = terminal.size()?.width.saturating_sub(2);
                     let input_lines = self.textarea.desired_height(term_width.max(1));
-                    let needed = input_lines.max(1) + 3 + self.popup.extra_height();
+                    let status_line_height: u16 =
+                        if self.agent_start_time.is_some() { 1 } else { 0 };
+                    let needed =
+                        input_lines.max(1) + 3 + status_line_height + self.popup.extra_height();
                     terminal.ensure_viewport_height(needed)?;
 
                     // Render input prompt + status bar inside the inline viewport.
@@ -350,6 +364,18 @@ impl App {
             } => {
                 self.current_agent_name = Some(agent_name.clone());
                 self.current_response_text.clear();
+
+                // Activate the agent status indicator line.
+                self.agent_start_time = Some(Instant::now());
+                self.agent_display_name = Some(display_name.clone());
+                self.agent_color = Some(color.clone());
+
+                // Start commit tick early so the spinner animates before the
+                // first TextDelta/ThinkingDelta arrives.
+                if !self.commit_tick_active {
+                    self.commit_tick_active = true;
+                }
+
                 self.insert_agent_header(terminal, &agent_name, &display_name, &color)?;
             }
             AgentEvent::ThinkingDelta(text) => {
@@ -441,6 +467,11 @@ impl App {
                     });
                 }
 
+                // Clear agent status indicator.
+                self.agent_start_time = None;
+                self.agent_display_name = None;
+                self.agent_color = None;
+
                 // Reset streaming state.
                 self.agent_event_rx = None;
                 self.commit_tick_active = false;
@@ -448,6 +479,11 @@ impl App {
             }
             AgentEvent::Error(msg) => {
                 self.insert_agent_error(terminal, &msg)?;
+
+                // Clear agent status indicator.
+                self.agent_start_time = None;
+                self.agent_display_name = None;
+                self.agent_color = None;
 
                 // Reset streaming state.
                 self.stream_collector = None;

@@ -124,17 +124,22 @@ impl Terminal {
         f(&mut frame);
         let cursor_position = frame.cursor_position;
 
+        // Hide cursor before flushing diffs to prevent visible cursor
+        // jumping to each changed cell position during the update.
+        if !self.hidden_cursor {
+            self.backend.hide_cursor()?;
+        }
+
         self.flush()?;
 
         match cursor_position {
             None => {
-                self.backend.hide_cursor()?;
                 self.hidden_cursor = true;
             }
             Some(pos) => {
+                self.backend.set_cursor_position(pos)?;
                 self.backend.show_cursor()?;
                 self.hidden_cursor = false;
-                self.backend.set_cursor_position(pos)?;
                 self.last_known_cursor_pos = pos;
             }
         }
