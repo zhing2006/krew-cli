@@ -174,21 +174,46 @@ impl App {
             // Create LLM client based on provider type.
             let client: Arc<dyn krew_llm::LlmClient> = match provider_config.provider_type {
                 krew_config::ProviderType::OpenAI => {
-                    match krew_llm::openai_chat::OpenAiChatClient::new(
-                        agent_config.name.clone(),
-                        agent_config.model.clone(),
-                        api_key_env,
-                        provider_config.base_url.as_deref(),
-                        provider_config.use_name_field,
-                    ) {
-                        Ok(c) => Arc::new(c),
-                        Err(e) => {
-                            tracing::warn!(
-                                agent = agent_config.name,
-                                error = %e,
-                                "Failed to create LLM client, skipping agent"
-                            );
-                            continue;
+                    let api_type = agent_config.api_type.unwrap_or(krew_config::ApiType::Chat);
+                    match api_type {
+                        krew_config::ApiType::Chat => {
+                            match krew_llm::openai_chat::OpenAiChatClient::new(
+                                agent_config.name.clone(),
+                                agent_config.model.clone(),
+                                api_key_env,
+                                provider_config.base_url.as_deref(),
+                                provider_config.use_name_field,
+                            ) {
+                                Ok(c) => Arc::new(c),
+                                Err(e) => {
+                                    tracing::warn!(
+                                        agent = agent_config.name,
+                                        error = %e,
+                                        "Failed to create LLM client, skipping agent"
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
+                        krew_config::ApiType::Responses => {
+                            match krew_llm::OpenAiResponsesClient::new(
+                                agent_config.name.clone(),
+                                agent_config.model.clone(),
+                                api_key_env,
+                                provider_config.base_url.as_deref(),
+                                agent_config.enable_thinking,
+                                agent_config.thinking_effort,
+                            ) {
+                                Ok(c) => Arc::new(c),
+                                Err(e) => {
+                                    tracing::warn!(
+                                        agent = agent_config.name,
+                                        error = %e,
+                                        "Failed to create LLM client, skipping agent"
+                                    );
+                                    continue;
+                                }
+                            }
                         }
                     }
                 }
