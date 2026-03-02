@@ -30,28 +30,17 @@ impl AnthropicClient {
     pub fn new(
         agent_name: String,
         model: String,
-        api_key_env: &str,
+        api_key: String,
         base_url: Option<&str>,
         enable_thinking: bool,
         thinking_effort: Option<ThinkingEffort>,
-    ) -> Result<Self, LlmError> {
-        let api_key = std::env::var(api_key_env).map_err(|_| {
-            LlmError::Auth(format!(
-                "environment variable {api_key_env} is not set or empty"
-            ))
-        })?;
-        if api_key.is_empty() {
-            return Err(LlmError::Auth(format!(
-                "environment variable {api_key_env} is empty"
-            )));
-        }
-
+    ) -> Self {
         let base_url = base_url
             .unwrap_or(DEFAULT_BASE_URL)
             .trim_end_matches('/')
             .to_string();
 
-        Ok(Self {
+        Self {
             http: reqwest::Client::new(),
             base_url,
             api_key,
@@ -59,7 +48,7 @@ impl AnthropicClient {
             agent_name,
             enable_thinking,
             thinking_effort,
-        })
+        }
     }
 }
 
@@ -69,12 +58,13 @@ impl AnthropicClient {
 
 /// Get the default max_tokens for a given model name.
 fn default_max_tokens(model: &str) -> u32 {
-    if model.contains("opus-4-6") {
+    let has = |s: &str| model.contains(s);
+    if has("opus") && has("4-6") {
         128_000
-    } else if model.contains("sonnet-4-6")
-        || model.contains("haiku-4-5")
-        || model.contains("opus-4-5")
-        || model.contains("sonnet-4-5")
+    } else if (has("sonnet") && has("4-6"))
+        || (has("haiku") && has("4-5"))
+        || (has("opus") && has("4-5"))
+        || (has("sonnet") && has("4-5"))
     {
         64_000
     } else {
@@ -224,7 +214,7 @@ fn build_sampling_params(
 
 /// Check if a model supports adaptive thinking (Opus 4.6 / Sonnet 4.6).
 fn is_adaptive_model(model: &str) -> bool {
-    model.contains("opus-4-6") || model.contains("sonnet-4-6")
+    (model.contains("opus") || model.contains("sonnet")) && model.contains("4-6")
 }
 
 /// Build the thinking parameter for the request body.

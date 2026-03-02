@@ -1,6 +1,23 @@
 [settings]
 approval_mode = "suggest"
-reply_order = ["gpt", "doubao"]
+reply_order = ["opus", "gpt", "gemini", "sonnet", "doubao"]
+
+[[agents]]
+name = "gemini"
+display_name = "Gemini"
+provider = "google"
+model = "gemini-3.1-pro-preview"
+color = "cyan"
+enable_thinking = true
+thinking_effort = "high"
+
+[[agents]]
+name = "opus"
+display_name = "Opus"
+provider = "anthropic"
+model = "claude-4-6-opus"
+color = "blue"
+enable_thinking = true
 
 [[agents]]
 name = "gpt"
@@ -9,6 +26,14 @@ provider = "openai"
 model = "gpt-5.2"
 api_type = "responses"
 color = "green"
+
+[[agents]]
+name = "sonnet"
+display_name = "Sonnet"
+provider = "anthropic"
+model = "claude-4-6-sonnet"
+color = "magenta"
+enable_thinking = true
 
 [[agents]]
 name = "doubao"
@@ -26,3 +51,13 @@ base_url = "http://litellm.tsd.xindong.com:4000"
 type = "openai"
 api_key_env = "AZURE6_OPENAI_API_KEY"
 base_url = "https://xdts-dev-auto6.openai.azure.com/openai"
+
+[providers.anthropic]
+type = "anthropic"
+api_key_env = "OPENAI_API_KEY"
+base_url = "http://litellm.tsd.xindong.com:4000"
+
+[providers.google]
+type = "google"
+api_key_env = "GOOGLE_API_KEY"
+base_url = "https://aiplatform.googleapis.com/v1/publishers/google"
