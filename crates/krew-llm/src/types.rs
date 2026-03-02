@@ -30,15 +30,6 @@ pub struct Usage {
     pub total_tokens: u32,
 }
 
-/// How to present other agents' messages in the conversation history.
-#[derive(Debug, Clone)]
-pub enum OtherAgentRole {
-    /// Send other agents' replies as user-role messages.
-    User,
-    /// Send other agents' replies as assistant-role messages.
-    Assistant,
-}
-
 /// Tool definition exposed to LLM providers via the tools parameter.
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolDefinition {

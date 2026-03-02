@@ -1,10 +1,9 @@
 //! OpenAI Chat Completions API (`POST /v1/chat/completions`) implementation.
 
-use crate::common::{self, AuthMode, RequestConfig};
-use crate::{
-    ChatMessage, ChatRole, LlmClient, LlmError, OtherAgentRole, StreamEvent, ToolDefinition, Usage,
-};
+use crate::common::{self, AuthMode, RequestConfig, RoleContent, merge_consecutive_same_role};
+use crate::{ChatMessage, ChatRole, LlmClient, LlmError, StreamEvent, ToolDefinition, Usage};
 use futures::Stream;
+use krew_config::OtherAgentRole;
 use krew_config::SamplingConfig;
 use std::pin::Pin;
 
@@ -18,8 +17,8 @@ pub struct OpenAiChatClient {
     model: String,
     /// Agent name for multi-agent message role attribution.
     agent_name: String,
-    /// Whether to use the `name` field on messages for other agents.
-    use_name_field: bool,
+    /// How to present other agents' messages.
+    other_agent_role: OtherAgentRole,
 }
 
 impl OpenAiChatClient {
@@ -27,14 +26,13 @@ impl OpenAiChatClient {
     ///
     /// `api_key` is the resolved API key value.
     /// `base_url` overrides the default `https://api.openai.com`.
-    /// `use_name_field` controls whether other agents' messages use the `name`
-    /// field or a `[name]` content prefix.
+    /// `other_agent_role` controls the role used for other agents' messages.
     pub fn new(
         agent_name: String,
         model: String,
         api_key: String,
         base_url: Option<&str>,
-        use_name_field: bool,
+        other_agent_role: OtherAgentRole,
     ) -> Self {
         let base_url = base_url
             .unwrap_or(DEFAULT_BASE_URL)
@@ -47,7 +45,7 @@ impl OpenAiChatClient {
             api_key,
             model,
             agent_name,
-            use_name_field,
+            other_agent_role,
         }
     }
 }
@@ -58,19 +56,18 @@ impl OpenAiChatClient {
 
 /// Convert unified ChatMessages to OpenAI Chat Completions message format.
 ///
-/// - The current agent's own messages are always `role: assistant` with no
-///   `name` field.
-/// - User messages are always `role: user` with no `name` field.
-/// - Other agents' messages use `other_agent_role` for the role. When
-///   `use_name_field` is true, the `name` field is set; otherwise the
-///   content is prefixed with `[agent_name]`.
+/// - The current agent's own messages are always `role: assistant`.
+/// - User messages are always `role: user`.
+/// - Other agents' messages use `other_agent_role` for the role, with
+///   content prefixed by `[agent_name]` for disambiguation.
+///
+/// Consecutive same-role messages are merged.
 pub fn convert_messages(
     messages: &[ChatMessage],
     self_agent_name: &str,
     other_agent_role: &OtherAgentRole,
-    use_name_field: bool,
 ) -> Vec<serde_json::Value> {
-    messages
+    let role_contents: Vec<RoleContent> = messages
         .iter()
         .map(|msg| {
             let is_other_agent = matches!(&msg.role, ChatRole::Assistant)
@@ -90,28 +87,30 @@ pub fn convert_messages(
                 ChatRole::Assistant => "assistant",
             };
 
-            let content = if is_other_agent && !use_name_field {
-                // Prefix content with [agent_name] for disambiguation.
+            let content = if is_other_agent {
                 let name = msg.name.as_deref().unwrap_or("unknown");
                 format!("[{name}] {}", msg.content)
             } else {
                 msg.content.clone()
             };
 
-            let mut obj = serde_json::json!({
-                "role": role,
-                "content": content,
-            });
-
-            // Only set name field for other agents when explicitly enabled.
-            if is_other_agent
-                && use_name_field
-                && let Some(name) = &msg.name
-            {
-                obj["name"] = serde_json::Value::String(name.clone());
+            RoleContent {
+                role: role.to_string(),
+                content,
             }
+        })
+        .collect();
 
-            obj
+    // Merge consecutive same-role messages.
+    let merged = merge_consecutive_same_role(role_contents);
+
+    merged
+        .into_iter()
+        .map(|rc| {
+            serde_json::json!({
+                "role": rc.role,
+                "content": rc.content,
+            })
         })
         .collect()
 }
@@ -253,12 +252,7 @@ impl LlmClient for OpenAiChatClient {
         let url = format!("{}/v1/chat/completions", self.base_url);
 
         // Build messages array.
-        let openai_messages = convert_messages(
-            messages,
-            &self.agent_name,
-            &OtherAgentRole::User,
-            self.use_name_field,
-        );
+        let openai_messages = convert_messages(messages, &self.agent_name, &self.other_agent_role);
 
         // Build request body.
         let mut body = serde_json::json!({
@@ -416,6 +410,84 @@ mod tests {
         let params = build_sampling_params(&SamplingConfig::default());
         assert_eq!(params, serde_json::json!({}));
     }
+
+    // ---- Message conversion tests ----
+
+    #[test]
+    fn convert_user_message() {
+        let messages = vec![ChatMessage {
+            role: ChatRole::User,
+            content: "hello".to_string(),
+            name: None,
+        }];
+        let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
+        assert_eq!(result[0]["role"], "user");
+        assert_eq!(result[0]["content"], "hello");
+    }
+
+    #[test]
+    fn convert_current_agent_assistant() {
+        let messages = vec![ChatMessage {
+            role: ChatRole::Assistant,
+            content: "my reply".to_string(),
+            name: Some("agent1".to_string()),
+        }];
+        let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
+        assert_eq!(result[0]["role"], "assistant");
+        assert_eq!(result[0]["content"], "my reply");
+    }
+
+    #[test]
+    fn convert_other_agent_to_user() {
+        let messages = vec![ChatMessage {
+            role: ChatRole::Assistant,
+            content: "other reply".to_string(),
+            name: Some("agent2".to_string()),
+        }];
+        let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
+        assert_eq!(result[0]["role"], "user");
+        assert_eq!(result[0]["content"], "[agent2] other reply");
+    }
+
+    #[test]
+    fn convert_other_agent_as_assistant() {
+        let messages = vec![ChatMessage {
+            role: ChatRole::Assistant,
+            content: "other reply".to_string(),
+            name: Some("agent2".to_string()),
+        }];
+        let result = convert_messages(&messages, "agent1", &OtherAgentRole::Assistant);
+        assert_eq!(result[0]["role"], "assistant");
+        assert_eq!(result[0]["content"], "[agent2] other reply");
+    }
+
+    #[test]
+    fn convert_consecutive_same_role_merged() {
+        let messages = vec![
+            ChatMessage {
+                role: ChatRole::Assistant,
+                content: "reply A".to_string(),
+                name: Some("agentA".to_string()),
+            },
+            ChatMessage {
+                role: ChatRole::Assistant,
+                content: "reply B".to_string(),
+                name: Some("agentB".to_string()),
+            },
+        ];
+        let result = convert_messages(&messages, "agentC", &OtherAgentRole::User);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0]["role"], "user");
+        assert_eq!(result[0]["content"], "[agentA] reply A\n\n[agentB] reply B");
+    }
+
+    #[test]
+    fn convert_empty_messages() {
+        let result = convert_messages(&[], "agent1", &OtherAgentRole::User);
+        assert!(result.is_empty());
+    }
+
+    // ---- SSE parsing tests ----
 
     #[test]
     fn sse_text_delta() {

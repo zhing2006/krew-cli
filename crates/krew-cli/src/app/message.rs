@@ -49,12 +49,38 @@ impl App {
             }
         };
 
+        // Resolve LastRespondent early so we can show colored dots.
+        let resolved_last = match &addressee {
+            Addressee::LastRespondent => self.last_respondent.clone(),
+            _ => None,
+        };
+
+        // Task 3.5: Block if LastRespondent has no value.
+        if matches!(&addressee, Addressee::LastRespondent) && resolved_last.is_none() {
+            self.show_error(terminal, "还没有 Agent 回复过，请使用 @name 指定目标 Agent")?;
+            self.clear_textarea();
+            return Ok(());
+        }
+
         // Resolve target agent names for colored dots on user message.
         let target_names: Vec<&str> = match &addressee {
-            Addressee::All => self.config.agents.iter().map(|a| a.name.as_str()).collect(),
+            Addressee::All => self
+                .config
+                .settings
+                .reply_order
+                .iter()
+                .filter(|name| self.agents.contains_key(*name))
+                .map(|n| n.as_str())
+                .collect(),
             Addressee::Single(name) => vec![name.as_str()],
             Addressee::Multiple(names) => names.iter().map(|n| n.as_str()).collect(),
-            Addressee::LastRespondent => vec![],
+            Addressee::LastRespondent => {
+                if let Some(ref name) = resolved_last {
+                    vec![name.as_str()]
+                } else {
+                    vec![]
+                }
+            }
         };
 
         // Insert user message with colored routing dots: > ●●● message
@@ -67,46 +93,59 @@ impl App {
             name: None,
         });
 
-        // Determine which agent to call.
-        let target_agent = match &addressee {
-            Addressee::Single(name) => Some(name.clone()),
-            Addressee::LastRespondent => {
-                // Use the first agent with an LLM client, or fall back to config order.
-                self.config
-                    .agents
-                    .iter()
-                    .find(|a| self.agents.contains_key(&a.name))
-                    .map(|a| a.name.clone())
-            }
-            // Phase 4: @all and @multiple not yet supported (Phase 6).
-            // For now, use the first agent in reply_order that has a client.
-            Addressee::All | Addressee::Multiple(_) => self
-                .config
-                .settings
-                .reply_order
-                .iter()
-                .find(|name| self.agents.contains_key(*name))
-                .cloned(),
-        };
+        // Build the agent dispatch queue based on addressee type.
+        self.pending_agents.clear();
 
-        if let Some(ref name) = target_agent {
-            if let Some(agent) = self.agents.get(name) {
-                // Start completion immediately — the HTTP request runs in a
-                // spawned task so the event loop is not blocked.
-                let rx = agent
-                    .start_completion(self.messages.clone(), self.project_instructions.as_deref());
-                self.agent_event_rx = Some(rx);
-            } else {
-                // Builtin echo fallback.
-                self.echo_reply(terminal, &addressee, &body)?;
+        match &addressee {
+            Addressee::All => {
+                // @all: use reply_order, filter to agents with LLM clients.
+                for name in &self.config.settings.reply_order {
+                    if self.agents.contains_key(name) {
+                        self.pending_agents.push_back(name.clone());
+                    }
+                }
             }
-        } else {
-            // No LLM agents available — echo.
-            self.echo_reply(terminal, &addressee, &body)?;
+            Addressee::Multiple(names) => {
+                // @name1 @name2: use @ appearance order.
+                for name in names {
+                    if self.agents.contains_key(name) {
+                        self.pending_agents.push_back(name.clone());
+                    }
+                }
+            }
+            Addressee::Single(name) => {
+                self.pending_agents.push_back(name.clone());
+            }
+            Addressee::LastRespondent => {
+                if let Some(name) = resolved_last {
+                    self.pending_agents.push_back(name);
+                }
+            }
         }
+
+        // Start the first agent in the queue.
+        self.start_next_agent(terminal)?;
 
         self.clear_textarea();
         Ok(())
+    }
+
+    /// Start the next pending agent. Returns Ok(true) if an agent was started.
+    pub(crate) fn start_next_agent(
+        &mut self,
+        terminal: &mut custom_terminal::Terminal,
+    ) -> anyhow::Result<bool> {
+        if let Some(name) = self.pending_agents.pop_front() {
+            if let Some(agent) = self.agents.get(&name) {
+                let rx = agent
+                    .start_completion(self.messages.clone(), self.project_instructions.as_deref());
+                self.agent_event_rx = Some(rx);
+                return Ok(true);
+            }
+            // Agent not found (builtin/removed) — try next.
+            self.echo_reply(terminal, &Addressee::Single(name), "")?;
+        }
+        Ok(false)
     }
 
     /// Echo reply with yellow diamond prefix (for builtin agents).
