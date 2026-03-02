@@ -1,9 +1,12 @@
 //! OpenAI Chat Completions API (`POST /v1/chat/completions`) implementation.
 
 use crate::common::{self, AuthMode, RequestConfig, RoleContent, merge_consecutive_same_role};
-use crate::{ChatMessage, ChatRole, LlmClient, LlmError, StreamEvent, ToolDefinition, Usage};
+use crate::{
+    ChatMessage, ChatRole, LlmClient, LlmClientConfig, LlmError, StreamEvent, ToolDefinition, Usage,
+};
 use futures::Stream;
 use krew_config::OtherAgentRole;
+use krew_config::RetryConfig;
 use krew_config::SamplingConfig;
 use std::pin::Pin;
 
@@ -15,26 +18,17 @@ pub struct OpenAiChatClient {
     base_url: String,
     api_key: String,
     model: String,
-    /// Agent name for multi-agent message role attribution.
     agent_name: String,
-    /// How to present other agents' messages.
     other_agent_role: OtherAgentRole,
+    retry_config: RetryConfig,
 }
 
 impl OpenAiChatClient {
     /// Create a new OpenAI Chat Completions client.
-    ///
-    /// `api_key` is the resolved API key value.
-    /// `base_url` overrides the default `https://api.openai.com`.
-    /// `other_agent_role` controls the role used for other agents' messages.
-    pub fn new(
-        agent_name: String,
-        model: String,
-        api_key: String,
-        base_url: Option<&str>,
-        other_agent_role: OtherAgentRole,
-    ) -> Self {
-        let base_url = base_url
+    pub fn new(config: LlmClientConfig) -> Self {
+        let base_url = config
+            .base_url
+            .as_deref()
             .unwrap_or(DEFAULT_BASE_URL)
             .trim_end_matches('/')
             .to_string();
@@ -42,10 +36,11 @@ impl OpenAiChatClient {
         Self {
             http: reqwest::Client::new(),
             base_url,
-            api_key,
-            model,
-            agent_name,
-            other_agent_role,
+            api_key: config.api_key,
+            model: config.model,
+            agent_name: config.agent_name,
+            other_agent_role: config.other_agent_role,
+            retry_config: config.retry_config,
         }
     }
 }
@@ -248,6 +243,7 @@ impl LlmClient for OpenAiChatClient {
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
         sampling: &SamplingConfig,
+        on_retry: Option<&(dyn Fn(common::RetryInfo) + Send + Sync)>,
     ) -> Result<Pin<Box<dyn Stream<Item = StreamEvent> + Send>>, LlmError> {
         let url = format!("{}/v1/chat/completions", self.base_url);
 
@@ -296,7 +292,8 @@ impl LlmClient for OpenAiChatClient {
             provider_name: "OpenAI",
         };
         let auth = AuthMode::Bearer(&self.api_key);
-        let response = common::send_with_retry(&req_config, &auth, None).await?;
+        let response =
+            common::send_with_retry(&req_config, &auth, None, &self.retry_config, on_retry).await?;
 
         // Convert response into SSE event stream.
         let stream = build_event_stream(response);

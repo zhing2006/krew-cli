@@ -78,7 +78,21 @@ impl AgentRuntime {
         // Spawn the HTTP request + stream consumption so the event loop
         // is free to redraw immediately.
         tokio::spawn(async move {
-            match client.chat_stream(&full_messages, &tools, &sampling).await {
+            // Build retry callback that forwards retry info to the TUI.
+            let tx_retry = tx.clone();
+            let on_retry = move |info: krew_llm::common::RetryInfo| {
+                let _ = tx_retry.send(AgentEvent::Retrying {
+                    attempt: info.attempt,
+                    max_attempts: info.max_attempts,
+                    reason: info.reason.clone(),
+                    delay_secs: info.delay_secs,
+                });
+            };
+
+            match client
+                .chat_stream(&full_messages, &tools, &sampling, Some(&on_retry))
+                .await
+            {
                 Ok(stream) => {
                     consume_stream(stream, tx, &agent_name).await;
                 }

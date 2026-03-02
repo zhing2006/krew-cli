@@ -14,8 +14,31 @@ pub use openai_responses::OpenAiResponsesClient;
 pub use types::*;
 
 use futures::Stream;
-use krew_config::SamplingConfig;
+use krew_config::{RetryConfig, SamplingConfig, ThinkingEffort};
 use std::pin::Pin;
+
+/// Common configuration shared by all LLM client constructors.
+///
+/// Groups the parameters that every provider needs, avoiding long argument
+/// lists in individual `new()` methods.
+pub struct LlmClientConfig {
+    /// Agent name for multi-agent message role attribution.
+    pub agent_name: String,
+    /// LLM model identifier.
+    pub model: String,
+    /// Resolved API key value.
+    pub api_key: String,
+    /// Optional base URL override for the provider API.
+    pub base_url: Option<String>,
+    /// How to present other agents' messages in conversation history.
+    pub other_agent_role: OtherAgentRole,
+    /// Retry configuration for API requests.
+    pub retry_config: RetryConfig,
+    /// Whether thinking/reasoning is enabled for this agent.
+    pub enable_thinking: bool,
+    /// Thinking effort level (only used when `enable_thinking` is true).
+    pub thinking_effort: Option<ThinkingEffort>,
+}
 
 /// Errors that can occur during LLM API interactions.
 #[derive(Debug, thiserror::Error)]
@@ -40,11 +63,15 @@ pub enum LlmError {
 #[async_trait::async_trait]
 pub trait LlmClient: Send + Sync {
     /// Send messages to the LLM and receive a stream of events.
+    ///
+    /// The optional `on_retry` callback is invoked before each retry sleep,
+    /// allowing the caller (e.g. TUI) to display retry status.
     async fn chat_stream(
         &self,
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
         sampling: &SamplingConfig,
+        on_retry: Option<&(dyn Fn(common::RetryInfo) + Send + Sync)>,
     ) -> Result<Pin<Box<dyn Stream<Item = StreamEvent> + Send>>, LlmError>;
 }
 

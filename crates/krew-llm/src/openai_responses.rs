@@ -3,9 +3,12 @@
 //! Supports both standard OpenAI and Azure mode (when `azure_endpoint` is set).
 
 use crate::common::{self, AuthMode, RequestConfig, RoleContent, merge_consecutive_same_role};
-use crate::{ChatMessage, ChatRole, LlmClient, LlmError, StreamEvent, ToolDefinition, Usage};
+use crate::{
+    ChatMessage, ChatRole, LlmClient, LlmClientConfig, LlmError, StreamEvent, ToolDefinition, Usage,
+};
 use futures::Stream;
 use krew_config::OtherAgentRole;
+use krew_config::RetryConfig;
 use krew_config::{SamplingConfig, ThinkingEffort};
 use std::pin::Pin;
 
@@ -18,31 +21,18 @@ pub struct OpenAiResponsesClient {
     api_key: String,
     model: String,
     agent_name: String,
-    /// Whether thinking/reasoning is enabled.
     enable_thinking: bool,
-    /// Thinking effort level.
     thinking_effort: Option<ThinkingEffort>,
-    /// How to present other agents' messages.
     other_agent_role: OtherAgentRole,
+    retry_config: RetryConfig,
 }
 
 impl OpenAiResponsesClient {
     /// Create a new OpenAI Responses API client.
-    ///
-    /// `api_key` is the resolved API key value.
-    /// `base_url` overrides the default `https://api.openai.com`.
-    /// For Azure OpenAI, set `base_url` to
-    /// `https://YOUR-RESOURCE.openai.azure.com/openai`.
-    pub fn new(
-        agent_name: String,
-        model: String,
-        api_key: String,
-        base_url: Option<&str>,
-        enable_thinking: bool,
-        thinking_effort: Option<ThinkingEffort>,
-        other_agent_role: OtherAgentRole,
-    ) -> Self {
-        let base_url = base_url
+    pub fn new(config: LlmClientConfig) -> Self {
+        let base_url = config
+            .base_url
+            .as_deref()
             .unwrap_or(DEFAULT_BASE_URL)
             .trim_end_matches('/')
             .to_string();
@@ -50,12 +40,13 @@ impl OpenAiResponsesClient {
         Self {
             http: reqwest::Client::new(),
             base_url,
-            api_key,
-            model,
-            agent_name,
-            enable_thinking,
-            thinking_effort,
-            other_agent_role,
+            api_key: config.api_key,
+            model: config.model,
+            agent_name: config.agent_name,
+            enable_thinking: config.enable_thinking,
+            thinking_effort: config.thinking_effort,
+            other_agent_role: config.other_agent_role,
+            retry_config: config.retry_config,
         }
     }
 }
@@ -446,6 +437,7 @@ impl LlmClient for OpenAiResponsesClient {
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
         sampling: &SamplingConfig,
+        on_retry: Option<&(dyn Fn(common::RetryInfo) + Send + Sync)>,
     ) -> Result<Pin<Box<dyn Stream<Item = StreamEvent> + Send>>, LlmError> {
         let url = format!("{}/v1/responses", self.base_url);
 
@@ -484,7 +476,8 @@ impl LlmClient for OpenAiResponsesClient {
             provider_name: "OpenAI Responses",
         };
         let auth = AuthMode::Bearer(&self.api_key);
-        let response = common::send_with_retry(&req_config, &auth, None).await?;
+        let response =
+            common::send_with_retry(&req_config, &auth, None, &self.retry_config, on_retry).await?;
 
         // Convert to SSE event stream.
         let stream = build_event_stream(response);
