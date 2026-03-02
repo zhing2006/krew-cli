@@ -102,6 +102,8 @@ pub struct App {
     pub agent_display_name: Option<String>,
     /// Color name of the currently active agent (shown in status line).
     pub agent_color: Option<String>,
+    /// Override text for the agent status line (e.g. retry status).
+    pub agent_status_text: Option<String>,
 }
 
 impl App {
@@ -151,6 +153,7 @@ impl App {
             agent_start_time: None,
             agent_display_name: None,
             agent_color: None,
+            agent_status_text: None,
         })
     }
 
@@ -206,50 +209,38 @@ impl App {
                 continue;
             };
 
+            // Build shared client config (moves api_key — no clone needed).
+            let client_config = krew_llm::LlmClientConfig {
+                agent_name: agent_config.name.clone(),
+                model: agent_config.model.clone(),
+                api_key,
+                base_url: provider_config.base_url.clone(),
+                other_agent_role: config.settings.other_agent_role,
+                retry_config: config.settings.retry.clone(),
+                enable_thinking: agent_config.enable_thinking,
+                thinking_effort: agent_config.thinking_effort,
+            };
+
             // Create LLM client based on provider type.
             let client: Arc<dyn krew_llm::LlmClient> = match provider_config.provider_type {
                 krew_config::ProviderType::OpenAI => {
                     let api_type = agent_config.api_type.unwrap_or(krew_config::ApiType::Chat);
                     match api_type {
-                        krew_config::ApiType::Chat => Arc::new(krew_llm::OpenAiChatClient::new(
-                            agent_config.name.clone(),
-                            agent_config.model.clone(),
-                            api_key.clone(),
-                            provider_config.base_url.as_deref(),
-                            config.settings.other_agent_role,
-                        )),
+                        krew_config::ApiType::Chat => {
+                            Arc::new(krew_llm::OpenAiChatClient::new(client_config))
+                        }
                         krew_config::ApiType::Responses => {
-                            Arc::new(krew_llm::OpenAiResponsesClient::new(
-                                agent_config.name.clone(),
-                                agent_config.model.clone(),
-                                api_key.clone(),
-                                provider_config.base_url.as_deref(),
-                                agent_config.enable_thinking,
-                                agent_config.thinking_effort,
-                                config.settings.other_agent_role,
-                            ))
+                            Arc::new(krew_llm::OpenAiResponsesClient::new(client_config))
                         }
                     }
                 }
-                krew_config::ProviderType::Anthropic => Arc::new(krew_llm::AnthropicClient::new(
-                    agent_config.name.clone(),
-                    agent_config.model.clone(),
-                    api_key.clone(),
-                    provider_config.base_url.as_deref(),
-                    agent_config.enable_thinking,
-                    agent_config.thinking_effort,
-                    config.settings.other_agent_role,
-                )),
+                krew_config::ProviderType::Anthropic => {
+                    Arc::new(krew_llm::AnthropicClient::new(client_config))
+                }
                 krew_config::ProviderType::Google => Arc::new(krew_llm::GoogleClient::new(
-                    agent_config.name.clone(),
-                    agent_config.model.clone(),
-                    api_key.clone(),
-                    provider_config.base_url.as_deref(),
+                    client_config,
                     provider_config.vertex_project.as_deref(),
                     provider_config.vertex_location.as_deref(),
-                    agent_config.enable_thinking,
-                    agent_config.thinking_effort,
-                    config.settings.other_agent_role,
                 )),
             };
 
@@ -393,8 +384,21 @@ impl App {
 
                 self.insert_agent_header(terminal, &agent_name, &display_name, &color)?;
             }
+            AgentEvent::Retrying {
+                attempt,
+                max_attempts,
+                reason,
+                delay_secs,
+            } => {
+                self.agent_status_text = Some(format!(
+                    "Retrying ({attempt}/{max_attempts}, {reason}, {delay_secs:.0}s)..."
+                ));
+            }
             AgentEvent::ThinkingDelta(text) => {
                 tracing::debug!(delta = ?text, "ThinkingDelta received");
+
+                // Clear retry status once content starts arriving.
+                self.agent_status_text = None;
 
                 if !self.is_thinking {
                     self.is_thinking = true;
@@ -419,6 +423,9 @@ impl App {
             }
             AgentEvent::TextDelta(text) => {
                 tracing::debug!(delta = ?text, "TextDelta received");
+
+                // Clear retry status once content starts arriving.
+                self.agent_status_text = None;
 
                 // Transition from thinking to text: finalize thinking content.
                 if self.is_thinking {
@@ -487,6 +494,7 @@ impl App {
                 self.agent_start_time = None;
                 self.agent_display_name = None;
                 self.agent_color = None;
+                self.agent_status_text = None;
 
                 // Reset streaming state for this agent.
                 self.agent_event_rx = None;
@@ -534,6 +542,7 @@ impl App {
                 self.agent_start_time = None;
                 self.agent_display_name = None;
                 self.agent_color = None;
+                self.agent_status_text = None;
 
                 // Reset streaming state.
                 self.agent_event_rx = None;

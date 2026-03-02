@@ -4,9 +4,12 @@
 //! `vertex_project` and `vertex_location` are set).
 
 use crate::common::{self, AuthMode, RequestConfig, RoleContent, merge_consecutive_same_role};
-use crate::{ChatMessage, ChatRole, LlmClient, LlmError, StreamEvent, ToolDefinition, Usage};
+use crate::{
+    ChatMessage, ChatRole, LlmClient, LlmClientConfig, LlmError, StreamEvent, ToolDefinition, Usage,
+};
 use futures::Stream;
 use krew_config::OtherAgentRole;
+use krew_config::RetryConfig;
 use krew_config::{SamplingConfig, ThinkingEffort};
 use std::pin::Pin;
 
@@ -18,20 +21,14 @@ pub struct GoogleClient {
     api_key: String,
     model: String,
     agent_name: String,
-    /// Whether Vertex AI mode is active.
     vertex_mode: bool,
-    /// Vertex AI project ID.
     vertex_project: Option<String>,
-    /// Vertex AI location (e.g. "us-central1").
     vertex_location: Option<String>,
-    /// Custom base URL (standard mode only).
     base_url: Option<String>,
-    /// Whether thinking/reasoning is enabled.
     enable_thinking: bool,
-    /// Thinking effort level.
     thinking_effort: Option<ThinkingEffort>,
-    /// How to present other agents' messages.
     other_agent_role: OtherAgentRole,
+    retry_config: RetryConfig,
 }
 
 impl GoogleClient {
@@ -39,32 +36,26 @@ impl GoogleClient {
     ///
     /// When both `vertex_project` and `vertex_location` are set, the client
     /// switches to Vertex AI mode with Bearer token authentication.
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        agent_name: String,
-        model: String,
-        api_key: String,
-        base_url: Option<&str>,
+        config: LlmClientConfig,
         vertex_project: Option<&str>,
         vertex_location: Option<&str>,
-        enable_thinking: bool,
-        thinking_effort: Option<ThinkingEffort>,
-        other_agent_role: OtherAgentRole,
     ) -> Self {
         let vertex_mode = vertex_project.is_some() && vertex_location.is_some();
 
         Self {
             http: reqwest::Client::new(),
-            api_key,
-            model,
-            agent_name,
+            api_key: config.api_key,
+            model: config.model,
+            agent_name: config.agent_name,
             vertex_mode,
             vertex_project: vertex_project.map(|s| s.to_string()),
             vertex_location: vertex_location.map(|s| s.to_string()),
-            base_url: base_url.map(|s| s.trim_end_matches('/').to_string()),
-            enable_thinking,
-            thinking_effort,
-            other_agent_role,
+            base_url: config.base_url.map(|s| s.trim_end_matches('/').to_string()),
+            enable_thinking: config.enable_thinking,
+            thinking_effort: config.thinking_effort,
+            other_agent_role: config.other_agent_role,
+            retry_config: config.retry_config,
         }
     }
 
@@ -487,6 +478,7 @@ impl LlmClient for GoogleClient {
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
         sampling: &SamplingConfig,
+        on_retry: Option<&(dyn Fn(common::RetryInfo) + Send + Sync)>,
     ) -> Result<Pin<Box<dyn Stream<Item = StreamEvent> + Send>>, LlmError> {
         let url = self.build_url();
 
@@ -537,7 +529,8 @@ impl LlmClient for GoogleClient {
             // We'll use a special "no auth" approach.
             AuthMode::Header("x-goog-api-client", "krew-cli")
         };
-        let response = common::send_with_retry(&req_config, &auth, None).await?;
+        let response =
+            common::send_with_retry(&req_config, &auth, None, &self.retry_config, on_retry).await?;
 
         // Convert to SSE event stream.
         let stream = build_event_stream(response);

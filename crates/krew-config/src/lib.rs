@@ -71,6 +71,50 @@ pub struct Settings {
     /// How to present other agents' messages in the conversation history.
     #[serde(default)]
     pub other_agent_role: OtherAgentRole,
+    /// Retry configuration for LLM API requests.
+    #[serde(default)]
+    pub retry: RetryConfig,
+}
+
+/// Retry configuration for LLM API requests.
+///
+/// Controls retry behavior for rate-limited (429) and server error (5xx)
+/// responses. Each error type tracks its own retry count independently.
+///
+/// Delay formula for 429: `backoff_base_secs × backoff_multiplier^(attempt-1)`
+#[derive(Debug, Clone, Deserialize)]
+pub struct RetryConfig {
+    /// Maximum retries for 429 rate-limit responses.
+    #[serde(default = "default_retry_max_rate_limit")]
+    pub max_retries_rate_limit: u32,
+    /// Maximum retries for 5xx server error responses.
+    #[serde(default = "default_retry_max_server_error")]
+    pub max_retries_server_error: u32,
+    /// Base delay in seconds for exponential backoff (429).
+    #[serde(default = "default_retry_backoff_base_secs")]
+    pub backoff_base_secs: f64,
+    /// Multiplier for exponential backoff (429).
+    #[serde(default = "default_retry_backoff_multiplier")]
+    pub backoff_multiplier: f64,
+    /// Fixed retry interval in seconds for 5xx server errors.
+    #[serde(default = "default_retry_server_error_interval_secs")]
+    pub server_error_interval_secs: f64,
+    /// Request timeout in seconds for first token / initial response.
+    #[serde(default = "default_retry_request_timeout_secs")]
+    pub request_timeout_secs: u64,
+}
+
+impl Default for RetryConfig {
+    fn default() -> Self {
+        Self {
+            max_retries_rate_limit: DEFAULT_RETRY_MAX_RATE_LIMIT,
+            max_retries_server_error: DEFAULT_RETRY_MAX_SERVER_ERROR,
+            backoff_base_secs: DEFAULT_RETRY_BACKOFF_BASE_SECS,
+            backoff_multiplier: DEFAULT_RETRY_BACKOFF_MULTIPLIER,
+            server_error_interval_secs: DEFAULT_RETRY_SERVER_ERROR_INTERVAL_SECS,
+            request_timeout_secs: DEFAULT_RETRY_REQUEST_TIMEOUT_SECS,
+        }
+    }
 }
 
 fn default_input_history_limit() -> usize {
@@ -86,6 +130,40 @@ pub const DEFAULT_WORKER_THREADS: usize = 4;
 
 fn default_worker_threads() -> usize {
     DEFAULT_WORKER_THREADS
+}
+
+// ── Retry defaults ──────────────────────────────────────────────────
+
+/// Default maximum retries for 429 rate limit responses.
+pub const DEFAULT_RETRY_MAX_RATE_LIMIT: u32 = 3;
+/// Default maximum retries for 5xx server error responses.
+pub const DEFAULT_RETRY_MAX_SERVER_ERROR: u32 = 2;
+/// Default base delay in seconds for exponential backoff (429).
+pub const DEFAULT_RETRY_BACKOFF_BASE_SECS: f64 = 2.0;
+/// Default multiplier for exponential backoff (429).
+pub const DEFAULT_RETRY_BACKOFF_MULTIPLIER: f64 = 3.0;
+/// Default fixed retry interval in seconds for 5xx server errors.
+pub const DEFAULT_RETRY_SERVER_ERROR_INTERVAL_SECS: f64 = 2.0;
+/// Default request timeout in seconds for first token.
+pub const DEFAULT_RETRY_REQUEST_TIMEOUT_SECS: u64 = 60;
+
+fn default_retry_max_rate_limit() -> u32 {
+    DEFAULT_RETRY_MAX_RATE_LIMIT
+}
+fn default_retry_max_server_error() -> u32 {
+    DEFAULT_RETRY_MAX_SERVER_ERROR
+}
+fn default_retry_backoff_base_secs() -> f64 {
+    DEFAULT_RETRY_BACKOFF_BASE_SECS
+}
+fn default_retry_backoff_multiplier() -> f64 {
+    DEFAULT_RETRY_BACKOFF_MULTIPLIER
+}
+fn default_retry_server_error_interval_secs() -> f64 {
+    DEFAULT_RETRY_SERVER_ERROR_INTERVAL_SECS
+}
+fn default_retry_request_timeout_secs() -> u64 {
+    DEFAULT_RETRY_REQUEST_TIMEOUT_SECS
 }
 
 /// Configuration for a single AI agent.
