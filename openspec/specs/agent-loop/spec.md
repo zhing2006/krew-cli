@@ -8,11 +8,11 @@
 - **THEN** SHALL 通过 `AgentEvent` 发送以下事件类型：`ResponseStart`（含 agent_name、display_name、color）、`TextDelta(String)`、`Done(Usage)`、`Error(String)`
 
 ### Requirement: 单 Agent 对话完成
-`AgentRuntime` SHALL 提供 `complete()` 方法，接收消息历史，启动异步 task 调用 LLM，通过 mpsc channel 发送 `AgentEvent`。
+`AgentRuntime` SHALL 提供 `start_completion()` 方法，接收消息历史，启动异步 task 调用 LLM，通过 mpsc channel 发送 `AgentEvent`。AgentRuntime SHALL 持有 `other_agent_role: OtherAgentRole`（从 ProviderConfig 获取）用于消息格式转换。
 
 #### Scenario: 基本对话流程
-- **WHEN** 调用 `agent.complete(messages)` 传入消息历史
-- **THEN** SHALL 返回 `mpsc::UnboundedReceiver<AgentEvent>`，随后异步发送 `ResponseStart` → 多个 `TextDelta` → `Done(Usage)`
+- **WHEN** 调用 `agent.start_completion(messages)` 并传入消息历史
+- **THEN** 返回 `mpsc::UnboundedReceiver<AgentEvent>`，异步发送 `ResponseStart` → 多个 `TextDelta` → `Done(Usage)`
 
 #### Scenario: LLM 错误传播
 - **WHEN** `chat_stream()` 返回 `LlmError`
@@ -23,15 +23,15 @@
 - **THEN** SHALL 发送 `AgentEvent::Error(msg)` 后关闭 channel
 
 ### Requirement: System Prompt 构建
-agent loop 在调用 LLM 前 SHALL 在消息列表头部插入 system message，内容为 `build_system_prompt()` 的结果（合并 project instructions 和 agent 的 system_prompt）。
+agent loop 在调用 LLM 前 SHALL 在消息列表头部插入 system message。system prompt 中关于 other-agent 消息的说明 SHALL 固定为："Their messages are prefixed with [agent_name] in the content."
 
 #### Scenario: 有 project instructions
-- **WHEN** agent 有 system_prompt 且存在 project instructions
-- **THEN** 消息列表首条 SHALL 为 `ChatMessage { role: System, content: merged_prompt }`
+- **WHEN** Agent 有 system_prompt 且 project instructions 存在
+- **THEN** 第一条消息 SHALL 为 `ChatMessage { role: System, content: merged_prompt }`，merged_prompt 包含 agent 身份信息和 other-agent hint
 
 #### Scenario: 无 system prompt
-- **WHEN** agent 没有 system_prompt 且没有 project instructions
-- **THEN** 消息列表 SHALL 不插入 system message
+- **WHEN** Agent 无 system_prompt 且无 project instructions
+- **THEN** 消息列表中 SHALL 不插入 system message
 
 ### Requirement: 跳过工具调用
 Phase 4 的 agent loop SHALL 忽略 `StreamEvent::ToolCall` 事件，不执行工具调用，不进入多轮循环。

@@ -73,19 +73,23 @@
 - **THEN** SHALL 忽略这些参数，不包含在请求中
 
 ### Requirement: Anthropic 消息格式转换
-客户端 SHALL 将统一 `ChatMessage` 转换为 Anthropic 格式，system 消息分离到顶层 `system` 字段。
+客户端 SHALL 将统一 `ChatMessage` 转换为 Anthropic 格式，system 消息分离到顶层 `system` 字段。`convert_messages` SHALL 接受 `other_agent_role: &OtherAgentRole` 参数，根据该参数决定 other-agent 消息的 role。
 
 #### Scenario: System 消息分离
-- **WHEN** messages 中包含 `ChatRole::System` 消息
-- **THEN** SHALL 将 system 内容作为请求 body 的顶层 `system` 字段，不放入 messages 数组
+- **WHEN** Messages 包含 `ChatRole::System`
+- **THEN** System 内容放入顶层 `system` 字段，不在 messages 数组中
 
-#### Scenario: 其他 Agent 回复转为 user role
-- **WHEN** 消息 role 为 Assistant 且 agent_name 不等于当前 agent
-- **THEN** SHALL 转为 `"role": "user"` 并在 content 前添加 `[agent_name]` 前缀
+#### Scenario: 其他 Agent 回复使用 OtherAgentRole
+- **WHEN** Message role 为 Assistant 且 agent_name != 当前 agent，`other_agent_role` 为 `User`
+- **THEN** 转换为 `"role": "user"` 并添加 `[agent_name]` content 前缀
+
+#### Scenario: OtherAgentRole 为 Assistant
+- **WHEN** Message role 为 Assistant 且 agent_name != 当前 agent，`other_agent_role` 为 `Assistant`
+- **THEN** 转换为 `"role": "assistant"` 并添加 `[agent_name]` content 前缀
 
 #### Scenario: 连续同 role 消息合并
-- **WHEN** 转换后出现连续相同 role 的消息
-- **THEN** SHALL 合并为一条消息，content 用 `\n\n` 连接
+- **WHEN** 转换后存在连续相同 role 的消息
+- **THEN** 使用 `merge_consecutive_same_role` 合并，content 用 `\n\n` 连接
 
 ### Requirement: Anthropic 错误处理与重试
 客户端 SHALL 使用 `common.rs` 的公共重试逻辑处理 429、5xx、超时等错误。
