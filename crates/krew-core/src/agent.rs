@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use futures::StreamExt;
-use krew_config::AgentConfig;
+use krew_config::{AgentConfig, OtherAgentRole};
 use krew_llm::{ChatMessage, ChatRole, LlmClient, StreamEvent, ToolDefinition};
 use krew_tools::Tool;
 use tokio::sync::mpsc;
@@ -18,8 +18,8 @@ pub struct AgentRuntime {
     pub tools: Vec<Box<dyn Tool>>,
     /// Whether the agent is currently generating a response.
     pub is_responding: bool,
-    /// Whether this agent's provider uses the `name` field on messages.
-    pub use_name_field: bool,
+    /// How to present other agents' messages in this agent's conversation.
+    pub other_agent_role: OtherAgentRole,
 }
 
 impl AgentRuntime {
@@ -43,11 +43,7 @@ impl AgentRuntime {
         });
 
         // Build agent identity + optional custom system prompt.
-        let other_agent_hint = if self.use_name_field {
-            "Their messages carry a \"name\" field identifying the source agent."
-        } else {
-            "Their messages are prefixed with [agent_name] in the content."
-        };
+        let other_agent_hint = "Their messages are prefixed with [agent_name] in the content.";
         let identity = format!(
             "You are {display_name}, powered by the {model} model.\n\
              Your agent name in this conversation is \"{name}\".\n\

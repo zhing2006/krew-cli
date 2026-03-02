@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     AgentConfig, ApprovalMode, Config, DEFAULT_INPUT_HISTORY_LIMIT, DEFAULT_WORKER_THREADS,
-    Settings,
+    OtherAgentRole, Settings,
 };
 
 /// Default auto-compact threshold in tokens.
@@ -18,6 +18,7 @@ impl Default for Config {
                 input_history_limit: DEFAULT_INPUT_HISTORY_LIMIT,
                 paste_burst_detection: true,
                 worker_threads: DEFAULT_WORKER_THREADS,
+                other_agent_role: OtherAgentRole::User,
             },
             agents: vec![AgentConfig {
                 name: "echo".to_string(),
