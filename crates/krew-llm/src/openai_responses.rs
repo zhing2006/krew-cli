@@ -17,8 +17,6 @@ pub struct OpenAiResponsesClient {
     api_key: String,
     model: String,
     agent_name: String,
-    /// Whether Azure mode is active (uses `api-key` header instead of Bearer).
-    azure_mode: bool,
     /// Whether thinking/reasoning is enabled.
     enable_thinking: bool,
     /// Thinking effort level.
@@ -28,15 +26,15 @@ pub struct OpenAiResponsesClient {
 impl OpenAiResponsesClient {
     /// Create a new OpenAI Responses API client.
     ///
-    /// When `azure_endpoint` is set, the client switches to Azure mode:
-    /// - URL becomes `{azure_endpoint}/openai/v1/responses`
-    /// - Authentication uses `api-key` header instead of `Authorization: Bearer`
+    /// `api_key_env` is the environment variable name holding the API key.
+    /// `base_url` overrides the default `https://api.openai.com`.
+    /// For Azure OpenAI, set `base_url` to
+    /// `https://YOUR-RESOURCE.openai.azure.com/openai`.
     pub fn new(
         agent_name: String,
         model: String,
         api_key_env: &str,
         base_url: Option<&str>,
-        azure_endpoint: Option<&str>,
         enable_thinking: bool,
         thinking_effort: Option<ThinkingEffort>,
     ) -> Result<Self, LlmError> {
@@ -51,16 +49,10 @@ impl OpenAiResponsesClient {
             )));
         }
 
-        let (base_url, azure_mode) = if let Some(endpoint) = azure_endpoint {
-            let url = format!("{}/openai", endpoint.trim_end_matches('/'));
-            (url, true)
-        } else {
-            let url = base_url
-                .unwrap_or(DEFAULT_BASE_URL)
-                .trim_end_matches('/')
-                .to_string();
-            (url, false)
-        };
+        let base_url = base_url
+            .unwrap_or(DEFAULT_BASE_URL)
+            .trim_end_matches('/')
+            .to_string();
 
         Ok(Self {
             http: reqwest::Client::new(),
@@ -68,7 +60,6 @@ impl OpenAiResponsesClient {
             api_key,
             model,
             agent_name,
-            azure_mode,
             enable_thinking,
             thinking_effort,
         })
@@ -491,11 +482,7 @@ impl LlmClient for OpenAiResponsesClient {
             body: &body,
             provider_name: "OpenAI Responses",
         };
-        let auth = if self.azure_mode {
-            AuthMode::Header("api-key", &self.api_key)
-        } else {
-            AuthMode::Bearer(&self.api_key)
-        };
+        let auth = AuthMode::Bearer(&self.api_key);
         let response = common::send_with_retry(&req_config, &auth, None).await?;
 
         // Convert to SSE event stream.
@@ -717,50 +704,13 @@ mod tests {
         assert!(!params.contains_key("max_completion_tokens"));
     }
 
-    // ---- Azure mode tests (3.11) ----
+    // ---- URL construction tests ----
 
     #[test]
-    fn azure_mode_url() {
-        // Simulate URL construction in Azure mode.
-        let azure_endpoint = "https://myresource.openai.azure.com";
-        let base_url = format!("{}/openai", azure_endpoint.trim_end_matches('/'));
-        let url = format!("{base_url}/v1/responses");
-        assert_eq!(
-            url,
-            "https://myresource.openai.azure.com/openai/v1/responses"
-        );
-    }
-
-    #[test]
-    fn standard_mode_url() {
+    fn default_url() {
         let base_url = DEFAULT_BASE_URL;
         let url = format!("{base_url}/v1/responses");
         assert_eq!(url, "https://api.openai.com/v1/responses");
-    }
-
-    #[test]
-    fn azure_mode_uses_api_key_header() {
-        // When azure_mode is true, AuthMode::Header should be used.
-        let azure_mode = true;
-        let api_key = "test-key";
-        let auth = if azure_mode {
-            AuthMode::Header("api-key", api_key)
-        } else {
-            AuthMode::Bearer(api_key)
-        };
-        assert!(matches!(auth, AuthMode::Header("api-key", "test-key")));
-    }
-
-    #[test]
-    fn standard_mode_uses_bearer() {
-        let azure_mode = false;
-        let api_key = "test-key";
-        let auth = if azure_mode {
-            AuthMode::Header("api-key", api_key)
-        } else {
-            AuthMode::Bearer(api_key)
-        };
-        assert!(matches!(auth, AuthMode::Bearer("test-key")));
     }
 
     // ---- Thinking/Reasoning parameter tests (3.12) ----

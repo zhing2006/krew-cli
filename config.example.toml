@@ -69,8 +69,7 @@ enable_web_search = false
 type = "openai"
 api_key_env = "OPENAI_API_KEY"
 # base_url = "https://api.openai.com"     # default, can omit
-# azure_endpoint = "https://xxx.openai.azure.com"
-# azure_api_version = "2025-01-01"
+# For Azure OpenAI: base_url = "https://YOUR-RESOURCE.openai.azure.com/openai"
 
 [providers.anthropic]
 type = "anthropic"
