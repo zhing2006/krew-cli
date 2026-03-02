@@ -40,27 +40,16 @@ impl GoogleClient {
     pub fn new(
         agent_name: String,
         model: String,
-        api_key_env: &str,
+        api_key: String,
         base_url: Option<&str>,
         vertex_project: Option<&str>,
         vertex_location: Option<&str>,
         enable_thinking: bool,
         thinking_effort: Option<ThinkingEffort>,
-    ) -> Result<Self, LlmError> {
-        let api_key = std::env::var(api_key_env).map_err(|_| {
-            LlmError::Auth(format!(
-                "environment variable {api_key_env} is not set or empty"
-            ))
-        })?;
-        if api_key.is_empty() {
-            return Err(LlmError::Auth(format!(
-                "environment variable {api_key_env} is empty"
-            )));
-        }
-
+    ) -> Self {
         let vertex_mode = vertex_project.is_some() && vertex_location.is_some();
 
-        Ok(Self {
+        Self {
             http: reqwest::Client::new(),
             api_key,
             model,
@@ -71,7 +60,7 @@ impl GoogleClient {
             base_url: base_url.map(|s| s.trim_end_matches('/').to_string()),
             enable_thinking,
             thinking_effort,
-        })
+        }
     }
 
     /// Build the API URL for the request.
@@ -316,8 +305,17 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
     let call_counter = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
 
     futures::stream::unfold(
-        (sse_stream, usage_state, call_counter, false),
-        |(mut sse_stream, usage_state, call_counter, mut done)| async move {
+        (sse_stream, usage_state, call_counter, false, false),
+        |(mut sse_stream, usage_state, call_counter, mut done, pending_done)| async move {
+            // Emit Done if the previous iteration saw a finishReason but
+            // returned a content event first.
+            if pending_done {
+                let usage = usage_state.lock().await.clone();
+                return Some((
+                    StreamEvent::Done(usage),
+                    (sse_stream, usage_state, call_counter, true, false),
+                ));
+            }
             if done {
                 return None;
             }
@@ -337,7 +335,7 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                                 done = true;
                                 return Some((
                                     StreamEvent::Error(format!("invalid JSON: {e}")),
-                                    (sse_stream, usage_state, call_counter, done),
+                                    (sse_stream, usage_state, call_counter, done, false),
                                 ));
                             }
                         };
@@ -422,23 +420,23 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                             // (For simplicity, emit events one at a time; multiple
                             // parts in one chunk will emit sequentially.)
                             if let Some(event) = events.into_iter().next() {
+                                // If this chunk also has a finishReason, set
+                                // pending_done so Done is emitted next iteration.
+                                let pend = finish_reason.is_some();
                                 return Some((
                                     event,
-                                    (sse_stream, usage_state, call_counter, done),
+                                    (sse_stream, usage_state, call_counter, done, pend),
                                 ));
                             }
                         }
 
-                        // Check if stream is done.
-                        if matches!(
-                            finish_reason,
-                            Some("STOP") | Some("MAX_TOKENS") | Some("SAFETY")
-                        ) {
+                        // Check if stream is done (any finishReason is terminal).
+                        if finish_reason.is_some() {
                             done = true;
                             let usage = usage_state.lock().await.clone();
                             return Some((
                                 StreamEvent::Done(usage),
-                                (sse_stream, usage_state, call_counter, done),
+                                (sse_stream, usage_state, call_counter, done, false),
                             ));
                         }
 
@@ -448,7 +446,7 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                         done = true;
                         return Some((
                             StreamEvent::Error(format!("SSE stream error: {e}")),
-                            (sse_stream, usage_state, call_counter, done),
+                            (sse_stream, usage_state, call_counter, done, false),
                         ));
                     }
                     None => {
@@ -456,7 +454,7 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                         done = true;
                         return Some((
                             StreamEvent::Error("stream interrupted".into()),
-                            (sse_stream, usage_state, call_counter, done),
+                            (sse_stream, usage_state, call_counter, done, false),
                         ));
                     }
                 }
