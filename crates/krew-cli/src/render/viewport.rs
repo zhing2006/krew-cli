@@ -79,9 +79,7 @@ fn shimmer_spans(text: &str, base_color: Color, elapsed: Duration) -> Vec<Span<'
 /// support). The base_color determines the foreground hue.
 fn shimmer_style_for_level(intensity: f32, base_color: Color) -> Style {
     if intensity < 0.2 {
-        Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::DIM)
+        Style::default().fg(base_color).add_modifier(Modifier::DIM)
     } else if intensity < 0.6 {
         Style::default().fg(base_color)
     } else {

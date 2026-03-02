@@ -25,41 +25,30 @@ pub struct OpenAiChatClient {
 impl OpenAiChatClient {
     /// Create a new OpenAI Chat Completions client.
     ///
-    /// `api_key_env` is the environment variable name holding the API key.
+    /// `api_key` is the resolved API key value.
     /// `base_url` overrides the default `https://api.openai.com`.
     /// `use_name_field` controls whether other agents' messages use the `name`
     /// field or a `[name]` content prefix.
     pub fn new(
         agent_name: String,
         model: String,
-        api_key_env: &str,
+        api_key: String,
         base_url: Option<&str>,
         use_name_field: bool,
-    ) -> Result<Self, LlmError> {
-        let api_key = std::env::var(api_key_env).map_err(|_| {
-            LlmError::Auth(format!(
-                "environment variable {api_key_env} is not set or empty"
-            ))
-        })?;
-        if api_key.is_empty() {
-            return Err(LlmError::Auth(format!(
-                "environment variable {api_key_env} is empty"
-            )));
-        }
-
+    ) -> Self {
         let base_url = base_url
             .unwrap_or(DEFAULT_BASE_URL)
             .trim_end_matches('/')
             .to_string();
 
-        Ok(Self {
+        Self {
             http: reqwest::Client::new(),
             base_url,
             api_key,
             model,
             agent_name,
             use_name_field,
-        })
+        }
     }
 }
 
