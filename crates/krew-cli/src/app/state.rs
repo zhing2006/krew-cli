@@ -1,6 +1,6 @@
 //! App state machine and main event loop.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -90,6 +90,10 @@ pub struct App {
     pub(crate) agent_token_usage: HashMap<String, (u32, u32)>,
     /// Startup warnings to display after header.
     pub(crate) startup_warnings: Vec<String>,
+    /// Queue of agent names waiting to run (for @all / @multiple dispatch).
+    pub(crate) pending_agents: VecDeque<String>,
+    /// Name of the last agent that successfully responded (for LastRespondent routing).
+    pub(crate) last_respondent: Option<String>,
 
     // --- Agent status indicator ---
     /// Timestamp when the current agent started processing (drives status line visibility).
@@ -142,6 +146,8 @@ impl App {
             current_agent_name: None,
             agent_token_usage: HashMap::new(),
             startup_warnings: Vec::new(),
+            pending_agents: VecDeque::new(),
+            last_respondent: None,
             agent_start_time: None,
             agent_display_name: None,
             agent_color: None,
@@ -210,7 +216,7 @@ impl App {
                             agent_config.model.clone(),
                             api_key.clone(),
                             provider_config.base_url.as_deref(),
-                            provider_config.use_name_field,
+                            config.settings.other_agent_role,
                         )),
                         krew_config::ApiType::Responses => {
                             Arc::new(krew_llm::OpenAiResponsesClient::new(
@@ -220,6 +226,7 @@ impl App {
                                 provider_config.base_url.as_deref(),
                                 agent_config.enable_thinking,
                                 agent_config.thinking_effort,
+                                config.settings.other_agent_role,
                             ))
                         }
                     }
@@ -231,6 +238,7 @@ impl App {
                     provider_config.base_url.as_deref(),
                     agent_config.enable_thinking,
                     agent_config.thinking_effort,
+                    config.settings.other_agent_role,
                 )),
                 krew_config::ProviderType::Google => Arc::new(krew_llm::GoogleClient::new(
                     agent_config.name.clone(),
@@ -241,6 +249,7 @@ impl App {
                     provider_config.vertex_location.as_deref(),
                     agent_config.enable_thinking,
                     agent_config.thinking_effort,
+                    config.settings.other_agent_role,
                 )),
             };
 
@@ -249,7 +258,7 @@ impl App {
                 client,
                 tools: Vec::new(),
                 is_responding: false,
-                use_name_field: provider_config.use_name_field,
+                other_agent_role: config.settings.other_agent_role,
             };
 
             agents.insert(agent_config.name.clone(), runtime);
@@ -464,8 +473,9 @@ impl App {
                     entry.1 += usage.completion_tokens;
                 }
 
-                // Add assistant message to history.
+                // Add assistant message to history and update last_respondent.
                 if let Some(agent_name) = self.current_agent_name.take() {
+                    self.last_respondent = Some(agent_name.clone());
                     self.messages.push(ChatMessage {
                         role: ChatRole::Assistant,
                         content: std::mem::take(&mut self.current_response_text),
@@ -478,13 +488,47 @@ impl App {
                 self.agent_display_name = None;
                 self.agent_color = None;
 
-                // Reset streaming state.
+                // Reset streaming state for this agent.
                 self.agent_event_rx = None;
                 self.commit_tick_active = false;
                 self.chunking_policy.reset();
+
+                // Chain-trigger next pending agent (if any).
+                self.start_next_agent(terminal)?;
             }
             AgentEvent::Error(msg) => {
+                // Finalize thinking if still active.
+                if self.is_thinking {
+                    self.finalize_thinking(terminal)?;
+                }
+
+                // Flush remaining buffered content to screen.
+                if let Some(mut collector) = self.stream_collector.take() {
+                    let remaining = collector.finalize();
+                    if !remaining.is_empty() {
+                        self.stream_state.enqueue(remaining);
+                    }
+                }
+                let remaining_lines = self.stream_state.drain_all();
+                if !remaining_lines.is_empty() {
+                    self.insert_indented_lines(terminal, remaining_lines)?;
+                }
+
                 self.insert_agent_error(terminal, &msg)?;
+
+                // If the agent produced partial output, preserve it in
+                // message history so subsequent agents have full context.
+                if let Some(agent_name) = self.current_agent_name.take()
+                    && !self.current_response_text.is_empty()
+                {
+                    let mut content = std::mem::take(&mut self.current_response_text);
+                    content.push_str(&format!("\n\n[Error: {msg}]"));
+                    self.messages.push(ChatMessage {
+                        role: ChatRole::Assistant,
+                        content,
+                        name: Some(agent_name),
+                    });
+                }
 
                 // Clear agent status indicator.
                 self.agent_start_time = None;
@@ -492,13 +536,15 @@ impl App {
                 self.agent_color = None;
 
                 // Reset streaming state.
-                self.stream_collector = None;
                 self.agent_event_rx = None;
                 self.commit_tick_active = false;
                 self.is_thinking = false;
-                self.current_agent_name = None;
+                // Do NOT update last_respondent on error.
                 self.current_response_text.clear();
                 self.chunking_policy.reset();
+
+                // Error isolation: continue with next pending agent.
+                self.start_next_agent(terminal)?;
             }
         }
 

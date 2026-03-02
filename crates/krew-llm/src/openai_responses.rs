@@ -5,6 +5,7 @@
 use crate::common::{self, AuthMode, RequestConfig, RoleContent, merge_consecutive_same_role};
 use crate::{ChatMessage, ChatRole, LlmClient, LlmError, StreamEvent, ToolDefinition, Usage};
 use futures::Stream;
+use krew_config::OtherAgentRole;
 use krew_config::{SamplingConfig, ThinkingEffort};
 use std::pin::Pin;
 
@@ -21,6 +22,8 @@ pub struct OpenAiResponsesClient {
     enable_thinking: bool,
     /// Thinking effort level.
     thinking_effort: Option<ThinkingEffort>,
+    /// How to present other agents' messages.
+    other_agent_role: OtherAgentRole,
 }
 
 impl OpenAiResponsesClient {
@@ -37,6 +40,7 @@ impl OpenAiResponsesClient {
         base_url: Option<&str>,
         enable_thinking: bool,
         thinking_effort: Option<ThinkingEffort>,
+        other_agent_role: OtherAgentRole,
     ) -> Self {
         let base_url = base_url
             .unwrap_or(DEFAULT_BASE_URL)
@@ -51,6 +55,7 @@ impl OpenAiResponsesClient {
             agent_name,
             enable_thinking,
             thinking_effort,
+            other_agent_role,
         }
     }
 }
@@ -65,10 +70,14 @@ impl OpenAiResponsesClient {
 /// - User messages → `{type: "message", role: "user", content: "..."}`
 /// - Current agent's assistant messages → `{type: "message", role: "assistant",
 ///   content: [{type: "output_text", text: "..."}], status: "completed"}`
-/// - Other agents' assistant messages → user role with `[agent_name]` prefix
+/// - Other agents' assistant messages → role per `other_agent_role` with `[agent_name]` prefix
 ///
 /// After role conversion, consecutive same-role messages are merged.
-pub fn convert_messages(messages: &[ChatMessage], self_agent_name: &str) -> Vec<serde_json::Value> {
+pub fn convert_messages(
+    messages: &[ChatMessage],
+    self_agent_name: &str,
+    other_agent_role: &OtherAgentRole,
+) -> Vec<serde_json::Value> {
     // First pass: convert roles.
     let mut role_contents: Vec<(String, &ChatMessage)> = Vec::with_capacity(messages.len());
 
@@ -83,7 +92,10 @@ pub fn convert_messages(messages: &[ChatMessage], self_agent_name: &str) -> Vec<
             ChatRole::System => "developer",
             ChatRole::User => "user",
             ChatRole::Tool => "user",
-            ChatRole::Assistant if is_other_agent => "user",
+            ChatRole::Assistant if is_other_agent => match other_agent_role {
+                OtherAgentRole::User => "user",
+                OtherAgentRole::Assistant => "assistant",
+            },
             ChatRole::Assistant => "assistant",
         };
 
@@ -438,7 +450,7 @@ impl LlmClient for OpenAiResponsesClient {
         let url = format!("{}/v1/responses", self.base_url);
 
         // Build input array.
-        let input = convert_messages(messages, &self.agent_name);
+        let input = convert_messages(messages, &self.agent_name, &self.other_agent_role);
 
         // Build request body.
         let mut body = serde_json::json!({
@@ -571,7 +583,7 @@ mod tests {
             content: "hello".to_string(),
             name: None,
         }];
-        let result = convert_messages(&messages, "agent1");
+        let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0]["type"], "message");
         assert_eq!(result[0]["role"], "user");
@@ -585,7 +597,7 @@ mod tests {
             content: "you are helpful".to_string(),
             name: None,
         }];
-        let result = convert_messages(&messages, "agent1");
+        let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0]["role"], "developer");
     }
@@ -597,7 +609,7 @@ mod tests {
             content: "my reply".to_string(),
             name: Some("agent1".to_string()),
         }];
-        let result = convert_messages(&messages, "agent1");
+        let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0]["role"], "assistant");
         assert_eq!(result[0]["status"], "completed");
@@ -613,10 +625,23 @@ mod tests {
             content: "other reply".to_string(),
             name: Some("agent2".to_string()),
         }];
-        let result = convert_messages(&messages, "agent1");
+        let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0]["role"], "user");
         assert_eq!(result[0]["content"], "[agent2] other reply");
+    }
+
+    #[test]
+    fn convert_other_agent_as_assistant() {
+        let messages = vec![ChatMessage {
+            role: ChatRole::Assistant,
+            content: "other reply".to_string(),
+            name: Some("agent2".to_string()),
+        }];
+        let result = convert_messages(&messages, "agent1", &OtherAgentRole::Assistant);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0]["role"], "assistant");
+        assert_eq!(result[0]["content"][0]["text"], "[agent2] other reply");
     }
 
     #[test]
@@ -638,7 +663,7 @@ mod tests {
                 name: Some("agent1".to_string()),
             },
         ];
-        let result = convert_messages(&messages, "agent1");
+        let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
         assert_eq!(result.len(), 3);
         assert_eq!(result[0]["role"], "developer");
         assert_eq!(result[1]["role"], "user");
@@ -647,7 +672,7 @@ mod tests {
 
     #[test]
     fn convert_empty_messages() {
-        let result = convert_messages(&[], "agent1");
+        let result = convert_messages(&[], "agent1", &OtherAgentRole::User);
         assert!(result.is_empty());
     }
 
