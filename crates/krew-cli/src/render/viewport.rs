@@ -238,8 +238,11 @@ fn render_agent_status(frame: &mut custom_terminal::Frame, app: &App, area: Rect
     // Build the line: prefix + spinner + shimmer text + elapsed/hint suffix.
     let mut spans = vec![Span::raw("  "), spinner, Span::raw(" ")];
 
-    // Shimmer sweep across "AgentName Working".
-    let shimmer_text = format!("{display_name} Working");
+    // Shimmer sweep across status text (default "Working", or retry info).
+    let shimmer_text = match &app.agent_status_text {
+        Some(text) => format!("{display_name} {text}"),
+        None => format!("{display_name} Working"),
+    };
     spans.extend(shimmer_spans(&shimmer_text, agent_color, elapsed));
 
     // Elapsed time and interrupt hint (static dim style).
