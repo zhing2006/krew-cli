@@ -93,6 +93,9 @@ impl App {
             name: None,
         });
 
+        // Persist session after user message.
+        self.save_session();
+
         // Build the agent dispatch queue based on addressee type.
         self.pending_agents.clear();
 
@@ -185,7 +188,7 @@ impl App {
     }
 
     /// Insert user message with colored routing dots showing target agents.
-    fn insert_user_message(
+    pub(crate) fn insert_user_message(
         &self,
         terminal: &mut custom_terminal::Terminal,
         target_names: &[&str],

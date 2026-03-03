@@ -210,10 +210,14 @@ fn main() -> anyhow::Result<()> {
         "Tokio runtime created"
     );
 
-    runtime.block_on(async_main(config, cwd))
+    runtime.block_on(async_main(config, cwd, cli.resume))
 }
 
-async fn async_main(config: Config, cwd: PathBuf) -> anyhow::Result<()> {
+async fn async_main(
+    config: Config,
+    cwd: PathBuf,
+    resume: Option<Option<String>>,
+) -> anyhow::Result<()> {
     // Install panic hook that restores the terminal before printing the panic.
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -234,6 +238,46 @@ async fn async_main(config: Config, cwd: PathBuf) -> anyhow::Result<()> {
         app.startup_warnings.push(format!(
             "settings.reply_order is missing agents, auto-appended: {names}"
         ));
+    }
+
+    // Handle --resume CLI argument: resolve session ID now, replay in run().
+    if let Some(resume_arg) = resume {
+        let session_dir = app.session_dir.clone();
+        match resume_arg {
+            Some(id) => {
+                // --resume <id>: find session by prefix match.
+                match krew_storage::session_file::list_sessions(&session_dir) {
+                    Ok(summaries) => {
+                        if let Some(summary) = summaries.iter().find(|s| s.id.starts_with(&id)) {
+                            app.pending_resume_id = Some(summary.id.clone());
+                        } else {
+                            app.startup_warnings
+                                .push(format!("Session not found: {id}, starting new session"));
+                        }
+                    }
+                    Err(e) => {
+                        app.startup_warnings
+                            .push(format!("Failed to list sessions: {e}"));
+                    }
+                }
+            }
+            None => {
+                // --resume (no ID): load most recent session.
+                match krew_storage::session_file::list_sessions(&session_dir) {
+                    Ok(summaries) if !summaries.is_empty() => {
+                        app.pending_resume_id = Some(summaries[0].id.clone());
+                    }
+                    Ok(_) => {
+                        app.startup_warnings
+                            .push("No saved sessions found, starting new session".to_string());
+                    }
+                    Err(e) => {
+                        app.startup_warnings
+                            .push(format!("Failed to list sessions: {e}"));
+                    }
+                }
+            }
+        }
     }
 
     let result = app.run(&mut terminal).await;
