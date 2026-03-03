@@ -626,10 +626,12 @@ impl App {
         );
 
         if !output.lines.is_empty() {
+            // Use streaming variants (no trailing blank) — trailing blank is
+            // added at the end of the response (Done event).
             if self.is_thinking {
-                self.insert_thinking_lines(terminal, output.lines)?;
+                self.insert_thinking_lines_streaming(terminal, output.lines)?;
             } else {
-                self.insert_indented_lines(terminal, output.lines)?;
+                self.insert_indented_lines_streaming(terminal, output.lines)?;
             }
         }
 

@@ -59,14 +59,23 @@ impl MarkdownStreamCollector {
         let renderable = &self.buffer[..=last_newline];
         let all_lines = render_markdown(renderable);
 
+        // Don't commit a trailing blank line — it may be a separator for
+        // the next block that hasn't arrived yet. Committing it now would
+        // cause a duplicate blank when the next block triggers another
+        // separator during re-render.
+        let mut complete_count = all_lines.len();
+        if complete_count > 0 && is_blank_line(&all_lines[complete_count - 1]) {
+            complete_count -= 1;
+        }
+
         // Return only the lines that are new since the last commit.
-        let new_lines = if all_lines.len() > self.committed_line_count {
-            all_lines[self.committed_line_count..].to_vec()
+        let new_lines = if complete_count > self.committed_line_count {
+            all_lines[self.committed_line_count..complete_count].to_vec()
         } else {
             Vec::new()
         };
 
-        self.committed_line_count = all_lines.len();
+        self.committed_line_count = complete_count;
         self.committed_byte_offset = last_newline + 1;
         new_lines
     }
@@ -106,6 +115,15 @@ impl MarkdownStreamCollector {
 
         new_lines
     }
+}
+
+/// Consider a line blank if it has no spans or only spans with empty/space-only content.
+fn is_blank_line(line: &Line<'_>) -> bool {
+    line.spans.is_empty()
+        || line
+            .spans
+            .iter()
+            .all(|s| s.content.is_empty() || s.content.chars().all(|c| c == ' '))
 }
 
 #[cfg(test)]
