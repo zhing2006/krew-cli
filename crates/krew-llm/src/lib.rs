@@ -84,6 +84,36 @@ pub struct ChatMessage {
     pub content: String,
     /// Optional agent name for multi-agent context.
     pub name: Option<String>,
+    /// Tool calls made by the assistant (only for Assistant messages).
+    pub tool_calls: Option<Vec<ToolCallInfo>>,
+    /// Tool call ID this message is responding to (only for Tool messages).
+    pub tool_call_id: Option<String>,
+}
+
+/// Information about a tool call made by the assistant.
+#[derive(Debug, Clone)]
+pub struct ToolCallInfo {
+    /// Unique identifier for this tool call.
+    pub id: String,
+    /// Name of the tool being called.
+    pub name: String,
+    /// JSON-encoded arguments string.
+    pub arguments: String,
+    /// Opaque thought signature from Google thinking mode (must be echoed back).
+    pub thought_signature: Option<String>,
+}
+
+impl ChatMessage {
+    /// Create a simple text message (no tool calls).
+    pub fn text(role: ChatRole, content: impl Into<String>, name: Option<String>) -> Self {
+        Self {
+            role,
+            content: content.into(),
+            name,
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
 }
 
 /// Role of a message in the LLM conversation.

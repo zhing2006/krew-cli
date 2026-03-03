@@ -24,6 +24,8 @@ fn make_test_session() -> SessionFile {
                 addressee: Some("all".to_string()),
                 content: "hello world".to_string(),
                 usage: None,
+                tool_calls: None,
+                tool_call_id: None,
                 created_at: now,
             },
             MessageEntry {
@@ -36,6 +38,8 @@ fn make_test_session() -> SessionFile {
                     completion_tokens: 50,
                     total_tokens: 150,
                 }),
+                tool_calls: None,
+                tool_call_id: None,
                 created_at: now,
             },
         ],
@@ -127,6 +131,8 @@ fn test_list_sessions() {
             addressee: None,
             content: "first session message".to_string(),
             usage: None,
+            tool_calls: None,
+            tool_call_id: None,
             created_at: older,
         }],
     };
@@ -146,6 +152,8 @@ fn test_list_sessions() {
             addressee: None,
             content: "second session message".to_string(),
             usage: None,
+            tool_calls: None,
+            tool_call_id: None,
             created_at: now,
         }],
     };

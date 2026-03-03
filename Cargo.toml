@@ -14,7 +14,7 @@ members = [
 [workspace.dependencies]
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net", "io-util", "time", "fs", "process", "signal", "sync"] }
 serde = { version = "1", default-features = false, features = ["derive", "std"] }
-serde_json = { version = "1", default-features = false }
+serde_json = { version = "1", default-features = false, features = ["std"] }
 anyhow = { version = "1", default-features = false }
 thiserror = { version = "2", default-features = false }
 tracing = { version = "0.1", default-features = false }
@@ -34,6 +34,10 @@ textwrap = { version = "0.16", default-features = false }
 pulldown-cmark = { version = "0.13", default-features = false }
 syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
 two-face = { version = "0.4", default-features = false, features = ["syntect-default-fancy"] }
+dunce = { version = "1", default-features = false }
+walkdir = { version = "2", default-features = false }
+globset = { version = "0.4", default-features = false }
+regex = { version = "1", default-features = false, features = ["std"] }
 
 # Internal workspace crates
 krew-config = { path = "crates/krew-config" }

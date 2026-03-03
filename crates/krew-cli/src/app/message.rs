@@ -75,11 +75,8 @@ impl App {
         self.insert_user_message(terminal, &target_names, trimmed)?;
 
         // Add user message to conversation history.
-        self.messages.push(ChatMessage {
-            role: ChatRole::User,
-            content: body.to_string(),
-            name: None,
-        });
+        self.messages
+            .push(ChatMessage::text(ChatRole::User, body, None));
 
         // Persist session after user message.
         self.save_session();
@@ -106,8 +103,11 @@ impl App {
     ) -> anyhow::Result<bool> {
         if let Some(name) = self.pending_agents.pop_front() {
             if let Some(agent) = self.agents.get(&name) {
-                let rx = agent
-                    .start_completion(self.messages.clone(), self.project_instructions.as_deref());
+                let rx = agent.start_completion(
+                    self.messages.clone(),
+                    self.project_instructions.as_deref(),
+                    None,
+                );
                 self.agent_event_rx = Some(rx);
                 return Ok(true);
             }

@@ -184,7 +184,7 @@ pub struct AgentConfig {
     /// Optional system prompt for this agent.
     pub system_prompt: Option<String>,
     /// Whether this agent can use tools.
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub tools: bool,
     /// Whether to enable the provider's native web search.
     #[serde(default)]

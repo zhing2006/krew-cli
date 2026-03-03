@@ -1,16 +1,20 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use futures::StreamExt;
 use krew_config::{AgentConfig, ApiType, Config, OtherAgentRole, ProviderType};
 use krew_llm::{
     AnthropicClient, ChatMessage, ChatRole, GoogleClient, LlmClient, LlmClientConfig,
-    OpenAiChatClient, OpenAiResponsesClient, StreamEvent, ToolDefinition,
+    OpenAiChatClient, OpenAiResponsesClient, StreamEvent, ToolCallInfo, ToolDefinition, Usage,
 };
-use krew_tools::Tool;
+use krew_tools::ToolRegistry;
 use tokio::sync::mpsc;
 
 use crate::event::AgentEvent;
+
+/// Default maximum number of tool-call loop rounds per agent turn.
+const DEFAULT_MAX_TOOL_ROUNDS: u32 = 25;
 
 /// Runtime state for a single agent in a session.
 pub struct AgentRuntime {
@@ -19,7 +23,7 @@ pub struct AgentRuntime {
     /// LLM client for this agent's provider.
     pub client: Arc<dyn LlmClient>,
     /// Tools available to this agent.
-    pub tools: Vec<Box<dyn Tool>>,
+    pub tools: Arc<ToolRegistry>,
     /// Whether the agent is currently generating a response.
     pub is_responding: bool,
     /// How to present other agents' messages in this agent's conversation.
@@ -29,13 +33,14 @@ pub struct AgentRuntime {
 impl AgentRuntime {
     /// Start a streaming completion for this agent.
     ///
-    /// Returns a channel receiver immediately. The HTTP request and stream
-    /// consumption run in a spawned background task so the caller's event
-    /// loop is never blocked.
+    /// Returns a channel receiver immediately. The HTTP request, stream
+    /// consumption, and tool-call loop run in a spawned background task
+    /// so the caller's event loop is never blocked.
     pub fn start_completion(
         &self,
         messages: Vec<ChatMessage>,
         project_instructions: Option<&str>,
+        max_tool_rounds: Option<u32>,
     ) -> mpsc::UnboundedReceiver<AgentEvent> {
         let (tx, rx) = mpsc::unbounded_channel();
 
@@ -66,21 +71,18 @@ impl AgentRuntime {
         let system_prompt = build_system_prompt(project_instructions, Some(&agent_prompt));
         let mut full_messages = Vec::with_capacity(messages.len() + 1);
         if let Some(prompt) = system_prompt {
-            full_messages.push(ChatMessage {
-                role: ChatRole::System,
-                content: prompt,
-                name: None,
-            });
+            full_messages.push(ChatMessage::text(ChatRole::System, prompt, None));
         }
         full_messages.extend(messages);
 
         let sampling = self.config.sampling.clone().unwrap_or_default();
-        let tools: Vec<ToolDefinition> = vec![]; // Phase 4: no tools
         let agent_name = self.config.name.clone();
         let client = Arc::clone(&self.client);
+        let tools = Arc::clone(&self.tools);
+        let max_rounds = max_tool_rounds.unwrap_or(DEFAULT_MAX_TOOL_ROUNDS);
 
-        // Spawn the HTTP request + stream consumption so the event loop
-        // is free to redraw immediately.
+        // Spawn the HTTP request + stream consumption + tool loop so the
+        // event loop is free to redraw immediately.
         tokio::spawn(async move {
             // Build retry callback that forwards retry info to the TUI.
             let tx_retry = tx.clone();
@@ -93,52 +95,268 @@ impl AgentRuntime {
                 });
             };
 
-            match client
-                .chat_stream(&full_messages, &tools, &sampling, Some(&on_retry))
-                .await
-            {
-                Ok(stream) => {
-                    consume_stream(stream, tx, &agent_name).await;
-                }
-                Err(e) => {
-                    let _ = tx.send(AgentEvent::Error(e.to_string()));
-                }
-            }
+            // Convert ToolSpec -> ToolDefinition for the LLM API.
+            let tool_defs: Vec<ToolDefinition> = tools
+                .specs()
+                .iter()
+                .map(|spec| ToolDefinition {
+                    name: spec.name.clone(),
+                    description: spec.description.clone(),
+                    parameters: spec.parameters.clone(),
+                })
+                .collect();
+
+            run_agent_loop(
+                &client,
+                &tools,
+                &tool_defs,
+                &mut full_messages,
+                &sampling,
+                &on_retry,
+                &tx,
+                &agent_name,
+                max_rounds,
+            )
+            .await;
         });
 
         rx
     }
 }
 
-/// Consume an LLM stream and forward events through the channel.
+/// Run the agent's tool-call loop: stream LLM → execute tools → re-call LLM.
+///
+/// The loop exits when the LLM finishes without tool calls, when the
+/// maximum number of tool rounds is reached, or on error.
+#[allow(clippy::too_many_arguments)]
+async fn run_agent_loop(
+    client: &Arc<dyn LlmClient>,
+    tools: &ToolRegistry,
+    tool_defs: &[ToolDefinition],
+    messages: &mut Vec<ChatMessage>,
+    sampling: &krew_config::SamplingConfig,
+    on_retry: &(dyn Fn(krew_llm::common::RetryInfo) + Send + Sync),
+    tx: &mpsc::UnboundedSender<AgentEvent>,
+    agent_name: &str,
+    max_rounds: u32,
+) {
+    let mut total_usage = Usage {
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        total_tokens: 0,
+    };
+
+    for round in 0..=max_rounds {
+        // Call the LLM.
+        let stream = match client
+            .chat_stream(messages, tool_defs, sampling, Some(on_retry))
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = tx.send(AgentEvent::Error(e.to_string()));
+                return;
+            }
+        };
+
+        // Consume the stream, collecting text and tool calls.
+        let result = consume_stream(stream, tx, agent_name).await;
+
+        // Accumulate usage.
+        if let Some(usage) = &result.usage {
+            total_usage.prompt_tokens += usage.prompt_tokens;
+            total_usage.completion_tokens += usage.completion_tokens;
+            total_usage.total_tokens += usage.total_tokens;
+        }
+
+        // If there was an error, stop.
+        if result.had_error {
+            return;
+        }
+
+        // If no tool calls, we're done.
+        if result.tool_calls.is_empty() {
+            let _ = tx.send(AgentEvent::Done(total_usage));
+            return;
+        }
+
+        // Safety check: max rounds exceeded.
+        if round >= max_rounds {
+            let _ = tx.send(AgentEvent::Error(format!(
+                "Tool call loop exceeded maximum of {max_rounds} rounds"
+            )));
+            return;
+        }
+
+        // Build the assistant message (with text + tool_calls).
+        let assistant_msg = ChatMessage {
+            role: ChatRole::Assistant,
+            content: result.text,
+            name: Some(agent_name.to_string()),
+            tool_calls: Some(
+                result
+                    .tool_calls
+                    .iter()
+                    .map(|tc| ToolCallInfo {
+                        id: tc.id.clone(),
+                        name: tc.name.clone(),
+                        arguments: tc.arguments.clone(),
+                        thought_signature: tc.thought_signature.clone(),
+                    })
+                    .collect(),
+            ),
+            tool_call_id: None,
+        };
+        messages.push(assistant_msg);
+
+        // Execute all tool calls in parallel (readonly tools are safe to
+        // run concurrently).
+        let tool_futures: Vec<_> = result
+            .tool_calls
+            .iter()
+            .map(|tc| {
+                let name = tc.name.clone();
+                let args_str = tc.arguments.clone();
+                let id = tc.id.clone();
+
+                // Notify TUI of tool call start.
+                let _ = tx.send(AgentEvent::ToolCallStart {
+                    name: name.clone(),
+                    arguments: args_str.clone(),
+                });
+
+                let tools_ref = &tools;
+                async move {
+                    let args: serde_json::Value =
+                        serde_json::from_str(&args_str).unwrap_or_default();
+                    let result = tools_ref.dispatch(&name, args).await;
+                    (id, name, result)
+                }
+            })
+            .collect();
+
+        let results = futures::future::join_all(tool_futures).await;
+
+        // Append tool result messages and notify TUI.
+        for (id, name, result) in results {
+            // Generate summary for TUI display.
+            let summary = generate_tool_summary(&name, &result);
+            let _ = tx.send(AgentEvent::ToolCallDone {
+                name: name.clone(),
+                result_summary: summary,
+            });
+
+            messages.push(ChatMessage {
+                role: ChatRole::Tool,
+                content: result.content,
+                name: Some(name),
+                tool_calls: None,
+                tool_call_id: Some(id),
+            });
+        }
+    }
+}
+
+/// Result of consuming a single LLM stream.
+struct StreamResult {
+    /// Accumulated text output.
+    text: String,
+    /// Tool calls received during the stream.
+    tool_calls: Vec<StreamToolCall>,
+    /// Token usage from the stream (if received).
+    usage: Option<Usage>,
+    /// Whether an error occurred.
+    had_error: bool,
+}
+
+/// A tool call parsed from the stream.
+struct StreamToolCall {
+    id: String,
+    name: String,
+    arguments: String,
+    thought_signature: Option<String>,
+}
+
+/// Consume an LLM stream, forwarding text events to the channel and
+/// collecting tool calls.
 async fn consume_stream(
     mut stream: std::pin::Pin<Box<dyn futures::Stream<Item = StreamEvent> + Send>>,
-    tx: mpsc::UnboundedSender<AgentEvent>,
+    tx: &mpsc::UnboundedSender<AgentEvent>,
     agent_name: &str,
-) {
+) -> StreamResult {
+    let mut result = StreamResult {
+        text: String::new(),
+        tool_calls: Vec::new(),
+        usage: None,
+        had_error: false,
+    };
+
     while let Some(event) = stream.next().await {
-        let agent_event = match event {
-            StreamEvent::TextDelta(text) => AgentEvent::TextDelta(text),
+        match event {
+            StreamEvent::TextDelta(text) => {
+                result.text.push_str(&text);
+                if tx.send(AgentEvent::TextDelta(text)).is_err() {
+                    return result;
+                }
+            }
+            StreamEvent::ThinkingDelta(text) => {
+                if tx.send(AgentEvent::ThinkingDelta(text)).is_err() {
+                    return result;
+                }
+            }
+            StreamEvent::ToolCall {
+                id,
+                name,
+                arguments,
+                thought_signature,
+            } => {
+                tracing::debug!(
+                    agent = agent_name,
+                    tool = name,
+                    "Tool call received from LLM"
+                );
+                result.tool_calls.push(StreamToolCall {
+                    id,
+                    name,
+                    arguments,
+                    thought_signature,
+                });
+            }
             StreamEvent::Done(usage) => {
-                let _ = tx.send(AgentEvent::Done(usage));
-                return;
+                result.usage = Some(usage);
+                return result;
             }
             StreamEvent::Error(msg) => {
                 let _ = tx.send(AgentEvent::Error(msg));
-                return;
+                result.had_error = true;
+                return result;
             }
-            StreamEvent::ToolCall { .. } => {
-                // Phase 4: skip tool calls.
-                tracing::debug!(agent = agent_name, "skipping tool call (not implemented)");
-                continue;
-            }
-            StreamEvent::ThinkingDelta(text) => AgentEvent::ThinkingDelta(text),
-        };
-
-        if tx.send(agent_event).is_err() {
-            // Receiver dropped — stop consuming.
-            return;
         }
+    }
+
+    result
+}
+
+/// Generate a short summary string for TUI display of a tool result.
+fn generate_tool_summary(tool_name: &str, result: &krew_tools::ToolResult) -> String {
+    if result.is_error {
+        return "error".to_string();
+    }
+
+    // Extract the summary from the content's trailing "(N <unit>)" pattern.
+    if let Some(summary) = result
+        .content
+        .rsplit_once('(')
+        .and_then(|(_, rest)| rest.strip_suffix(')'))
+    {
+        return summary.to_string();
+    }
+
+    match tool_name {
+        "read_file" => "done".to_string(),
+        "glob" => "done".to_string(),
+        "grep" => "done".to_string(),
+        _ => "done".to_string(),
     }
 }
 
@@ -177,9 +395,12 @@ pub struct InitAgentsResult {
 /// environment variable), creates provider-specific `LlmClient` instances,
 /// and constructs `AgentRuntime` for each valid agent.
 ///
+/// When `cwd` is provided and `agent_config.tools` is true, readonly built-in
+/// tools are registered for the agent.
+///
 /// Agents that fail initialization (missing API key, unknown provider) are
 /// skipped with a warning message returned in `InitAgentsResult::warnings`.
-pub fn init_agents(config: &Config) -> InitAgentsResult {
+pub fn init_agents(config: &Config, cwd: Option<PathBuf>) -> InitAgentsResult {
     let mut agents = HashMap::new();
     let mut warnings = Vec::new();
 
@@ -258,10 +479,21 @@ pub fn init_agents(config: &Config) -> InitAgentsResult {
             )),
         };
 
+        // Create tool registry for this agent.
+        let tools = if agent_config.tools {
+            if let Some(ref cwd) = cwd {
+                Arc::new(krew_tools::builtin::create_readonly_registry(cwd.clone()))
+            } else {
+                Arc::new(ToolRegistry::empty())
+            }
+        } else {
+            Arc::new(ToolRegistry::empty())
+        };
+
         let runtime = AgentRuntime {
             config: agent_config.clone(),
             client,
-            tools: Vec::new(),
+            tools,
             is_responding: false,
             other_agent_role: config.settings.other_agent_role,
         };
