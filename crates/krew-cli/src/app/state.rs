@@ -10,7 +10,7 @@ use futures::StreamExt;
 use tokio::sync::{Notify, mpsc};
 
 use krew_config::Config;
-use krew_core::agent::AgentRuntime;
+use krew_core::agent::{AgentRuntime, init_agents};
 use krew_core::event::AgentEvent;
 use krew_llm::{ChatMessage, ChatRole};
 
@@ -125,8 +125,12 @@ impl App {
             }
         };
 
-        // Initialize agent runtimes.
-        let agents = Self::init_agents(&config);
+        // Initialize agent runtimes via krew-core.
+        let init_result = init_agents(&config);
+        let agents = init_result.agents;
+        for w in &init_result.warnings {
+            tracing::warn!("{}", w);
+        }
 
         // Session setup.
         let session_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
@@ -140,25 +144,10 @@ impl App {
         }
 
         // Load input history from file.
-        let history = match krew_storage::history_file::load_history(&history_path) {
-            Ok(mut entries) => {
-                let limit = config.settings.input_history_limit;
-                if entries.len() > limit {
-                    entries = entries.split_off(entries.len() - limit);
-                    // Rewrite file with truncated entries.
-                    if let Err(e) =
-                        krew_storage::history_file::save_history(&history_path, &entries)
-                    {
-                        tracing::warn!(error = %e, "Failed to truncate history file");
-                    }
-                }
-                entries
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to load input history");
-                Vec::new()
-            }
-        };
+        let history = krew_core::persistence::load_and_truncate_history(
+            &history_path,
+            config.settings.input_history_limit,
+        );
 
         Ok(Self {
             cwd,
@@ -190,7 +179,7 @@ impl App {
             current_response_text: String::new(),
             current_agent_name: None,
             agent_token_usage: HashMap::new(),
-            startup_warnings: Vec::new(),
+            startup_warnings: init_result.warnings,
             pending_agents: VecDeque::new(),
             last_respondent: None,
             agent_start_time: None,
@@ -199,107 +188,6 @@ impl App {
             agent_status_text: None,
             pending_resume_id: None,
         })
-    }
-
-    /// Build AgentRuntime instances from config.
-    fn init_agents(config: &Config) -> HashMap<String, AgentRuntime> {
-        let mut agents = HashMap::new();
-
-        for agent_config in &config.agents {
-            if agent_config.provider == "builtin" {
-                // Skip builtin echo agents — they don't need an LLM client.
-                continue;
-            }
-
-            let provider_config = match config.providers.get(&agent_config.provider) {
-                Some(p) => p,
-                None => {
-                    tracing::warn!(
-                        agent = agent_config.name,
-                        provider = agent_config.provider,
-                        "Provider not found, skipping agent"
-                    );
-                    continue;
-                }
-            };
-
-            // Resolve API key: api_key takes precedence over api_key_env.
-            let api_key = if let Some(key) = &provider_config.api_key {
-                if key.is_empty() {
-                    tracing::warn!(
-                        agent = agent_config.name,
-                        "api_key is empty, skipping agent"
-                    );
-                    continue;
-                }
-                key.clone()
-            } else if let Some(env) = &provider_config.api_key_env {
-                match std::env::var(env) {
-                    Ok(val) if !val.is_empty() => val,
-                    _ => {
-                        tracing::warn!(
-                            agent = agent_config.name,
-                            env,
-                            "Environment variable not set or empty, skipping agent"
-                        );
-                        continue;
-                    }
-                }
-            } else {
-                tracing::warn!(
-                    agent = agent_config.name,
-                    "No api_key or api_key_env configured, skipping agent"
-                );
-                continue;
-            };
-
-            // Build shared client config (moves api_key — no clone needed).
-            let client_config = krew_llm::LlmClientConfig {
-                agent_name: agent_config.name.clone(),
-                model: agent_config.model.clone(),
-                api_key,
-                base_url: provider_config.base_url.clone(),
-                other_agent_role: config.settings.other_agent_role,
-                retry_config: config.settings.retry.clone(),
-                enable_thinking: agent_config.enable_thinking,
-                thinking_effort: agent_config.thinking_effort,
-            };
-
-            // Create LLM client based on provider type.
-            let client: Arc<dyn krew_llm::LlmClient> = match provider_config.provider_type {
-                krew_config::ProviderType::OpenAI => {
-                    let api_type = agent_config.api_type.unwrap_or(krew_config::ApiType::Chat);
-                    match api_type {
-                        krew_config::ApiType::Chat => {
-                            Arc::new(krew_llm::OpenAiChatClient::new(client_config))
-                        }
-                        krew_config::ApiType::Responses => {
-                            Arc::new(krew_llm::OpenAiResponsesClient::new(client_config))
-                        }
-                    }
-                }
-                krew_config::ProviderType::Anthropic => {
-                    Arc::new(krew_llm::AnthropicClient::new(client_config))
-                }
-                krew_config::ProviderType::Google => Arc::new(krew_llm::GoogleClient::new(
-                    client_config,
-                    provider_config.vertex_project.as_deref(),
-                    provider_config.vertex_location.as_deref(),
-                )),
-            };
-
-            let runtime = AgentRuntime {
-                config: agent_config.clone(),
-                client,
-                tools: Vec::new(),
-                is_responding: false,
-                other_agent_role: config.settings.other_agent_role,
-            };
-
-            agents.insert(agent_config.name.clone(), runtime);
-        }
-
-        agents
     }
 
     /// Run the main event loop.
