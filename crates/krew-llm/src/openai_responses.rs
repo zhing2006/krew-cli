@@ -69,10 +69,56 @@ pub fn convert_messages(
     self_agent_name: &str,
     other_agent_role: &OtherAgentRole,
 ) -> Vec<serde_json::Value> {
-    // First pass: convert roles.
-    let mut role_contents: Vec<(String, &ChatMessage)> = Vec::with_capacity(messages.len());
+    let mut result: Vec<serde_json::Value> = Vec::new();
+    let mut pending: Vec<RoleContent> = Vec::new();
 
     for msg in messages {
+        // Tool result messages: Responses API uses function_call_output.
+        if msg.role == ChatRole::Tool {
+            flush_pending_responses(&mut pending, &mut result);
+
+            let mut obj = serde_json::json!({
+                "type": "function_call_output",
+                "output": msg.content,
+            });
+            if let Some(ref id) = msg.tool_call_id {
+                obj["call_id"] = serde_json::json!(id);
+            }
+            result.push(obj);
+            continue;
+        }
+
+        // Assistant messages with tool_calls: emit function_call items.
+        if let (ChatRole::Assistant, Some(tcs)) = (&msg.role, &msg.tool_calls) {
+            flush_pending_responses(&mut pending, &mut result);
+
+            // Emit the assistant text message first (if any).
+            if !msg.content.is_empty() {
+                result.push(serde_json::json!({
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "output_text",
+                        "text": msg.content,
+                    }],
+                    "status": "completed",
+                }));
+            }
+
+            // Emit each tool call as a function_call item.
+            for tc in tcs {
+                result.push(serde_json::json!({
+                    "type": "function_call",
+                    "call_id": tc.id,
+                    "name": tc.name,
+                    "arguments": tc.arguments,
+                    "status": "completed",
+                }));
+            }
+            continue;
+        }
+
+        // Regular messages.
         let is_other_agent = matches!(&msg.role, ChatRole::Assistant)
             && msg
                 .name
@@ -90,23 +136,6 @@ pub fn convert_messages(
             ChatRole::Assistant => "assistant",
         };
 
-        role_contents.push((role.to_string(), msg));
-    }
-
-    // Separate non-mergeable (developer, assistant) from mergeable (user).
-    // We need to merge consecutive same-role messages, but developer and
-    // assistant messages have special formatting.
-    // Strategy: build intermediate RoleContent list, merge, then format.
-    let mut intermediate: Vec<(RoleContent, Option<&ChatMessage>)> =
-        Vec::with_capacity(role_contents.len());
-
-    for (role, msg) in &role_contents {
-        let is_other_agent = matches!(&msg.role, ChatRole::Assistant)
-            && msg
-                .name
-                .as_ref()
-                .is_some_and(|name| name != self_agent_name);
-
         let content = if is_other_agent {
             let name = msg.name.as_deref().unwrap_or("unknown");
             format!("[{name}] {}", msg.content)
@@ -114,30 +143,30 @@ pub fn convert_messages(
             msg.content.clone()
         };
 
-        intermediate.push((
-            RoleContent {
-                role: role.clone(),
-                content,
-            },
-            if role == "assistant" { Some(msg) } else { None },
-        ));
+        pending.push(RoleContent {
+            role: role.to_string(),
+            content,
+        });
     }
 
-    // Merge consecutive same-role messages.
-    let role_contents_only: Vec<RoleContent> =
-        intermediate.iter().map(|(rc, _)| rc.clone()).collect();
-    let merged = merge_consecutive_same_role(role_contents_only);
+    flush_pending_responses(&mut pending, &mut result);
+    result
+}
 
-    // Format into JSON.
-    merged
-        .into_iter()
-        .map(|rc| match rc.role.as_str() {
-            "developer" => serde_json::json!({
+/// Merge and flush pending role-content items into the result vector.
+fn flush_pending_responses(pending: &mut Vec<RoleContent>, result: &mut Vec<serde_json::Value>) {
+    if pending.is_empty() {
+        return;
+    }
+    let merged = merge_consecutive_same_role(std::mem::take(pending));
+    for rc in merged {
+        match rc.role.as_str() {
+            "developer" => result.push(serde_json::json!({
                 "type": "message",
                 "role": "developer",
                 "content": rc.content,
-            }),
-            "assistant" => serde_json::json!({
+            })),
+            "assistant" => result.push(serde_json::json!({
                 "type": "message",
                 "role": "assistant",
                 "content": [{
@@ -145,14 +174,14 @@ pub fn convert_messages(
                     "text": rc.content,
                 }],
                 "status": "completed",
-            }),
-            _ => serde_json::json!({
+            })),
+            _ => result.push(serde_json::json!({
                 "type": "message",
                 "role": "user",
                 "content": rc.content,
-            }),
-        })
-        .collect()
+            })),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -219,7 +248,7 @@ fn convert_tools(tools: &[ToolDefinition]) -> Vec<serde_json::Value> {
                 "name": t.name,
                 "description": t.description,
                 "parameters": t.parameters,
-                "strict": true,
+                "strict": false,
             })
         })
         .collect()
@@ -229,28 +258,31 @@ fn convert_tools(tools: &[ToolDefinition]) -> Vec<serde_json::Value> {
 // SSE stream parsing
 // ---------------------------------------------------------------------------
 
-/// State machine for tracking function call context across SSE events.
-#[derive(Default)]
-struct FunctionCallState {
-    /// Current function call ID (from response.output_item.added).
-    call_id: String,
-    /// Current function name (from response.output_item.added).
-    name: String,
-}
+/// Pending events to drain (when multiple events must be emitted for a single SSE chunk).
+type PendingQueue = std::collections::VecDeque<StreamEvent>;
 
 /// Parse OpenAI Responses SSE events into StreamEvents.
+///
+/// Uses `response.output_item.done` to extract complete function calls
+/// (no incremental accumulation needed — the complete item is in one event).
 fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamEvent> + Send {
     use eventsource_stream::Eventsource;
     use futures::StreamExt;
+    use std::collections::VecDeque;
 
     let byte_stream = response.bytes_stream();
     let sse_stream = byte_stream.eventsource();
 
-    let state = FunctionCallState::default();
+    let pending: PendingQueue = VecDeque::new();
 
     futures::stream::unfold(
-        (sse_stream, state, false),
-        |(mut sse_stream, mut fc_state, mut done)| async move {
+        (sse_stream, pending, false),
+        |(mut sse_stream, mut pending, mut done)| async move {
+            // Drain pending events first (multiple events from one SSE chunk).
+            if let Some(event) = pending.pop_front() {
+                return Some((event, (sse_stream, pending, done)));
+            }
+
             if done {
                 return None;
             }
@@ -274,7 +306,7 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                                 {
                                     return Some((
                                         StreamEvent::TextDelta(delta.to_string()),
-                                        (sse_stream, fc_state, done),
+                                        (sse_stream, pending, done),
                                     ));
                                 }
                                 continue;
@@ -287,47 +319,42 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                                 {
                                     return Some((
                                         StreamEvent::ThinkingDelta(delta.to_string()),
-                                        (sse_stream, fc_state, done),
+                                        (sse_stream, pending, done),
                                     ));
                                 }
                                 continue;
                             }
 
-                            "response.output_item.added" => {
-                                // Cache function call metadata.
+                            "response.output_item.done" => {
+                                // Complete function call item — extract all fields at once.
                                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data)
                                     && let Some(item) = v.get("item")
                                     && item.get("type").and_then(|t| t.as_str())
                                         == Some("function_call")
                                 {
-                                    fc_state.call_id = item
+                                    let call_id = item
                                         .get("call_id")
                                         .and_then(|c| c.as_str())
                                         .unwrap_or("")
                                         .to_string();
-                                    fc_state.name = item
+                                    let name = item
                                         .get("name")
                                         .and_then(|n| n.as_str())
                                         .unwrap_or("")
                                         .to_string();
-                                }
-                                continue;
-                            }
-
-                            "response.function_call_arguments.done" => {
-                                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
-                                    let arguments = v
+                                    let arguments = item
                                         .get("arguments")
                                         .and_then(|a| a.as_str())
                                         .unwrap_or("{}")
                                         .to_string();
                                     return Some((
                                         StreamEvent::ToolCall {
-                                            id: fc_state.call_id.clone(),
-                                            name: fc_state.name.clone(),
+                                            id: call_id,
+                                            name,
                                             arguments,
+                                            thought_signature: None,
                                         },
-                                        (sse_stream, fc_state, done),
+                                        (sse_stream, pending, done),
                                     ));
                                 }
                                 continue;
@@ -368,7 +395,7 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                                 };
                                 return Some((
                                     StreamEvent::Done(usage),
-                                    (sse_stream, fc_state, done),
+                                    (sse_stream, pending, done),
                                 ));
                             }
 
@@ -388,7 +415,7 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                                 };
                                 return Some((
                                     StreamEvent::Error(msg),
-                                    (sse_stream, fc_state, done),
+                                    (sse_stream, pending, done),
                                 ));
                             }
 
@@ -396,12 +423,13 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                                 done = true;
                                 return Some((
                                     StreamEvent::Error("response incomplete".to_string()),
-                                    (sse_stream, fc_state, done),
+                                    (sse_stream, pending, done),
                                 ));
                             }
 
                             // Ignore all other events (response.queued, response.in_progress,
                             // response.content_part.added, response.output_text.done,
+                            // response.output_item.added, response.function_call_arguments.*,
                             // response.reasoning_summary_text.done, etc.)
                             _ => continue,
                         }
@@ -410,14 +438,14 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                         done = true;
                         return Some((
                             StreamEvent::Error(format!("SSE stream error: {e}")),
-                            (sse_stream, fc_state, done),
+                            (sse_stream, pending, done),
                         ));
                     }
                     None => {
                         done = true;
                         return Some((
                             StreamEvent::Error("stream interrupted".into()),
-                            (sse_stream, fc_state, done),
+                            (sse_stream, pending, done),
                         ));
                     }
                 }
@@ -515,16 +543,9 @@ mod tests {
     }
 
     #[test]
-    fn sse_function_call_done() {
-        let data = r#"{"arguments":"{\"path\":\"src/main.rs\"}"}"#;
-        let v: serde_json::Value = serde_json::from_str(data).unwrap();
-        let arguments = v.get("arguments").and_then(|a| a.as_str()).unwrap();
-        assert!(arguments.contains("main.rs"));
-    }
-
-    #[test]
-    fn sse_output_item_added_function_call() {
-        let data = r#"{"item":{"type":"function_call","call_id":"call_123","name":"read_file"}}"#;
+    fn sse_output_item_done_function_call() {
+        // response.output_item.done contains the complete function call item.
+        let data = r#"{"item":{"type":"function_call","call_id":"call_123","name":"read_file","arguments":"{\"path\":\"src/main.rs\"}","status":"completed"}}"#;
         let v: serde_json::Value = serde_json::from_str(data).unwrap();
         let item = v.get("item").unwrap();
         assert_eq!(
@@ -536,6 +557,8 @@ mod tests {
             Some("call_123")
         );
         assert_eq!(item.get("name").and_then(|n| n.as_str()), Some("read_file"));
+        let arguments = item.get("arguments").and_then(|a| a.as_str()).unwrap();
+        assert!(arguments.contains("main.rs"));
     }
 
     #[test]
@@ -571,11 +594,7 @@ mod tests {
 
     #[test]
     fn convert_user_message() {
-        let messages = vec![ChatMessage {
-            role: ChatRole::User,
-            content: "hello".to_string(),
-            name: None,
-        }];
+        let messages = vec![ChatMessage::text(ChatRole::User, "hello".to_string(), None)];
         let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0]["type"], "message");
@@ -585,11 +604,11 @@ mod tests {
 
     #[test]
     fn convert_system_to_developer() {
-        let messages = vec![ChatMessage {
-            role: ChatRole::System,
-            content: "you are helpful".to_string(),
-            name: None,
-        }];
+        let messages = vec![ChatMessage::text(
+            ChatRole::System,
+            "you are helpful".to_string(),
+            None,
+        )];
         let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0]["role"], "developer");
@@ -597,11 +616,11 @@ mod tests {
 
     #[test]
     fn convert_current_agent_assistant() {
-        let messages = vec![ChatMessage {
-            role: ChatRole::Assistant,
-            content: "my reply".to_string(),
-            name: Some("agent1".to_string()),
-        }];
+        let messages = vec![ChatMessage::text(
+            ChatRole::Assistant,
+            "my reply".to_string(),
+            Some("agent1".to_string()),
+        )];
         let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0]["role"], "assistant");
@@ -613,11 +632,11 @@ mod tests {
 
     #[test]
     fn convert_other_agent_to_user() {
-        let messages = vec![ChatMessage {
-            role: ChatRole::Assistant,
-            content: "other reply".to_string(),
-            name: Some("agent2".to_string()),
-        }];
+        let messages = vec![ChatMessage::text(
+            ChatRole::Assistant,
+            "other reply".to_string(),
+            Some("agent2".to_string()),
+        )];
         let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0]["role"], "user");
@@ -626,11 +645,11 @@ mod tests {
 
     #[test]
     fn convert_other_agent_as_assistant() {
-        let messages = vec![ChatMessage {
-            role: ChatRole::Assistant,
-            content: "other reply".to_string(),
-            name: Some("agent2".to_string()),
-        }];
+        let messages = vec![ChatMessage::text(
+            ChatRole::Assistant,
+            "other reply".to_string(),
+            Some("agent2".to_string()),
+        )];
         let result = convert_messages(&messages, "agent1", &OtherAgentRole::Assistant);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0]["role"], "assistant");
@@ -640,21 +659,13 @@ mod tests {
     #[test]
     fn convert_multiple_messages_order_preserved() {
         let messages = vec![
-            ChatMessage {
-                role: ChatRole::System,
-                content: "sys".to_string(),
-                name: None,
-            },
-            ChatMessage {
-                role: ChatRole::User,
-                content: "hi".to_string(),
-                name: None,
-            },
-            ChatMessage {
-                role: ChatRole::Assistant,
-                content: "hello".to_string(),
-                name: Some("agent1".to_string()),
-            },
+            ChatMessage::text(ChatRole::System, "sys".to_string(), None),
+            ChatMessage::text(ChatRole::User, "hi".to_string(), None),
+            ChatMessage::text(
+                ChatRole::Assistant,
+                "hello".to_string(),
+                Some("agent1".to_string()),
+            ),
         ];
         let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
         assert_eq!(result.len(), 3);
@@ -766,7 +777,7 @@ mod tests {
         assert_eq!(result[0]["type"], "function");
         assert_eq!(result[0]["name"], "read_file");
         assert_eq!(result[0]["description"], "Read a file");
-        assert_eq!(result[0]["strict"], true);
+        assert_eq!(result[0]["strict"], false);
         assert!(result[0]["parameters"].is_object());
     }
 

@@ -10,6 +10,8 @@ pub enum StreamEvent {
         id: String,
         name: String,
         arguments: String,
+        /// Opaque signature for Google thinking mode (must be echoed back).
+        thought_signature: Option<String>,
     },
     /// Incremental thinking/reasoning content (if supported).
     ThinkingDelta(String),

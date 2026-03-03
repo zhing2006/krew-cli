@@ -43,7 +43,24 @@ pub struct MessageEntry {
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<UsageEntry>,
+    /// Tool calls made in this assistant message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCallEntry>>,
+    /// Tool call ID this tool-result message is responding to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
     pub created_at: DateTime<Utc>,
+}
+
+/// A single tool call made by an assistant.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallEntry {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+    /// Opaque thought signature (Google thinking mode).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thought_signature: Option<String>,
 }
 
 /// Token usage for an assistant message.

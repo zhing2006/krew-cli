@@ -13,6 +13,13 @@ pub enum AgentEvent {
     ThinkingDelta(String),
     /// Incremental text content from the model.
     TextDelta(String),
+    /// A tool call is starting execution.
+    ToolCallStart { name: String, arguments: String },
+    /// A tool call has completed.
+    ToolCallDone {
+        name: String,
+        result_summary: String,
+    },
     /// Stream completed with final token usage.
     Done(Usage),
     /// An error occurred during the agent turn.
