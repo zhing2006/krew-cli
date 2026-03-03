@@ -173,8 +173,10 @@ pub(crate) fn format_tool_call_display(name: &str, arguments: &str) -> Vec<Span<
     };
 
     vec![
-        Span::styled(name.to_string(), Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(
+            name.to_string(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
         Span::raw(format!("({params})")),
     ]
 }
-

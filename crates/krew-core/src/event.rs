@@ -1,4 +1,4 @@
-use krew_llm::Usage;
+use krew_llm::{ChatMessage, Usage};
 
 /// Events emitted by the agent loop for consumption by the TUI layer.
 #[derive(Debug, Clone)]
@@ -20,10 +20,20 @@ pub enum AgentEvent {
         name: String,
         result_summary: String,
     },
-    /// Stream completed with final token usage.
-    Done(Usage),
+    /// Stream completed with final token usage and collected messages.
+    Done {
+        usage: Usage,
+        /// Assistant+tool_calls and Tool result messages from all tool rounds.
+        intermediate_messages: Vec<ChatMessage>,
+        /// Final text-only response from the last LLM call.
+        final_text: String,
+    },
     /// An error occurred during the agent turn.
-    Error(String),
+    Error {
+        message: String,
+        /// Any intermediate messages collected before the error occurred.
+        intermediate_messages: Vec<ChatMessage>,
+    },
     /// A retry attempt is about to happen (for TUI status display).
     Retrying {
         /// Current retry attempt (1-based).
