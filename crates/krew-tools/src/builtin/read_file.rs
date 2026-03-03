@@ -4,17 +4,15 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader};
+use tokio::io::{AsyncBufReadExt, BufReader};
 
-use crate::{ToolError, ToolHandler, ToolResult, ToolSpec, validate_path};
+use crate::{
+    ToolError, ToolHandler, ToolResult, ToolSpec, check_binary, check_file_size, validate_path,
+};
 
 const MAX_LINE_LENGTH: usize = 2000;
 const DEFAULT_OFFSET: usize = 1;
 const DEFAULT_LIMIT: usize = 2000;
-/// Maximum file size allowed (100 MB).
-const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024;
-/// Number of bytes to probe for binary detection.
-const BINARY_PROBE_SIZE: usize = 8192;
 
 /// Built-in tool for reading file contents with line numbers.
 pub struct ReadFileTool {
@@ -98,43 +96,15 @@ impl ToolHandler for ReadFileTool {
 
         let path = validate_path(&args.file_path, &self.cwd)?;
 
-        // Check file size before reading.
-        let metadata = tokio::fs::metadata(&path).await.map_err(|e| {
-            ToolError::Execution(format!("failed to stat file '{}': {e}", path.display()))
-        })?;
-        if metadata.len() > MAX_FILE_SIZE {
-            let size_mb = metadata.len() / (1024 * 1024);
-            return Ok(ToolResult {
-                content: format!(
-                    "File '{}' is too large ({size_mb} MB). Maximum allowed size is {} MB.",
-                    path.display(),
-                    MAX_FILE_SIZE / (1024 * 1024)
-                ),
-                is_error: true,
-            });
+        if let Some(result) = check_file_size(&path) {
+            return Ok(result);
+        }
+        if let Some(result) = check_binary(&path) {
+            return Ok(result);
         }
 
-        let mut file = tokio::fs::File::open(&path).await.map_err(|e| {
+        let file = tokio::fs::File::open(&path).await.map_err(|e| {
             ToolError::Execution(format!("failed to open file '{}': {e}", path.display()))
-        })?;
-
-        // Probe the first bytes for binary (NUL byte) detection.
-        let mut probe = vec![0u8; BINARY_PROBE_SIZE];
-        let probe_len = file.read(&mut probe).await.map_err(|e| {
-            ToolError::Execution(format!("failed to read file '{}': {e}", path.display()))
-        })?;
-        if probe[..probe_len].contains(&0) {
-            return Ok(ToolResult {
-                content: format!(
-                    "File '{}' appears to be a binary file and cannot be read as text.",
-                    path.display()
-                ),
-                is_error: true,
-            });
-        }
-        // Rewind to the beginning after probing.
-        file.seek(std::io::SeekFrom::Start(0)).await.map_err(|e| {
-            ToolError::Execution(format!("failed to seek file '{}': {e}", path.display()))
         })?;
 
         let mut reader = BufReader::new(file);

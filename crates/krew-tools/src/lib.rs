@@ -6,6 +6,11 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+/// Maximum file size allowed for reading (100 MB).
+pub const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024;
+/// Number of bytes to probe for binary detection.
+const BINARY_PROBE_SIZE: usize = 8192;
+
 /// Result returned by a tool after execution.
 #[derive(Debug, Clone)]
 pub struct ToolResult {
@@ -147,4 +152,55 @@ pub fn validate_path(path: &str, cwd: &Path) -> Result<PathBuf, ToolError> {
     }
 
     Ok(resolved)
+}
+
+/// Check whether a file exceeds the maximum allowed size.
+///
+/// Returns `Some(ToolResult)` with a user-friendly error when the file is
+/// too large, or `None` when the size is acceptable.
+pub fn check_file_size(path: &Path) -> Option<ToolResult> {
+    let size = match std::fs::metadata(path) {
+        Ok(m) => m.len(),
+        Err(_) => return None, // let the caller handle open errors
+    };
+    if size > MAX_FILE_SIZE {
+        let size_mb = size / (1024 * 1024);
+        Some(ToolResult {
+            content: format!(
+                "File '{}' is too large ({size_mb} MB). Maximum allowed size is {} MB.",
+                path.display(),
+                MAX_FILE_SIZE / (1024 * 1024)
+            ),
+            is_error: true,
+        })
+    } else {
+        None
+    }
+}
+
+/// Detect whether a file is binary by probing its first bytes for NUL.
+///
+/// Returns `Some(ToolResult)` with a user-friendly error when the file
+/// appears to be binary, or `None` when it looks like text.
+pub fn check_binary(path: &Path) -> Option<ToolResult> {
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return None, // let the caller handle open errors
+    };
+    let mut probe = vec![0u8; BINARY_PROBE_SIZE];
+    let n = match std::io::Read::read(&mut file, &mut probe) {
+        Ok(n) => n,
+        Err(_) => return None,
+    };
+    if probe[..n].contains(&0) {
+        Some(ToolResult {
+            content: format!(
+                "File '{}' appears to be a binary file and cannot be read as text.",
+                path.display()
+            ),
+            is_error: true,
+        })
+    } else {
+        None
+    }
 }
