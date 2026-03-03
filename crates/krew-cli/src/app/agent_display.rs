@@ -114,13 +114,14 @@ impl App {
         terminal: &mut custom_terminal::Terminal,
         prefix: &str,
         prefix_style: Style,
-        display: &str,
+        display: Vec<Span<'static>>,
     ) -> anyhow::Result<()> {
-        let line = Line::from(vec![
+        let mut spans = vec![
             Span::raw("  "),
             Span::styled(prefix.to_string(), prefix_style),
-            Span::raw(display.to_string()),
-        ]);
+        ];
+        spans.extend(display);
+        let line = Line::from(spans);
 
         terminal.insert_lines_above(vec![line])?;
         Ok(())
@@ -143,8 +144,10 @@ impl App {
     }
 }
 
-/// Format a tool call start display: `read_file("src/main.rs", offset=10)`
-pub(crate) fn format_tool_call_display(name: &str, arguments: &str) -> String {
+/// Format a tool call start display: `**read_file**("src/main.rs", offset=10)`
+///
+/// Returns styled spans with the tool name in bold.
+pub(crate) fn format_tool_call_display(name: &str, arguments: &str) -> Vec<Span<'static>> {
     let args: serde_json::Value = serde_json::from_str(arguments).unwrap_or_default();
 
     let params = match args.as_object() {
@@ -169,6 +172,9 @@ pub(crate) fn format_tool_call_display(name: &str, arguments: &str) -> String {
         None => String::new(),
     };
 
-    format!("{name}({params})")
+    vec![
+        Span::styled(name.to_string(), Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(format!("({params})")),
+    ]
 }
 
