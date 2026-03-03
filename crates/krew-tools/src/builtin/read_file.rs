@@ -4,13 +4,17 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader};
 
 use crate::{ToolError, ToolHandler, ToolResult, ToolSpec, validate_path};
 
 const MAX_LINE_LENGTH: usize = 2000;
 const DEFAULT_OFFSET: usize = 1;
 const DEFAULT_LIMIT: usize = 2000;
+/// Maximum file size allowed (100 MB).
+const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024;
+/// Number of bytes to probe for binary detection.
+const BINARY_PROBE_SIZE: usize = 8192;
 
 /// Built-in tool for reading file contents with line numbers.
 pub struct ReadFileTool {
@@ -94,8 +98,43 @@ impl ToolHandler for ReadFileTool {
 
         let path = validate_path(&args.file_path, &self.cwd)?;
 
-        let file = tokio::fs::File::open(&path).await.map_err(|e| {
+        // Check file size before reading.
+        let metadata = tokio::fs::metadata(&path).await.map_err(|e| {
+            ToolError::Execution(format!("failed to stat file '{}': {e}", path.display()))
+        })?;
+        if metadata.len() > MAX_FILE_SIZE {
+            let size_mb = metadata.len() / (1024 * 1024);
+            return Ok(ToolResult {
+                content: format!(
+                    "File '{}' is too large ({size_mb} MB). Maximum allowed size is {} MB.",
+                    path.display(),
+                    MAX_FILE_SIZE / (1024 * 1024)
+                ),
+                is_error: true,
+            });
+        }
+
+        let mut file = tokio::fs::File::open(&path).await.map_err(|e| {
             ToolError::Execution(format!("failed to open file '{}': {e}", path.display()))
+        })?;
+
+        // Probe the first bytes for binary (NUL byte) detection.
+        let mut probe = vec![0u8; BINARY_PROBE_SIZE];
+        let probe_len = file.read(&mut probe).await.map_err(|e| {
+            ToolError::Execution(format!("failed to read file '{}': {e}", path.display()))
+        })?;
+        if probe[..probe_len].contains(&0) {
+            return Ok(ToolResult {
+                content: format!(
+                    "File '{}' appears to be a binary file and cannot be read as text.",
+                    path.display()
+                ),
+                is_error: true,
+            });
+        }
+        // Rewind to the beginning after probing.
+        file.seek(std::io::SeekFrom::Start(0)).await.map_err(|e| {
+            ToolError::Execution(format!("failed to seek file '{}': {e}", path.display()))
         })?;
 
         let mut reader = BufReader::new(file);
@@ -251,6 +290,23 @@ mod tests {
 
         assert!(result.content.contains("L1: one"));
         assert!(result.content.contains("L2: two"));
+    }
+
+    #[tokio::test]
+    async fn rejects_binary_file() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("image.png");
+        // Write bytes with NUL to simulate binary content.
+        std::fs::write(&file_path, b"\x89PNG\r\n\x1a\n\x00\x00\x00").unwrap();
+        let tool = ReadFileTool::new(dir.path().to_path_buf());
+
+        let result = tool
+            .execute(json!({ "file_path": file_path.to_str().unwrap() }))
+            .await
+            .unwrap();
+
+        assert!(result.is_error);
+        assert!(result.content.contains("binary file"));
     }
 
     #[tokio::test]
