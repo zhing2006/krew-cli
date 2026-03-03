@@ -287,14 +287,18 @@ impl App {
         match key_event.code {
             KeyCode::Up => {
                 match &mut self.popup {
-                    ActivePopup::SlashCommand(s) | ActivePopup::AgentName(s) => s.move_up(),
+                    ActivePopup::SlashCommand(s)
+                    | ActivePopup::AgentName(s)
+                    | ActivePopup::SessionPicker(s) => s.move_up(),
                     ActivePopup::None => {}
                 }
                 Ok(true)
             }
             KeyCode::Down => {
                 match &mut self.popup {
-                    ActivePopup::SlashCommand(s) | ActivePopup::AgentName(s) => s.move_down(),
+                    ActivePopup::SlashCommand(s)
+                    | ActivePopup::AgentName(s)
+                    | ActivePopup::SessionPicker(s) => s.move_down(),
                     ActivePopup::None => {}
                 }
                 Ok(true)
@@ -305,6 +309,7 @@ impl App {
             }
             KeyCode::Enter => {
                 // For slash commands, execute directly. For agent names, insert.
+                // For session picker, resume the selected session.
                 match &self.popup {
                     ActivePopup::SlashCommand(state) => {
                         if let Some(item) = state.selected_item() {
@@ -318,6 +323,19 @@ impl App {
                     ActivePopup::AgentName(_) => {
                         self.accept_completion();
                         return Ok(true);
+                    }
+                    ActivePopup::SessionPicker(state) => {
+                        if let Some(item) = state.selected_item() {
+                            let session_id = item.value.clone();
+                            self.popup = ActivePopup::None;
+                            self.clear_textarea();
+                            // Save current session if non-empty, then load selected.
+                            if !self.messages.is_empty() {
+                                self.save_session();
+                            }
+                            self.load_session(&session_id, terminal)?;
+                            return Ok(true);
+                        }
                     }
                     ActivePopup::None => {}
                 }
@@ -353,7 +371,7 @@ impl App {
                     }
                 }
             }
-            ActivePopup::None => {}
+            ActivePopup::SessionPicker(_) | ActivePopup::None => {}
         }
         self.popup = ActivePopup::None;
     }
@@ -393,6 +411,11 @@ impl App {
 
     /// Detect whether a completion popup should be shown based on current input.
     pub(crate) fn sync_popup(&mut self) {
+        // Session picker is managed by /resume command, not input-driven.
+        if matches!(self.popup, ActivePopup::SessionPicker(_)) {
+            return;
+        }
+
         let text = self.textarea.text();
         let first_line = text.lines().next().unwrap_or("");
         let is_single_line = self.textarea.line_count() == 1;
@@ -513,6 +536,8 @@ impl App {
         if self.history.last().is_some_and(|last| last == &entry) {
             return;
         }
+        // Persist to disk.
+        self.persist_history_entry(&entry);
         self.history.push(entry);
         let limit = self.config.settings.input_history_limit;
         if self.history.len() > limit {

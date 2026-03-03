@@ -26,6 +26,7 @@ fn shorten_path(path: &str, max_len: usize) -> String {
 /// Insert the header box above the viewport.
 pub fn insert_header(terminal: &mut custom_terminal::Terminal, app: &App) -> anyhow::Result<()> {
     let version = env!("CARGO_PKG_VERSION");
+    let session_id = &app.session_id;
     let dir_full = app.cwd.display().to_string();
 
     // Build the Agents line from config.
@@ -49,8 +50,8 @@ pub fn insert_header(terminal: &mut custom_terminal::Terminal, app: &App) -> any
     }
 
     // Measure content widths to determine box width dynamically.
-    // Line 1: " >_ Krew CLI (vX.Y.Z)"
-    let line1_w = format!(" >_ Krew CLI (v{version})").len();
+    // Line 1: " >_ Krew CLI (vX.Y.Z) — session_id"
+    let line1_w = format!(" >_ Krew CLI (v{version}) — {session_id}").len();
     // Line 2: " Agents: [name] Display | ..." + trailing space
     let agents_text_w: usize = agents_spans
         .iter()
@@ -95,6 +96,10 @@ pub fn insert_header(terminal: &mut custom_terminal::Terminal, app: &App) -> any
                 Span::styled("Krew CLI ", Style::default().add_modifier(Modifier::BOLD)),
                 Span::styled(
                     format!("(v{version})"),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(
+                    format!(" \u{2014} {session_id}"),
                     Style::default().fg(Color::DarkGray),
                 ),
             ]),

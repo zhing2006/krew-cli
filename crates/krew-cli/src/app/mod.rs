@@ -3,6 +3,7 @@ mod commands;
 mod input;
 mod message;
 mod paste_burst;
+mod persistence;
 mod state;
 
 pub use state::App;
