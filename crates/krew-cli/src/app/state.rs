@@ -38,6 +38,12 @@ pub struct App {
     pub cwd: PathBuf,
     /// Loaded configuration.
     pub config: Config,
+    /// Current session ID (first 8 chars of UUID).
+    pub(crate) session_id: String,
+    /// Path to `.krew/sessions/` directory.
+    pub(crate) session_dir: PathBuf,
+    /// Path to `.krew/history` file.
+    pub(crate) history_path: PathBuf,
     /// Project-level instructions loaded from AGENTS.md files (if any).
     pub project_instructions: Option<String>,
     /// Multi-line text input component.
@@ -104,6 +110,8 @@ pub struct App {
     pub agent_color: Option<String>,
     /// Override text for the agent status line (e.g. retry status).
     pub agent_status_text: Option<String>,
+    /// Session ID to resume on startup (set by --resume, consumed by run()).
+    pub(crate) pending_resume_id: Option<String>,
 }
 
 impl App {
@@ -120,16 +128,51 @@ impl App {
         // Initialize agent runtimes.
         let agents = Self::init_agents(&config);
 
+        // Session setup.
+        let session_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
+        let krew_dir = cwd.join(".krew");
+        let session_dir = krew_dir.join("sessions");
+        let history_path = krew_dir.join("history");
+
+        // Ensure sessions directory exists.
+        if let Err(e) = std::fs::create_dir_all(&session_dir) {
+            tracing::warn!(error = %e, "Failed to create sessions directory");
+        }
+
+        // Load input history from file.
+        let history = match krew_storage::history_file::load_history(&history_path) {
+            Ok(mut entries) => {
+                let limit = config.settings.input_history_limit;
+                if entries.len() > limit {
+                    entries = entries.split_off(entries.len() - limit);
+                    // Rewrite file with truncated entries.
+                    if let Err(e) =
+                        krew_storage::history_file::save_history(&history_path, &entries)
+                    {
+                        tracing::warn!(error = %e, "Failed to truncate history file");
+                    }
+                }
+                entries
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to load input history");
+                Vec::new()
+            }
+        };
+
         Ok(Self {
             cwd,
             config,
+            session_id,
+            session_dir,
+            history_path,
             project_instructions,
             textarea: TextArea::new(),
             should_quit: false,
             quit_shortcut_armed_at: None,
             quit_hint: None,
             popup: ActivePopup::None,
-            history: Vec::new(),
+            history,
             history_index: None,
             history_draft: String::new(),
             paste_burst: PasteBurst::default(),
@@ -154,6 +197,7 @@ impl App {
             agent_display_name: None,
             agent_color: None,
             agent_status_text: None,
+            pending_resume_id: None,
         })
     }
 
@@ -266,6 +310,13 @@ impl App {
         // Display startup warnings.
         for warning in std::mem::take(&mut self.startup_warnings) {
             self.show_warning(terminal, &warning)?;
+        }
+
+        // Resume session if requested via --resume (replay history on screen).
+        if let Some(session_id) = self.pending_resume_id.take()
+            && let Err(e) = self.load_session(&session_id, terminal)
+        {
+            self.show_warning(terminal, &format!("Failed to resume session: {e}"))?;
         }
 
         // Set up the frame scheduler for coalesced rendering (max 120 FPS).
@@ -488,6 +539,9 @@ impl App {
                         content: std::mem::take(&mut self.current_response_text),
                         name: Some(agent_name),
                     });
+
+                    // Persist session after agent response.
+                    self.save_session();
                 }
 
                 // Clear agent status indicator.

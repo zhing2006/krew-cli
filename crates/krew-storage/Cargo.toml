@@ -7,3 +7,7 @@ edition = "2024"
 toml = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
