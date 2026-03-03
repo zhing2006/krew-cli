@@ -24,6 +24,7 @@ use crate::streaming::commit_tick::run_commit_tick;
 use crate::streaming::markdown_stream::MarkdownStreamCollector;
 use crate::textarea::TextArea;
 
+use super::agent_display::format_tool_call_display;
 use super::paste_burst::{FlushResult, PasteBurst};
 
 /// Duration within which a second Ctrl+C triggers quit.
@@ -126,7 +127,7 @@ impl App {
         };
 
         // Initialize agent runtimes via krew-core.
-        let init_result = init_agents(&config);
+        let init_result = init_agents(&config, Some(cwd.clone()));
         let agents = init_result.agents;
         for w in &init_result.warnings {
             tracing::warn!("{}", w);
@@ -392,6 +393,41 @@ impl App {
                     }
                 }
             }
+            AgentEvent::ToolCallStart { name, arguments } => {
+                // Clear retry status.
+                self.agent_status_text = None;
+
+                // Finalize thinking if still active.
+                if self.is_thinking {
+                    self.finalize_thinking(terminal)?;
+                }
+
+                // Flush any buffered text content before tool line.
+                if let Some(mut collector) = self.stream_collector.take() {
+                    let remaining = collector.finalize();
+                    if !remaining.is_empty() {
+                        self.stream_state.enqueue(remaining);
+                    }
+                }
+                let remaining_lines = self.stream_state.drain_all();
+                if !remaining_lines.is_empty() {
+                    self.insert_indented_lines(terminal, remaining_lines)?;
+                }
+
+                // Build tool call display line: ⚡ tool_name(args)
+                let display = format_tool_call_display(&name, &arguments);
+                let yellow = ratatui::style::Style::default().fg(ratatui::style::Color::Yellow);
+                self.insert_tool_line(terminal, "\u{26A1} ", yellow, &display)?;
+            }
+            AgentEvent::ToolCallDone {
+                name: _,
+                result_summary,
+            } => {
+                // Render result line below the tool call: ⎿  summary + blank line
+                let dim = ratatui::style::Style::default().fg(ratatui::style::Color::DarkGray);
+                self.insert_tool_line(terminal, "\u{23BF}  ", dim, &result_summary)?;
+                terminal.insert_lines_above(vec![ratatui::text::Line::default()])?;
+            }
             AgentEvent::Done(usage) => {
                 // Finalize thinking if still active.
                 if self.is_thinking {
@@ -422,11 +458,11 @@ impl App {
                 // Add assistant message to history and update last_respondent.
                 if let Some(agent_name) = self.current_agent_name.take() {
                     self.last_respondent = Some(agent_name.clone());
-                    self.messages.push(ChatMessage {
-                        role: ChatRole::Assistant,
-                        content: std::mem::take(&mut self.current_response_text),
-                        name: Some(agent_name),
-                    });
+                    self.messages.push(ChatMessage::text(
+                        ChatRole::Assistant,
+                        std::mem::take(&mut self.current_response_text),
+                        Some(agent_name),
+                    ));
 
                     // Persist session after agent response.
                     self.save_session();
@@ -473,11 +509,11 @@ impl App {
                 {
                     let mut content = std::mem::take(&mut self.current_response_text);
                     content.push_str(&format!("\n\n[Error: {msg}]"));
-                    self.messages.push(ChatMessage {
-                        role: ChatRole::Assistant,
+                    self.messages.push(ChatMessage::text(
+                        ChatRole::Assistant,
                         content,
-                        name: Some(agent_name),
-                    });
+                        Some(agent_name),
+                    ));
                 }
 
                 // Clear agent status indicator.

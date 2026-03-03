@@ -62,52 +62,104 @@ pub fn convert_messages(
     self_agent_name: &str,
     other_agent_role: &OtherAgentRole,
 ) -> Vec<serde_json::Value> {
-    let role_contents: Vec<RoleContent> = messages
-        .iter()
-        .map(|msg| {
-            let is_other_agent = matches!(&msg.role, ChatRole::Assistant)
-                && msg
-                    .name
-                    .as_ref()
-                    .is_some_and(|name| name != self_agent_name);
+    let mut result: Vec<serde_json::Value> = Vec::new();
 
-            let role = match &msg.role {
-                ChatRole::System => "system",
-                ChatRole::User => "user",
-                ChatRole::Tool => "tool",
-                ChatRole::Assistant if is_other_agent => match other_agent_role {
-                    OtherAgentRole::User => "user",
-                    OtherAgentRole::Assistant => "assistant",
-                },
-                ChatRole::Assistant => "assistant",
-            };
+    // Collect plain messages for merging, flushing when we hit tool messages.
+    let mut pending: Vec<RoleContent> = Vec::new();
 
-            let content = if is_other_agent {
-                let name = msg.name.as_deref().unwrap_or("unknown");
-                format!("[{name}] {}", msg.content)
-            } else {
-                msg.content.clone()
-            };
+    for msg in messages {
+        // Tool result messages are emitted directly (not merged).
+        if msg.role == ChatRole::Tool {
+            // Flush any pending messages first.
+            flush_pending(&mut pending, &mut result);
 
-            RoleContent {
-                role: role.to_string(),
-                content,
+            let mut obj = serde_json::json!({
+                "role": "tool",
+                "content": msg.content,
+            });
+            if let Some(ref id) = msg.tool_call_id {
+                obj["tool_call_id"] = serde_json::json!(id);
             }
-        })
-        .collect();
+            result.push(obj);
+            continue;
+        }
 
-    // Merge consecutive same-role messages.
-    let merged = merge_consecutive_same_role(role_contents);
+        // Assistant messages with tool_calls are emitted directly (not merged).
+        if let (ChatRole::Assistant, Some(tcs)) = (&msg.role, &msg.tool_calls) {
+            flush_pending(&mut pending, &mut result);
 
-    merged
-        .into_iter()
-        .map(|rc| {
-            serde_json::json!({
-                "role": rc.role,
-                "content": rc.content,
-            })
-        })
-        .collect()
+            let tool_calls: Vec<serde_json::Value> = tcs
+                .iter()
+                .map(|tc| {
+                    serde_json::json!({
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": tc.arguments,
+                        }
+                    })
+                })
+                .collect();
+
+            let mut obj = serde_json::json!({
+                "role": "assistant",
+                "tool_calls": tool_calls,
+            });
+            if !msg.content.is_empty() {
+                obj["content"] = serde_json::json!(msg.content);
+            }
+            result.push(obj);
+            continue;
+        }
+
+        // Regular messages: collect for merging.
+        let is_other_agent = matches!(&msg.role, ChatRole::Assistant)
+            && msg
+                .name
+                .as_ref()
+                .is_some_and(|name| name != self_agent_name);
+
+        let role = match &msg.role {
+            ChatRole::System => "system",
+            ChatRole::User => "user",
+            ChatRole::Tool => "tool",
+            ChatRole::Assistant if is_other_agent => match other_agent_role {
+                OtherAgentRole::User => "user",
+                OtherAgentRole::Assistant => "assistant",
+            },
+            ChatRole::Assistant => "assistant",
+        };
+
+        let content = if is_other_agent {
+            let name = msg.name.as_deref().unwrap_or("unknown");
+            format!("[{name}] {}", msg.content)
+        } else {
+            msg.content.clone()
+        };
+
+        pending.push(RoleContent {
+            role: role.to_string(),
+            content,
+        });
+    }
+
+    flush_pending(&mut pending, &mut result);
+    result
+}
+
+/// Merge and flush pending role-content items into the result vector.
+fn flush_pending(pending: &mut Vec<RoleContent>, result: &mut Vec<serde_json::Value>) {
+    if pending.is_empty() {
+        return;
+    }
+    let merged = merge_consecutive_same_role(std::mem::take(pending));
+    for rc in merged {
+        result.push(serde_json::json!({
+            "role": rc.role,
+            "content": rc.content,
+        }));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -167,7 +219,11 @@ fn parse_sse_data(data: &str) -> Option<SseChunk> {
 
     if choices.is_empty() {
         // Usage-only chunk (the last chunk before [DONE]).
-        return Some(SseChunk { event: None, usage });
+        return Some(SseChunk {
+            event: None,
+            usage,
+            tool_call_delta: None,
+        });
     }
 
     let choice = &choices[0];
@@ -180,6 +236,7 @@ fn parse_sse_data(data: &str) -> Option<SseChunk> {
         return Some(SseChunk {
             event: Some(StreamEvent::ThinkingDelta(reasoning.to_string())),
             usage,
+            tool_call_delta: None,
         });
     }
 
@@ -190,13 +247,15 @@ fn parse_sse_data(data: &str) -> Option<SseChunk> {
         return Some(SseChunk {
             event: Some(StreamEvent::TextDelta(content.to_string())),
             usage,
+            tool_call_delta: None,
         });
     }
 
-    // Check for tool calls.
+    // Check for tool calls (streamed incrementally — accumulate in build_event_stream).
     if let Some(tool_calls) = delta.get("tool_calls").and_then(|t| t.as_array())
         && let Some(tc) = tool_calls.first()
     {
+        let index = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
         let id = tc
             .get("id")
             .and_then(|v| v.as_str())
@@ -215,21 +274,41 @@ fn parse_sse_data(data: &str) -> Option<SseChunk> {
             .to_string();
 
         return Some(SseChunk {
-            event: Some(StreamEvent::ToolCall {
+            event: None,
+            usage,
+            tool_call_delta: Some(ToolCallDelta {
+                index,
                 id,
                 name,
                 arguments,
             }),
-            usage,
         });
     }
 
-    Some(SseChunk { event: None, usage })
+    Some(SseChunk {
+        event: None,
+        usage,
+        tool_call_delta: None,
+    })
 }
 
 struct SseChunk {
     event: Option<StreamEvent>,
     usage: Option<Usage>,
+    /// Partial tool call data to accumulate (OpenAI streams tool calls incrementally).
+    tool_call_delta: Option<ToolCallDelta>,
+}
+
+/// A partial tool call chunk from OpenAI's incremental streaming.
+struct ToolCallDelta {
+    /// Tool call index (for parallel tool calls).
+    index: u32,
+    /// Call ID (only present in the first chunk for each tool call).
+    id: String,
+    /// Function name (only present in the first chunk).
+    name: String,
+    /// Partial arguments string to append.
+    arguments: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -303,20 +382,39 @@ impl LlmClient for OpenAiChatClient {
 }
 
 /// Convert an HTTP response into a `Stream<Item = StreamEvent>`.
+///
+/// Tool calls are streamed incrementally by OpenAI (first chunk has id + name,
+/// subsequent chunks carry partial arguments). This function accumulates them
+/// and emits complete `StreamEvent::ToolCall` events only when `[DONE]` arrives.
 fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamEvent> + Send {
     use eventsource_stream::Eventsource;
     use futures::StreamExt;
+    use std::collections::VecDeque;
 
     let byte_stream = response.bytes_stream();
     let sse_stream = byte_stream.eventsource();
 
     // We track usage across SSE chunks because OpenAI sends it in a
     // separate chunk just before [DONE].
-    let state = std::sync::Arc::new(tokio::sync::Mutex::new(Usage::default()));
+    let usage_state = std::sync::Arc::new(tokio::sync::Mutex::new(Usage::default()));
+
+    // Accumulated tool call deltas: Vec<(id, name, arguments)> indexed by tool call index.
+    let tool_calls_accum: Vec<(String, String, String)> = Vec::new();
+
+    // Queue for emitting multiple events at once (accumulated tool calls + Done).
+    let pending: VecDeque<StreamEvent> = VecDeque::new();
 
     futures::stream::unfold(
-        (sse_stream, state, false),
-        |(mut sse_stream, state, mut done)| async move {
+        (sse_stream, usage_state, tool_calls_accum, pending, false),
+        |(mut sse_stream, usage_state, mut tool_calls_accum, mut pending, mut done)| async move {
+            // Drain pending events first (e.g., accumulated tool calls before Done).
+            if let Some(event) = pending.pop_front() {
+                return Some((
+                    event,
+                    (sse_stream, usage_state, tool_calls_accum, pending, done),
+                ));
+            }
+
             if done {
                 return None;
             }
@@ -332,21 +430,72 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
 
                         match parse_sse_data(&data) {
                             None => {
-                                // [DONE] marker — emit Done with accumulated usage.
+                                // [DONE] marker — emit accumulated tool calls, then Done.
                                 done = true;
-                                let usage = state.lock().await.clone();
-                                return Some((StreamEvent::Done(usage), (sse_stream, state, done)));
+                                for (id, name, args) in tool_calls_accum.drain(..) {
+                                    pending.push_back(StreamEvent::ToolCall {
+                                        id,
+                                        name,
+                                        arguments: args,
+                                        thought_signature: None,
+                                    });
+                                }
+                                let usage = usage_state.lock().await.clone();
+                                pending.push_back(StreamEvent::Done(usage));
+
+                                if let Some(event) = pending.pop_front() {
+                                    return Some((
+                                        event,
+                                        (
+                                            sse_stream,
+                                            usage_state,
+                                            tool_calls_accum,
+                                            pending,
+                                            done,
+                                        ),
+                                    ));
+                                }
+                                return None;
                             }
                             Some(chunk) => {
                                 // Accumulate usage if present.
                                 if let Some(u) = chunk.usage {
-                                    let mut s = state.lock().await;
+                                    let mut s = usage_state.lock().await;
                                     *s = u;
+                                }
+
+                                // Accumulate tool call deltas by index.
+                                if let Some(delta) = chunk.tool_call_delta {
+                                    let idx = delta.index as usize;
+                                    if idx >= tool_calls_accum.len() {
+                                        tool_calls_accum.resize(
+                                            idx + 1,
+                                            (String::new(), String::new(), String::new()),
+                                        );
+                                    }
+                                    let entry = &mut tool_calls_accum[idx];
+                                    if !delta.id.is_empty() {
+                                        entry.0 = delta.id;
+                                    }
+                                    if !delta.name.is_empty() {
+                                        entry.1 = delta.name;
+                                    }
+                                    entry.2.push_str(&delta.arguments);
+                                    continue;
                                 }
 
                                 // Emit stream event if present.
                                 if let Some(event) = chunk.event {
-                                    return Some((event, (sse_stream, state, done)));
+                                    return Some((
+                                        event,
+                                        (
+                                            sse_stream,
+                                            usage_state,
+                                            tool_calls_accum,
+                                            pending,
+                                            done,
+                                        ),
+                                    ));
                                 }
                                 // No event (e.g. usage-only chunk) — continue.
                                 continue;
@@ -358,7 +507,7 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                         done = true;
                         return Some((
                             StreamEvent::Error(format!("SSE stream error: {e}")),
-                            (sse_stream, state, done),
+                            (sse_stream, usage_state, tool_calls_accum, pending, done),
                         ));
                     }
                     None => {
@@ -366,7 +515,7 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                         done = true;
                         return Some((
                             StreamEvent::Error("stream interrupted".into()),
-                            (sse_stream, state, done),
+                            (sse_stream, usage_state, tool_calls_accum, pending, done),
                         ));
                     }
                 }
@@ -412,11 +561,7 @@ mod tests {
 
     #[test]
     fn convert_user_message() {
-        let messages = vec![ChatMessage {
-            role: ChatRole::User,
-            content: "hello".to_string(),
-            name: None,
-        }];
+        let messages = vec![ChatMessage::text(ChatRole::User, "hello".to_string(), None)];
         let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
         assert_eq!(result[0]["role"], "user");
         assert_eq!(result[0]["content"], "hello");
@@ -424,11 +569,11 @@ mod tests {
 
     #[test]
     fn convert_current_agent_assistant() {
-        let messages = vec![ChatMessage {
-            role: ChatRole::Assistant,
-            content: "my reply".to_string(),
-            name: Some("agent1".to_string()),
-        }];
+        let messages = vec![ChatMessage::text(
+            ChatRole::Assistant,
+            "my reply".to_string(),
+            Some("agent1".to_string()),
+        )];
         let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
         assert_eq!(result[0]["role"], "assistant");
         assert_eq!(result[0]["content"], "my reply");
@@ -436,11 +581,11 @@ mod tests {
 
     #[test]
     fn convert_other_agent_to_user() {
-        let messages = vec![ChatMessage {
-            role: ChatRole::Assistant,
-            content: "other reply".to_string(),
-            name: Some("agent2".to_string()),
-        }];
+        let messages = vec![ChatMessage::text(
+            ChatRole::Assistant,
+            "other reply".to_string(),
+            Some("agent2".to_string()),
+        )];
         let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
         assert_eq!(result[0]["role"], "user");
         assert_eq!(result[0]["content"], "[agent2] other reply");
@@ -448,11 +593,11 @@ mod tests {
 
     #[test]
     fn convert_other_agent_as_assistant() {
-        let messages = vec![ChatMessage {
-            role: ChatRole::Assistant,
-            content: "other reply".to_string(),
-            name: Some("agent2".to_string()),
-        }];
+        let messages = vec![ChatMessage::text(
+            ChatRole::Assistant,
+            "other reply".to_string(),
+            Some("agent2".to_string()),
+        )];
         let result = convert_messages(&messages, "agent1", &OtherAgentRole::Assistant);
         assert_eq!(result[0]["role"], "assistant");
         assert_eq!(result[0]["content"], "[agent2] other reply");
@@ -461,16 +606,16 @@ mod tests {
     #[test]
     fn convert_consecutive_same_role_merged() {
         let messages = vec![
-            ChatMessage {
-                role: ChatRole::Assistant,
-                content: "reply A".to_string(),
-                name: Some("agentA".to_string()),
-            },
-            ChatMessage {
-                role: ChatRole::Assistant,
-                content: "reply B".to_string(),
-                name: Some("agentB".to_string()),
-            },
+            ChatMessage::text(
+                ChatRole::Assistant,
+                "reply A".to_string(),
+                Some("agentA".to_string()),
+            ),
+            ChatMessage::text(
+                ChatRole::Assistant,
+                "reply B".to_string(),
+                Some("agentB".to_string()),
+            ),
         ];
         let result = convert_messages(&messages, "agentC", &OtherAgentRole::User);
         assert_eq!(result.len(), 1);
@@ -523,20 +668,29 @@ mod tests {
     }
 
     #[test]
-    fn sse_tool_call() {
-        let data = r#"{"choices":[{"delta":{"tool_calls":[{"id":"call_1","function":{"name":"read_file","arguments":"{\"path\":\"src/main.rs\"}"}}]}}]}"#;
+    fn sse_tool_call_delta() {
+        // OpenAI streams tool calls incrementally — parse_sse_data returns
+        // a ToolCallDelta, not a StreamEvent::ToolCall.
+        let data = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read_file","arguments":"{\"path\":\"src/main.rs\"}"}}]}}]}"#;
         let chunk = parse_sse_data(data).unwrap();
-        match chunk.event.unwrap() {
-            StreamEvent::ToolCall {
-                id,
-                name,
-                arguments,
-            } => {
-                assert_eq!(id, "call_1");
-                assert_eq!(name, "read_file");
-                assert!(arguments.contains("main.rs"));
-            }
-            other => panic!("expected ToolCall, got {other:?}"),
-        }
+        assert!(chunk.event.is_none(), "should not emit a StreamEvent");
+        let delta = chunk.tool_call_delta.unwrap();
+        assert_eq!(delta.index, 0);
+        assert_eq!(delta.id, "call_1");
+        assert_eq!(delta.name, "read_file");
+        assert!(delta.arguments.contains("main.rs"));
+    }
+
+    #[test]
+    fn sse_tool_call_delta_continuation() {
+        // Continuation chunks only have partial arguments, no id or name.
+        let data = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"more_args"}}]}}]}"#;
+        let chunk = parse_sse_data(data).unwrap();
+        assert!(chunk.event.is_none());
+        let delta = chunk.tool_call_delta.unwrap();
+        assert_eq!(delta.index, 0);
+        assert!(delta.id.is_empty());
+        assert!(delta.name.is_empty());
+        assert_eq!(delta.arguments, "more_args");
     }
 }

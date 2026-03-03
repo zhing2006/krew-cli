@@ -4,8 +4,10 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use chrono::Utc;
-use krew_llm::{ChatMessage, ChatRole};
-use krew_storage::session_file::{MessageEntry, SessionFile, SessionMeta, UsageEntry};
+use krew_llm::{ChatMessage, ChatRole, ToolCallInfo};
+use krew_storage::session_file::{
+    MessageEntry, SessionFile, SessionMeta, ToolCallEntry, UsageEntry,
+};
 
 /// Runtime session state needed for serialization.
 ///
@@ -61,6 +63,17 @@ pub fn build_session_file(snapshot: &SessionSnapshot) -> SessionFile {
                 addressee: None,
                 content: msg.content.clone(),
                 usage,
+                tool_calls: msg.tool_calls.as_ref().map(|tcs| {
+                    tcs.iter()
+                        .map(|tc| ToolCallEntry {
+                            id: tc.id.clone(),
+                            name: tc.name.clone(),
+                            arguments: tc.arguments.clone(),
+                            thought_signature: tc.thought_signature.clone(),
+                        })
+                        .collect()
+                }),
+                tool_call_id: msg.tool_call_id.clone(),
                 created_at: Utc::now(),
             }
         })
@@ -123,6 +136,17 @@ pub fn load_session_from_disk(session_path: &Path) -> anyhow::Result<RestoredSes
             role,
             content: msg.content.clone(),
             name: msg.agent_name.clone(),
+            tool_calls: msg.tool_calls.as_ref().map(|tcs| {
+                tcs.iter()
+                    .map(|tc| ToolCallInfo {
+                        id: tc.id.clone(),
+                        name: tc.name.clone(),
+                        arguments: tc.arguments.clone(),
+                        thought_signature: tc.thought_signature.clone(),
+                    })
+                    .collect()
+            }),
+            tool_call_id: msg.tool_call_id.clone(),
         });
     }
 
