@@ -19,6 +19,8 @@ pub enum ActivePopup {
     SlashCommand(CompletionState),
     /// Agent name completion (triggered by `@` token at cursor).
     AgentName(CompletionState),
+    /// Session picker (triggered by `/resume`).
+    SessionPicker(CompletionState),
 }
 
 /// Completion item with display text and optional description.
@@ -122,7 +124,9 @@ impl ActivePopup {
     pub fn extra_height(&self) -> u16 {
         match self {
             ActivePopup::None => 0,
-            ActivePopup::SlashCommand(state) | ActivePopup::AgentName(state) => {
+            ActivePopup::SlashCommand(state)
+            | ActivePopup::AgentName(state)
+            | ActivePopup::SessionPicker(state) => {
                 if state.is_empty() {
                     0
                 } else {
@@ -137,7 +141,9 @@ impl ActivePopup {
     pub fn is_active(&self) -> bool {
         match self {
             ActivePopup::None => false,
-            ActivePopup::SlashCommand(s) | ActivePopup::AgentName(s) => !s.is_empty(),
+            ActivePopup::SlashCommand(s)
+            | ActivePopup::AgentName(s)
+            | ActivePopup::SessionPicker(s) => !s.is_empty(),
         }
     }
 
@@ -145,7 +151,9 @@ impl ActivePopup {
     pub fn render_lines(&self, width: u16) -> Vec<Line<'static>> {
         let state = match self {
             ActivePopup::None => return vec![],
-            ActivePopup::SlashCommand(s) | ActivePopup::AgentName(s) => s,
+            ActivePopup::SlashCommand(s)
+            | ActivePopup::AgentName(s)
+            | ActivePopup::SessionPicker(s) => s,
         };
 
         let items = state.visible_items();
