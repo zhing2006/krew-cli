@@ -414,10 +414,10 @@ impl App {
                     self.insert_indented_lines(terminal, remaining_lines)?;
                 }
 
-                // Build tool call display line: ⚡ tool_name(args)
+                // Build tool call display line: ⚡ **tool_name**(args)
                 let display = format_tool_call_display(&name, &arguments);
                 let yellow = ratatui::style::Style::default().fg(ratatui::style::Color::Yellow);
-                self.insert_tool_line(terminal, "\u{26A1} ", yellow, &display)?;
+                self.insert_tool_line(terminal, "\u{26A1} ", yellow, display)?;
             }
             AgentEvent::ToolCallDone {
                 name: _,
@@ -425,7 +425,7 @@ impl App {
             } => {
                 // Render result line below the tool call: ⎿  summary + blank line
                 let dim = ratatui::style::Style::default().fg(ratatui::style::Color::DarkGray);
-                self.insert_tool_line(terminal, "\u{23BF}  ", dim, &result_summary)?;
+                self.insert_tool_line(terminal, "   \u{23BF}  ", dim, vec![ratatui::text::Span::raw(result_summary)])?;
                 terminal.insert_lines_above(vec![ratatui::text::Line::default()])?;
             }
             AgentEvent::Done(usage) => {
