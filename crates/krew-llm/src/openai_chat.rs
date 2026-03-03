@@ -446,13 +446,7 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                                 if let Some(event) = pending.pop_front() {
                                     return Some((
                                         event,
-                                        (
-                                            sse_stream,
-                                            usage_state,
-                                            tool_calls_accum,
-                                            pending,
-                                            done,
-                                        ),
+                                        (sse_stream, usage_state, tool_calls_accum, pending, done),
                                     ));
                                 }
                                 return None;
@@ -488,13 +482,7 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                                 if let Some(event) = chunk.event {
                                     return Some((
                                         event,
-                                        (
-                                            sse_stream,
-                                            usage_state,
-                                            tool_calls_accum,
-                                            pending,
-                                            done,
-                                        ),
+                                        (sse_stream, usage_state, tool_calls_accum, pending, done),
                                     ));
                                 }
                                 // No event (e.g. usage-only chunk) — continue.
