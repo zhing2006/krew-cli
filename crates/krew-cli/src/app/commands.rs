@@ -10,6 +10,7 @@ use crate::custom_terminal;
 use crate::render;
 
 use super::App;
+use super::agent_display::format_tool_call_display;
 
 impl App {
     /// Execute a slash command.
@@ -231,16 +232,50 @@ impl App {
                     self.insert_user_message(terminal, &[], &msg.content)?;
                 }
                 "assistant" => {
-                    if let Some(agent_name) = &msg.agent_name {
-                        let agent_cfg = self.config.agents.iter().find(|a| &a.name == agent_name);
-                        let display_name = agent_cfg
-                            .map(|a| a.display_name.as_str())
-                            .unwrap_or(agent_name);
-                        let color_name = agent_cfg.map(|a| a.color.as_str()).unwrap_or("white");
-                        self.insert_agent_header(terminal, agent_name, display_name, color_name)?;
+                    if let Some(ref tool_calls) = msg.tool_calls {
+                        // Assistant message with tool calls: show text + tool call lines.
+                        // No header — the header is shown on the final text-only message.
+                        if !msg.content.is_empty() {
+                            let md_lines = render::markdown::render_markdown(&msg.content);
+                            self.insert_indented_lines(terminal, md_lines)?;
+                        }
+                        for tc in tool_calls {
+                            let display = format_tool_call_display(&tc.name, &tc.arguments);
+                            let yellow = Style::default().fg(Color::Yellow);
+                            self.insert_tool_line(terminal, "\u{26A1} ", yellow, display)?;
+                        }
+                    } else {
+                        // Regular text-only assistant message: show header + markdown.
+                        if let Some(agent_name) = &msg.agent_name {
+                            let agent_cfg =
+                                self.config.agents.iter().find(|a| &a.name == agent_name);
+                            let display_name = agent_cfg
+                                .map(|a| a.display_name.as_str())
+                                .unwrap_or(agent_name);
+                            let color_name = agent_cfg.map(|a| a.color.as_str()).unwrap_or("white");
+                            self.insert_agent_header(
+                                terminal,
+                                agent_name,
+                                display_name,
+                                color_name,
+                            )?;
+                        }
+                        let md_lines = render::markdown::render_markdown(&msg.content);
+                        self.insert_indented_lines(terminal, md_lines)?;
                     }
-                    let md_lines = render::markdown::render_markdown(&msg.content);
-                    self.insert_indented_lines(terminal, md_lines)?;
+                }
+                "tool" => {
+                    // Tool result message: show summary line.
+                    let tool_name = msg.agent_name.as_deref().unwrap_or("tool");
+                    let summary = generate_tool_result_summary(tool_name, &msg.content);
+                    let dim = Style::default().fg(Color::DarkGray);
+                    self.insert_tool_line(
+                        terminal,
+                        "   \u{23BF}  ",
+                        dim,
+                        vec![Span::raw(summary)],
+                    )?;
+                    terminal.insert_lines_above(vec![Line::default()])?;
                 }
                 _ => {}
             }
@@ -296,4 +331,18 @@ impl App {
             ))],
         )
     }
+}
+
+/// Generate a short summary for a tool result during resume replay.
+///
+/// Extracts the trailing `(N <unit>)` pattern if present, otherwise
+/// returns a generic "done" string.
+fn generate_tool_result_summary(_tool_name: &str, content: &str) -> String {
+    if let Some(summary) = content
+        .rsplit_once('(')
+        .and_then(|(_, rest)| rest.strip_suffix(')'))
+    {
+        return summary.to_string();
+    }
+    "done".to_string()
 }

@@ -425,10 +425,19 @@ impl App {
             } => {
                 // Render result line below the tool call: ⎿  summary + blank line
                 let dim = ratatui::style::Style::default().fg(ratatui::style::Color::DarkGray);
-                self.insert_tool_line(terminal, "   \u{23BF}  ", dim, vec![ratatui::text::Span::raw(result_summary)])?;
+                self.insert_tool_line(
+                    terminal,
+                    "   \u{23BF}  ",
+                    dim,
+                    vec![ratatui::text::Span::raw(result_summary)],
+                )?;
                 terminal.insert_lines_above(vec![ratatui::text::Line::default()])?;
             }
-            AgentEvent::Done(usage) => {
+            AgentEvent::Done {
+                usage,
+                intermediate_messages,
+                final_text,
+            } => {
                 // Finalize thinking if still active.
                 if self.is_thinking {
                     self.finalize_thinking(terminal)?;
@@ -455,18 +464,22 @@ impl App {
                     entry.1 += usage.completion_tokens;
                 }
 
-                // Add assistant message to history and update last_respondent.
+                // Persist intermediate tool-round messages and final text.
                 if let Some(agent_name) = self.current_agent_name.take() {
                     self.last_respondent = Some(agent_name.clone());
+                    self.messages.extend(intermediate_messages);
                     self.messages.push(ChatMessage::text(
                         ChatRole::Assistant,
-                        std::mem::take(&mut self.current_response_text),
+                        final_text,
                         Some(agent_name),
                     ));
 
                     // Persist session after agent response.
                     self.save_session();
                 }
+
+                // Clear accumulated streaming text (no longer used for message).
+                self.current_response_text.clear();
 
                 // Clear agent status indicator.
                 self.agent_start_time = None;
@@ -482,7 +495,10 @@ impl App {
                 // Chain-trigger next pending agent (if any).
                 self.start_next_agent(terminal)?;
             }
-            AgentEvent::Error(msg) => {
+            AgentEvent::Error {
+                message: msg,
+                intermediate_messages,
+            } => {
                 // Finalize thinking if still active.
                 if self.is_thinking {
                     self.finalize_thinking(terminal)?;
@@ -502,18 +518,22 @@ impl App {
 
                 self.insert_agent_error(terminal, &msg)?;
 
-                // If the agent produced partial output, preserve it in
-                // message history so subsequent agents have full context.
-                if let Some(agent_name) = self.current_agent_name.take()
-                    && !self.current_response_text.is_empty()
-                {
-                    let mut content = std::mem::take(&mut self.current_response_text);
-                    content.push_str(&format!("\n\n[Error: {msg}]"));
-                    self.messages.push(ChatMessage::text(
-                        ChatRole::Assistant,
-                        content,
-                        Some(agent_name),
-                    ));
+                // Preserve intermediate tool-round messages collected before
+                // the error, so they are not lost from session history.
+                if let Some(agent_name) = self.current_agent_name.take() {
+                    self.messages.extend(intermediate_messages);
+
+                    // If the agent produced partial text output, preserve it
+                    // with the error annotation.
+                    if !self.current_response_text.is_empty() {
+                        let mut content = std::mem::take(&mut self.current_response_text);
+                        content.push_str(&format!("\n\n[Error: {msg}]"));
+                        self.messages.push(ChatMessage::text(
+                            ChatRole::Assistant,
+                            content,
+                            Some(agent_name),
+                        ));
+                    }
                 }
 
                 // Clear agent status indicator.
