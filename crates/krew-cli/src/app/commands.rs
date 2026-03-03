@@ -4,7 +4,6 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use krew_core::command::SlashCommand;
-use krew_llm::{ChatMessage, ChatRole};
 
 use crate::completion::{ActivePopup, CompletionItem, CompletionState};
 use crate::custom_terminal;
@@ -210,14 +209,14 @@ impl App {
         terminal: &mut custom_terminal::Terminal,
     ) -> anyhow::Result<()> {
         let path = self.session_dir.join(format!("{session_id}.toml"));
-        let session_file = krew_storage::session_file::load_session(&path)
+        let restored = krew_core::persistence::load_session_from_disk(&path)
             .map_err(|e| anyhow::anyhow!("Failed to load session {session_id}: {e}"))?;
 
-        // Restore session state.
-        self.session_id = session_file.session.id.clone();
-        self.messages.clear();
-        self.agent_token_usage.clear();
-        self.last_respondent = None;
+        // Apply restored state.
+        self.session_id = restored.session_id;
+        self.messages = restored.messages;
+        self.agent_token_usage = restored.token_usage;
+        self.last_respondent = restored.last_respondent;
 
         // Clear screen and show header with restored session ID.
         terminal.clear()?;
@@ -225,29 +224,13 @@ impl App {
         terminal.set_viewport_area(ratatui::layout::Rect::new(0, 0, size.width, 0));
         render::insert_header(terminal, self)?;
 
-        // Convert stored messages back to runtime format and replay visually.
-        for msg in &session_file.messages {
-            let role = match msg.role.as_str() {
-                "system" => ChatRole::System,
-                "user" => ChatRole::User,
-                "assistant" => ChatRole::Assistant,
-                "tool" => ChatRole::Tool,
-                _ => continue,
-            };
-
-            // Track last assistant as last_respondent.
-            if role == ChatRole::Assistant
-                && let Some(name) = &msg.agent_name
-            {
-                self.last_respondent = Some(name.clone());
-            }
-
-            // Replay message on screen.
-            match role {
-                ChatRole::User => {
+        // Replay messages visually (TUI concern).
+        for msg in &restored.session_file.messages {
+            match msg.role.as_str() {
+                "user" => {
                     self.insert_user_message(terminal, &[], &msg.content)?;
                 }
-                ChatRole::Assistant => {
+                "assistant" => {
                     if let Some(agent_name) = &msg.agent_name {
                         let agent_cfg = self.config.agents.iter().find(|a| &a.name == agent_name);
                         let display_name = agent_cfg
@@ -260,24 +243,6 @@ impl App {
                     self.insert_indented_lines(terminal, md_lines)?;
                 }
                 _ => {}
-            }
-
-            self.messages.push(ChatMessage {
-                role,
-                content: msg.content.clone(),
-                name: msg.agent_name.clone(),
-            });
-        }
-
-        // Restore token usage from session metadata.
-        // The stored per-message usage is cumulative, take the last one per agent.
-        for msg in session_file.messages.iter().rev() {
-            if msg.role == "assistant"
-                && let (Some(name), Some(usage)) = (&msg.agent_name, &msg.usage)
-            {
-                self.agent_token_usage
-                    .entry(name.clone())
-                    .or_insert((usage.prompt_tokens, usage.completion_tokens));
             }
         }
 
