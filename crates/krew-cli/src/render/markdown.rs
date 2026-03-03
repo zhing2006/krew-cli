@@ -39,6 +39,8 @@ struct MarkdownRenderer {
     after_list_item_start: bool,
     /// Whether we are inside a blockquote.
     in_blockquote: bool,
+    /// Whether the next block-level element should be preceded by a blank line.
+    needs_newline: bool,
 }
 
 #[derive(Clone)]
@@ -60,6 +62,7 @@ impl MarkdownRenderer {
             list_indent: String::new(),
             after_list_item_start: false,
             in_blockquote: false,
+            needs_newline: false,
         }
     }
 
@@ -130,10 +133,14 @@ impl MarkdownRenderer {
                 }
                 Event::Rule => {
                     self.flush_line();
+                    if self.needs_newline {
+                        self.lines.push(Line::default());
+                    }
                     self.lines.push(Line::from(Span::styled(
                         "───────────────────────────────────────".to_string(),
                         Style::new().fg(Color::DarkGray),
                     )));
+                    self.needs_newline = true;
                 }
                 _ => {}
             }
@@ -143,14 +150,20 @@ impl MarkdownRenderer {
     fn handle_start(&mut self, tag: Tag) {
         match tag {
             Tag::Paragraph => {
-                // Add blank line between paragraphs (but not after list item start).
-                if !self.lines.is_empty() && !self.after_list_item_start {
+                // Insert blank separator between paragraphs (but not after list item start).
+                if self.needs_newline && !self.after_list_item_start {
                     self.flush_line();
+                    self.lines.push(Line::default());
                 }
                 self.after_list_item_start = false;
+                self.needs_newline = false;
             }
             Tag::Heading { level, .. } => {
                 self.flush_line();
+                if self.needs_newline {
+                    self.lines.push(Line::default());
+                }
+                self.needs_newline = false;
                 let style = match level {
                     HeadingLevel::H1 => {
                         Style::new().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
@@ -165,11 +178,19 @@ impl MarkdownRenderer {
             }
             Tag::BlockQuote(_) => {
                 self.flush_line();
+                if self.needs_newline {
+                    self.lines.push(Line::default());
+                }
+                self.needs_newline = false;
                 self.in_blockquote = true;
                 self.push_style(|s| s.fg(Color::Green));
             }
             Tag::CodeBlock(kind) => {
                 self.flush_line();
+                if self.needs_newline {
+                    self.lines.push(Line::default());
+                }
+                self.needs_newline = false;
                 self.in_code_block = true;
                 self.code_block_buf.clear();
                 self.code_block_lang = match kind {
@@ -183,7 +204,11 @@ impl MarkdownRenderer {
             Tag::List(start) => {
                 if self.list_stack.is_empty() {
                     self.flush_line();
+                    if self.needs_newline {
+                        self.lines.push(Line::default());
+                    }
                 }
+                self.needs_newline = false;
                 self.list_stack.push(ListState {
                     ordered: start.is_some(),
                     next_number: start.unwrap_or(1),
@@ -192,6 +217,7 @@ impl MarkdownRenderer {
             }
             Tag::Item => {
                 self.flush_line();
+                self.needs_newline = false;
                 let marker = if let Some(state) = self.list_stack.last_mut() {
                     if state.ordered {
                         let num = state.next_number;
@@ -227,15 +253,18 @@ impl MarkdownRenderer {
         match tag {
             TagEnd::Paragraph => {
                 self.flush_line();
+                self.needs_newline = true;
             }
             TagEnd::Heading(_) => {
                 self.flush_line();
                 self.pop_style();
+                self.needs_newline = true;
             }
             TagEnd::BlockQuote(_) => {
                 self.flush_line();
                 self.in_blockquote = false;
                 self.pop_style();
+                self.needs_newline = true;
             }
             TagEnd::CodeBlock => {
                 self.in_code_block = false;
@@ -245,6 +274,7 @@ impl MarkdownRenderer {
                 let code = code.trim_end_matches('\n');
                 let highlighted = highlight_code_to_lines(code, lang.as_deref());
                 self.lines.extend(highlighted);
+                self.needs_newline = true;
             }
             TagEnd::List(_) => {
                 self.list_stack.pop();
@@ -252,9 +282,11 @@ impl MarkdownRenderer {
                 if self.list_stack.is_empty() {
                     self.flush_line();
                 }
+                self.needs_newline = true;
             }
             TagEnd::Item => {
                 self.flush_line();
+                self.after_list_item_start = false;
             }
             TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
                 self.pop_style();
@@ -405,5 +437,78 @@ mod tests {
         let span = &lines[0].spans[0];
         assert_eq!(span.style.fg, Some(Color::Cyan));
         assert!(span.style.add_modifier.contains(Modifier::UNDERLINED));
+    }
+
+    #[test]
+    fn test_paragraph_spacing() {
+        let lines = render_markdown("para 1\n\npara 2\n\npara 3");
+        let texts: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        // Expect: ["para 1", "", "para 2", "", "para 3"]
+        assert_eq!(texts, vec!["para 1", "", "para 2", "", "para 3"]);
+    }
+
+    #[test]
+    fn test_tight_list_no_blanks() {
+        let lines = render_markdown("- item 1\n- item 2\n- item 3");
+        let texts: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        // Tight list items should NOT have blank lines between them.
+        assert_eq!(texts.len(), 3);
+        assert!(texts[0].contains("item 1"));
+        assert!(texts[1].contains("item 2"));
+        assert!(texts[2].contains("item 3"));
+    }
+
+    #[test]
+    fn test_paragraph_then_list_spacing() {
+        let lines = render_markdown("Some text.\n\n- item 1\n- item 2");
+        let texts: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        // Blank separator between paragraph and list.
+        assert_eq!(texts[0], "Some text.");
+        assert_eq!(texts[1], "");
+        assert!(texts[2].contains("item 1"));
+        assert!(texts[3].contains("item 2"));
+    }
+
+    #[test]
+    fn test_list_then_paragraph_has_blank() {
+        // Blank line between list end and following paragraph.
+        let lines = render_markdown("- item 1\n- item 2\n\nSome text.");
+        let texts: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert!(texts[0].contains("item 1"));
+        assert!(texts[1].contains("item 2"));
+        assert_eq!(texts[2], "");
+        assert_eq!(texts[3], "Some text.");
+    }
+
+    #[test]
+    fn test_heading_list_heading_spacing() {
+        let md = "**Section 1**\n\n* item a\n* item b\n\n**Section 2**\n\n* item c";
+        let lines = render_markdown(md);
+        let texts: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        // heading, blank, item, item, blank, heading, blank, item
+        assert_eq!(texts.len(), 8);
+        assert!(texts[0].contains("Section 1"));
+        assert_eq!(texts[1], ""); // blank before list
+        assert!(texts[2].contains("item a"));
+        assert!(texts[3].contains("item b"));
+        assert_eq!(texts[4], ""); // blank after list
+        assert!(texts[5].contains("Section 2"));
+        assert_eq!(texts[6], ""); // blank before list
+        assert!(texts[7].contains("item c"));
     }
 }
