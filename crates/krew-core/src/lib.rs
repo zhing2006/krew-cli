@@ -4,7 +4,6 @@
 pub mod agent;
 pub mod command;
 pub mod event;
-pub mod message;
+pub mod persistence;
 pub mod process_stats;
 pub mod router;
-pub mod session;

@@ -1,3 +1,5 @@
+use std::collections::{HashSet, VecDeque};
+
 /// Target addressee for a user message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Addressee {
@@ -50,5 +52,66 @@ pub fn parse_input(input: &str, known_agents: &[String]) -> anyhow::Result<(Addr
         ))
     } else {
         Ok((Addressee::Multiple(matched), message))
+    }
+}
+
+/// Resolve an `Addressee` into an ordered queue of agent names to dispatch.
+///
+/// - `All` uses `reply_order`, filtered to agents with active LLM clients.
+/// - `Multiple` preserves the `@` appearance order.
+/// - `Single` and `LastRespondent` produce a single-element queue.
+pub fn resolve_dispatch_queue(
+    addressee: &Addressee,
+    reply_order: &[String],
+    available_agents: &HashSet<String>,
+    last_respondent: Option<&str>,
+) -> VecDeque<String> {
+    let mut queue = VecDeque::new();
+
+    match addressee {
+        Addressee::All => {
+            for name in reply_order {
+                if available_agents.contains(name) {
+                    queue.push_back(name.clone());
+                }
+            }
+        }
+        Addressee::Multiple(names) => {
+            for name in names {
+                if available_agents.contains(name) {
+                    queue.push_back(name.clone());
+                }
+            }
+        }
+        Addressee::Single(name) => {
+            queue.push_back(name.clone());
+        }
+        Addressee::LastRespondent => {
+            if let Some(name) = last_respondent {
+                queue.push_back(name.to_string());
+            }
+        }
+    }
+
+    queue
+}
+
+/// Resolve the list of target agent names for display purposes (e.g. colored
+/// routing dots in the TUI).
+pub fn resolve_target_names<'a>(
+    addressee: &'a Addressee,
+    reply_order: &'a [String],
+    available_agents: &HashSet<String>,
+    last_respondent: Option<&'a str>,
+) -> Vec<&'a str> {
+    match addressee {
+        Addressee::All => reply_order
+            .iter()
+            .filter(|name| available_agents.contains(name.as_str()))
+            .map(|n| n.as_str())
+            .collect(),
+        Addressee::Single(name) => vec![name.as_str()],
+        Addressee::Multiple(names) => names.iter().map(|n| n.as_str()).collect(),
+        Addressee::LastRespondent => last_respondent.map(|n| vec![n]).unwrap_or_default(),
     }
 }

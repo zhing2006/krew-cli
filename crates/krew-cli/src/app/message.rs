@@ -63,25 +63,13 @@ impl App {
         }
 
         // Resolve target agent names for colored dots on user message.
-        let target_names: Vec<&str> = match &addressee {
-            Addressee::All => self
-                .config
-                .settings
-                .reply_order
-                .iter()
-                .filter(|name| self.agents.contains_key(*name))
-                .map(|n| n.as_str())
-                .collect(),
-            Addressee::Single(name) => vec![name.as_str()],
-            Addressee::Multiple(names) => names.iter().map(|n| n.as_str()).collect(),
-            Addressee::LastRespondent => {
-                if let Some(ref name) = resolved_last {
-                    vec![name.as_str()]
-                } else {
-                    vec![]
-                }
-            }
-        };
+        let available: std::collections::HashSet<String> = self.agents.keys().cloned().collect();
+        let target_names = router::resolve_target_names(
+            &addressee,
+            &self.config.settings.reply_order,
+            &available,
+            resolved_last.as_deref(),
+        );
 
         // Insert user message with colored routing dots: > ●●● message
         self.insert_user_message(terminal, &target_names, trimmed)?;
@@ -96,35 +84,13 @@ impl App {
         // Persist session after user message.
         self.save_session();
 
-        // Build the agent dispatch queue based on addressee type.
-        self.pending_agents.clear();
-
-        match &addressee {
-            Addressee::All => {
-                // @all: use reply_order, filter to agents with LLM clients.
-                for name in &self.config.settings.reply_order {
-                    if self.agents.contains_key(name) {
-                        self.pending_agents.push_back(name.clone());
-                    }
-                }
-            }
-            Addressee::Multiple(names) => {
-                // @name1 @name2: use @ appearance order.
-                for name in names {
-                    if self.agents.contains_key(name) {
-                        self.pending_agents.push_back(name.clone());
-                    }
-                }
-            }
-            Addressee::Single(name) => {
-                self.pending_agents.push_back(name.clone());
-            }
-            Addressee::LastRespondent => {
-                if let Some(name) = resolved_last {
-                    self.pending_agents.push_back(name);
-                }
-            }
-        }
+        // Build the agent dispatch queue via krew-core router.
+        self.pending_agents = router::resolve_dispatch_queue(
+            &addressee,
+            &self.config.settings.reply_order,
+            &available,
+            resolved_last.as_deref(),
+        );
 
         // Start the first agent in the queue.
         self.start_next_agent(terminal)?;
