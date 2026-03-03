@@ -23,7 +23,7 @@
 | 4 | [单 LLM 接入 + Markdown 渲染](./phases/phase-04-openai-chat.md) | OpenAI Chat Completions、流式输出、syntect 高亮 | ✅ 已完成 | LlmClient trait + StreamEvent + Usage 已定义 |
 | 5 | [更多 LLM Provider](./phases/phase-05-more-providers.md) | Anthropic、Google、OpenAI Responses、Compatible、Azure | ✅ 已完成 | 各 Provider 文件已创建（仅 header stub） |
 | 6 | [多 Agent 协作](./phases/phase-06-multi-agent.md) | @all 串行执行、上下文共享、错误隔离 | ✅ 已完成 | AgentRuntime 结构体、build_system_prompt() 已实现（含测试） |
-| 7 | [会话持久化](./phases/phase-07-session-persistence.md) | TOML 存储、/new、/resume、实时保存 | ⬜ 待开始 | Session 结构体、session_file.rs 有 todo!() 占位 |
+| 7 | [会话持久化](./phases/phase-07-session-persistence.md) | TOML 存储、/new、/resume、实时保存 | ✅ 已完成 | session_file.rs + history_file.rs 实现、/new /resume 命令、--resume CLI、输入历史持久化 |
 | 8 | [工具系统 — 只读](./phases/phase-08-tools-readonly.md) | read_file、glob、grep、Agent Loop 工具调用 | ⬜ 待开始 | Tool trait + ToolResult 已定义、builtin/ 各文件已创建（仅 header stub） |
 | 9 | [工具系统 — 写入 + 审批](./phases/phase-09-tools-write-approval.md) | write_file、edit_file、shell、审批流 | ⬜ 待开始 | — |
 | 10 | [MCP 集成](./phases/phase-10-mcp.md) | MCP Client、工具发现、信任级别 | ⬜ 待开始 | mcp.rs 已创建（仅 header stub） |
