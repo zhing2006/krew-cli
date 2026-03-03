@@ -29,12 +29,16 @@
 - **WHEN** 用户输入 `/agents`
 - **THEN** 系统 SHALL 显示每个 Agent 的 `[name]`（带颜色）、`display_name`、`provider/model`、token 统计（占位显示 0）
 
-### Requirement: /clear 命令
-`/clear` SHALL 清除 viewport 上方的可见内容，不影响会话历史数据。
+### Requirement: /new 命令
+The `/new` command (also `/clear`) SHALL save the current session to disk, clear the conversation context, create a new session with a fresh UUID, clear the screen, and display the new header with the new session ID.
 
-#### Scenario: 清屏
-- **WHEN** 用户输入 `/clear`
-- **THEN** 终端 SHALL 清除可见内容并重新显示头部框，输入区域保持不变
+#### Scenario: Execute /new with active session
+- **WHEN** the user runs `/new` during an active session with messages
+- **THEN** the current session SHALL be saved, conversation messages and token usage SHALL be cleared, a new session id SHALL be generated, the screen SHALL be cleared, and the header SHALL show the new session id
+
+#### Scenario: Execute /new with empty session
+- **WHEN** the user runs `/new` on a session with no messages
+- **THEN** the empty session SHALL NOT be saved to disk, a new session id SHALL be generated, and the screen SHALL be cleared with a new header
 
 ### Requirement: /quit 命令
 `/quit` SHALL 正常退出程序。
@@ -54,16 +58,27 @@
 - **WHEN** 某个统计指标在当前平台不可用
 - **THEN** 该指标 SHALL 显示为 `N/A`
 
+### Requirement: /resume command
+The `/resume` command SHALL list recent sessions and allow the user to select one to resume.
+
+#### Scenario: Execute /resume with available sessions
+- **WHEN** the user runs `/resume` and there are saved sessions
+- **THEN** the system SHALL display a numbered list of sessions (most recent first) showing: index, date/time, agent names, and first message preview (truncated to 40 chars)
+
+#### Scenario: Execute /resume with no saved sessions
+- **WHEN** the user runs `/resume` and there are no saved sessions
+- **THEN** the system SHALL display an info message: "No saved sessions found"
+
+#### Scenario: User selects a session to resume
+- **WHEN** the user inputs a valid session number after `/resume` listing
+- **THEN** the current session SHALL be saved (if non-empty), the selected session SHALL be loaded, and a confirmation message SHALL be displayed
+
+#### Scenario: /resume shows help text
+- **WHEN** the `/help` command lists available commands
+- **THEN** `/resume` SHALL be described as "Resume a previous session"
+
 ### Requirement: 占位命令
-`/new`、`/resume`、`/compact` SHALL 在 viewport 上方显示"功能待实现"提示。
-
-#### Scenario: /new 占位
-- **WHEN** 用户输入 `/new`
-- **THEN** 系统 SHALL 在 viewport 上方显示提示信息表明该功能待实现
-
-#### Scenario: /resume 占位
-- **WHEN** 用户输入 `/resume`
-- **THEN** 系统 SHALL 在 viewport 上方显示提示信息表明该功能待实现
+`/compact` SHALL 在 viewport 上方显示"功能待实现"提示。
 
 #### Scenario: /compact 占位
 - **WHEN** 用户输入 `/compact`

@@ -29,44 +29,79 @@ impl App {
         render::insert_lines(terminal, vec![line])
     }
 
-    /// Insert streaming content lines with 2-space indentation.
+    /// Insert content lines with 2-space indentation and trailing blank.
+    ///
+    /// Use for final output (e.g. Done event, resume replay) where a
+    /// trailing blank line is desired for visual spacing.
     pub(crate) fn insert_indented_lines(
         &self,
         terminal: &mut custom_terminal::Terminal,
         lines: Vec<Line<'static>>,
     ) -> anyhow::Result<()> {
-        let indented: Vec<Line<'static>> = lines
+        let indented = Self::indent_lines(lines);
+        render::insert_lines(terminal, indented)
+    }
+
+    /// Insert streaming content lines with 2-space indentation (no trailing blank).
+    ///
+    /// Use during streaming where multiple batches form one logical block.
+    /// The trailing blank is added only at the end (via `insert_indented_lines`).
+    pub(crate) fn insert_indented_lines_streaming(
+        &self,
+        terminal: &mut custom_terminal::Terminal,
+        lines: Vec<Line<'static>>,
+    ) -> anyhow::Result<()> {
+        let indented = Self::indent_lines(lines);
+        terminal.insert_lines_above(indented)?;
+        Ok(())
+    }
+
+    /// Insert thinking content lines in gray with 2-space indentation and trailing blank.
+    pub(crate) fn insert_thinking_lines(
+        &self,
+        terminal: &mut custom_terminal::Terminal,
+        lines: Vec<Line<'static>>,
+    ) -> anyhow::Result<()> {
+        let indented = Self::gray_indent_lines(lines);
+        render::insert_lines(terminal, indented)
+    }
+
+    /// Insert streaming thinking content lines in gray (no trailing blank).
+    pub(crate) fn insert_thinking_lines_streaming(
+        &self,
+        terminal: &mut custom_terminal::Terminal,
+        lines: Vec<Line<'static>>,
+    ) -> anyhow::Result<()> {
+        let indented = Self::gray_indent_lines(lines);
+        terminal.insert_lines_above(indented)?;
+        Ok(())
+    }
+
+    /// Add 2-space indent to each line.
+    fn indent_lines(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+        lines
             .into_iter()
             .map(|line| {
                 let mut spans = vec![Span::raw("  ".to_string())];
                 spans.extend(line.spans);
                 Line::from(spans)
             })
-            .collect();
-
-        render::insert_lines(terminal, indented)
+            .collect()
     }
 
-    /// Insert thinking content lines in gray with 2-space indentation.
-    pub(crate) fn insert_thinking_lines(
-        &self,
-        terminal: &mut custom_terminal::Terminal,
-        lines: Vec<Line<'static>>,
-    ) -> anyhow::Result<()> {
+    /// Add 2-space indent and override styles to gray.
+    fn gray_indent_lines(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
         let gray = Style::default().fg(Color::DarkGray);
-        let indented: Vec<Line<'static>> = lines
+        lines
             .into_iter()
             .map(|line| {
                 let mut spans = vec![Span::raw("  ".to_string())];
-                // Override all span styles to gray.
                 for span in line.spans {
                     spans.push(Span::styled(span.content, gray));
                 }
                 Line::from(spans)
             })
-            .collect();
-
-        render::insert_lines(terminal, indented)
+            .collect()
     }
 
     /// Insert error line: `  ✗ {message}`
