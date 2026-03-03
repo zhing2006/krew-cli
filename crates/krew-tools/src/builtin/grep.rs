@@ -11,7 +11,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use walkdir::WalkDir;
 
-use crate::{ToolError, ToolHandler, ToolResult, ToolSpec, validate_path};
+use crate::{
+    ToolError, ToolHandler, ToolResult, ToolSpec, check_binary, check_file_size, validate_path,
+};
 
 const DEFAULT_LIMIT: usize = 100;
 const MAX_LIMIT: usize = 2000;
@@ -175,6 +177,11 @@ impl ToolHandler for GrepTool {
         let mut match_count = 0;
 
         'outer: for file_path in &files {
+            // Skip oversized or binary files.
+            if check_file_size(file_path).is_some() || check_binary(file_path).is_some() {
+                continue;
+            }
+
             let file = match std::fs::File::open(file_path) {
                 Ok(f) => f,
                 Err(_) => continue,
