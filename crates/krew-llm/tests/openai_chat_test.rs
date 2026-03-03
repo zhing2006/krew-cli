@@ -4,21 +4,9 @@ use krew_llm::{ChatMessage, ChatRole, OtherAgentRole};
 #[test]
 fn convert_messages_basic_roles() {
     let messages = vec![
-        ChatMessage {
-            role: ChatRole::System,
-            content: "You are helpful.".into(),
-            name: None,
-        },
-        ChatMessage {
-            role: ChatRole::User,
-            content: "Hello".into(),
-            name: None,
-        },
-        ChatMessage {
-            role: ChatRole::Assistant,
-            content: "Hi there!".into(),
-            name: Some("gpt".into()),
-        },
+        ChatMessage::text(ChatRole::System, "You are helpful.", None),
+        ChatMessage::text(ChatRole::User, "Hello", None),
+        ChatMessage::text(ChatRole::Assistant, "Hi there!", Some("gpt".into())),
     ];
 
     let result = convert_messages(&messages, "gpt", &OtherAgentRole::User);
@@ -31,11 +19,11 @@ fn convert_messages_basic_roles() {
 
 #[test]
 fn convert_messages_other_agent_content_prefix() {
-    let messages = vec![ChatMessage {
-        role: ChatRole::Assistant,
-        content: "I suggest using VecDeque...".into(),
-        name: Some("opus".into()),
-    }];
+    let messages = vec![ChatMessage::text(
+        ChatRole::Assistant,
+        "I suggest using VecDeque...",
+        Some("opus".into()),
+    )];
 
     let result = convert_messages(&messages, "gpt", &OtherAgentRole::User);
     assert_eq!(result[0]["role"], "user");
@@ -45,11 +33,11 @@ fn convert_messages_other_agent_content_prefix() {
 
 #[test]
 fn convert_messages_other_agent_as_assistant() {
-    let messages = vec![ChatMessage {
-        role: ChatRole::Assistant,
-        content: "I suggest using VecDeque...".into(),
-        name: Some("opus".into()),
-    }];
+    let messages = vec![ChatMessage::text(
+        ChatRole::Assistant,
+        "I suggest using VecDeque...",
+        Some("opus".into()),
+    )];
 
     let result = convert_messages(&messages, "gpt", &OtherAgentRole::Assistant);
     assert_eq!(result[0]["role"], "assistant");
@@ -59,11 +47,7 @@ fn convert_messages_other_agent_as_assistant() {
 
 #[test]
 fn convert_messages_user_no_prefix() {
-    let messages = vec![ChatMessage {
-        role: ChatRole::User,
-        content: "Hello".into(),
-        name: None,
-    }];
+    let messages = vec![ChatMessage::text(ChatRole::User, "Hello", None)];
 
     let result = convert_messages(&messages, "gpt", &OtherAgentRole::User);
     assert_eq!(result[0]["role"], "user");

@@ -111,56 +111,106 @@ pub fn convert_messages(
         Some(system_texts.join("\n\n"))
     };
 
-    // Convert non-system messages.
-    let role_contents: Vec<RoleContent> = messages
-        .iter()
-        .filter(|m| m.role != ChatRole::System)
-        .map(|msg| {
-            let is_other_agent = matches!(&msg.role, ChatRole::Assistant)
-                && msg
-                    .name
-                    .as_ref()
-                    .is_some_and(|name| name != self_agent_name);
+    let mut result: Vec<serde_json::Value> = Vec::new();
+    let mut pending: Vec<RoleContent> = Vec::new();
 
-            let role = match &msg.role {
-                ChatRole::User | ChatRole::Tool => "user",
-                ChatRole::Assistant if is_other_agent => match other_agent_role {
-                    OtherAgentRole::User => "user",
-                    OtherAgentRole::Assistant => "assistant",
-                },
-                ChatRole::Assistant => "assistant",
-                ChatRole::System => unreachable!(),
-            };
+    for msg in messages.iter().filter(|m| m.role != ChatRole::System) {
+        // Tool result messages: Anthropic uses role: "user" with tool_result content block.
+        if msg.role == ChatRole::Tool {
+            flush_pending_anthropic(&mut pending, &mut result);
 
-            let content = if is_other_agent {
-                let name = msg.name.as_deref().unwrap_or("unknown");
-                format!("[{name}] {}", msg.content)
-            } else {
-                msg.content.clone()
-            };
-
-            RoleContent {
-                role: role.to_string(),
-                content,
+            let mut content_block = serde_json::json!({
+                "type": "tool_result",
+                "content": msg.content,
+            });
+            if let Some(ref id) = msg.tool_call_id {
+                content_block["tool_use_id"] = serde_json::json!(id);
             }
-        })
-        .collect();
+            result.push(serde_json::json!({
+                "role": "user",
+                "content": [content_block],
+            }));
+            continue;
+        }
 
-    // Merge consecutive same-role messages.
-    let merged = merge_consecutive_same_role(role_contents);
+        // Assistant messages with tool_calls: Anthropic uses tool_use content blocks.
+        if let (ChatRole::Assistant, Some(tcs)) = (&msg.role, &msg.tool_calls) {
+            flush_pending_anthropic(&mut pending, &mut result);
 
-    // Format into JSON.
-    let messages = merged
-        .into_iter()
-        .map(|rc| {
-            serde_json::json!({
-                "role": rc.role,
-                "content": rc.content,
-            })
-        })
-        .collect();
+            let mut content_blocks: Vec<serde_json::Value> = Vec::new();
+            if !msg.content.is_empty() {
+                content_blocks.push(serde_json::json!({
+                    "type": "text",
+                    "text": msg.content,
+                }));
+            }
+            for tc in tcs {
+                let input: serde_json::Value =
+                    serde_json::from_str(&tc.arguments).unwrap_or_default();
+                content_blocks.push(serde_json::json!({
+                    "type": "tool_use",
+                    "id": tc.id,
+                    "name": tc.name,
+                    "input": input,
+                }));
+            }
+            result.push(serde_json::json!({
+                "role": "assistant",
+                "content": content_blocks,
+            }));
+            continue;
+        }
 
-    ConvertedMessages { system, messages }
+        // Regular messages.
+        let is_other_agent = matches!(&msg.role, ChatRole::Assistant)
+            && msg
+                .name
+                .as_ref()
+                .is_some_and(|name| name != self_agent_name);
+
+        let role = match &msg.role {
+            ChatRole::User | ChatRole::Tool => "user",
+            ChatRole::Assistant if is_other_agent => match other_agent_role {
+                OtherAgentRole::User => "user",
+                OtherAgentRole::Assistant => "assistant",
+            },
+            ChatRole::Assistant => "assistant",
+            ChatRole::System => unreachable!(),
+        };
+
+        let content = if is_other_agent {
+            let name = msg.name.as_deref().unwrap_or("unknown");
+            format!("[{name}] {}", msg.content)
+        } else {
+            msg.content.clone()
+        };
+
+        pending.push(RoleContent {
+            role: role.to_string(),
+            content,
+        });
+    }
+
+    flush_pending_anthropic(&mut pending, &mut result);
+
+    ConvertedMessages {
+        system,
+        messages: result,
+    }
+}
+
+/// Merge and flush pending role-content items into the result vector.
+fn flush_pending_anthropic(pending: &mut Vec<RoleContent>, result: &mut Vec<serde_json::Value>) {
+    if pending.is_empty() {
+        return;
+    }
+    let merged = merge_consecutive_same_role(std::mem::take(pending));
+    for rc in merged {
+        result.push(serde_json::json!({
+            "role": rc.role,
+            "content": rc.content,
+        }));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -439,6 +489,7 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                                         id: state.tool_id.clone(),
                                         name: state.tool_name.clone(),
                                         arguments: state.tool_args.clone(),
+                                        thought_signature: None,
                                     };
                                     state.current_block_type = None;
                                     state.tool_id.clear();
@@ -693,11 +744,11 @@ mod tests {
 
     #[test]
     fn convert_system_to_top_level() {
-        let messages = vec![ChatMessage {
-            role: ChatRole::System,
-            content: "you are helpful".to_string(),
-            name: None,
-        }];
+        let messages = vec![ChatMessage::text(
+            ChatRole::System,
+            "you are helpful".to_string(),
+            None,
+        )];
         let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
         assert_eq!(result.system.as_deref(), Some("you are helpful"));
         assert!(result.messages.is_empty());
@@ -706,16 +757,8 @@ mod tests {
     #[test]
     fn convert_multiple_system_merged() {
         let messages = vec![
-            ChatMessage {
-                role: ChatRole::System,
-                content: "part 1".to_string(),
-                name: None,
-            },
-            ChatMessage {
-                role: ChatRole::System,
-                content: "part 2".to_string(),
-                name: None,
-            },
+            ChatMessage::text(ChatRole::System, "part 1".to_string(), None),
+            ChatMessage::text(ChatRole::System, "part 2".to_string(), None),
         ];
         let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
         assert_eq!(result.system.as_deref(), Some("part 1\n\npart 2"));
@@ -723,11 +766,7 @@ mod tests {
 
     #[test]
     fn convert_user_message() {
-        let messages = vec![ChatMessage {
-            role: ChatRole::User,
-            content: "hello".to_string(),
-            name: None,
-        }];
+        let messages = vec![ChatMessage::text(ChatRole::User, "hello".to_string(), None)];
         let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
         assert_eq!(result.messages[0]["role"], "user");
         assert_eq!(result.messages[0]["content"], "hello");
@@ -735,11 +774,11 @@ mod tests {
 
     #[test]
     fn convert_current_agent_assistant() {
-        let messages = vec![ChatMessage {
-            role: ChatRole::Assistant,
-            content: "my reply".to_string(),
-            name: Some("agent1".to_string()),
-        }];
+        let messages = vec![ChatMessage::text(
+            ChatRole::Assistant,
+            "my reply".to_string(),
+            Some("agent1".to_string()),
+        )];
         let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
         assert_eq!(result.messages[0]["role"], "assistant");
         assert_eq!(result.messages[0]["content"], "my reply");
@@ -747,11 +786,11 @@ mod tests {
 
     #[test]
     fn convert_other_agent_to_user() {
-        let messages = vec![ChatMessage {
-            role: ChatRole::Assistant,
-            content: "other reply".to_string(),
-            name: Some("agent2".to_string()),
-        }];
+        let messages = vec![ChatMessage::text(
+            ChatRole::Assistant,
+            "other reply".to_string(),
+            Some("agent2".to_string()),
+        )];
         let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
         assert_eq!(result.messages[0]["role"], "user");
         assert_eq!(result.messages[0]["content"], "[agent2] other reply");
@@ -759,11 +798,11 @@ mod tests {
 
     #[test]
     fn convert_other_agent_as_assistant() {
-        let messages = vec![ChatMessage {
-            role: ChatRole::Assistant,
-            content: "other reply".to_string(),
-            name: Some("agent2".to_string()),
-        }];
+        let messages = vec![ChatMessage::text(
+            ChatRole::Assistant,
+            "other reply".to_string(),
+            Some("agent2".to_string()),
+        )];
         let result = convert_messages(&messages, "agent1", &OtherAgentRole::Assistant);
         assert_eq!(result.messages[0]["role"], "assistant");
         assert_eq!(result.messages[0]["content"], "[agent2] other reply");
@@ -772,16 +811,16 @@ mod tests {
     #[test]
     fn convert_consecutive_user_merged() {
         let messages = vec![
-            ChatMessage {
-                role: ChatRole::Assistant,
-                content: "reply A".to_string(),
-                name: Some("agentA".to_string()),
-            },
-            ChatMessage {
-                role: ChatRole::Assistant,
-                content: "reply B".to_string(),
-                name: Some("agentB".to_string()),
-            },
+            ChatMessage::text(
+                ChatRole::Assistant,
+                "reply A".to_string(),
+                Some("agentA".to_string()),
+            ),
+            ChatMessage::text(
+                ChatRole::Assistant,
+                "reply B".to_string(),
+                Some("agentB".to_string()),
+            ),
         ];
         let result = convert_messages(&messages, "agentC", &OtherAgentRole::User);
         assert_eq!(result.messages.len(), 1);
@@ -795,21 +834,9 @@ mod tests {
     #[test]
     fn convert_three_agents_merged() {
         let messages = vec![
-            ChatMessage {
-                role: ChatRole::Assistant,
-                content: "a".to_string(),
-                name: Some("a1".to_string()),
-            },
-            ChatMessage {
-                role: ChatRole::Assistant,
-                content: "b".to_string(),
-                name: Some("a2".to_string()),
-            },
-            ChatMessage {
-                role: ChatRole::Assistant,
-                content: "c".to_string(),
-                name: Some("a3".to_string()),
-            },
+            ChatMessage::text(ChatRole::Assistant, "a".to_string(), Some("a1".to_string())),
+            ChatMessage::text(ChatRole::Assistant, "b".to_string(), Some("a2".to_string())),
+            ChatMessage::text(ChatRole::Assistant, "c".to_string(), Some("a3".to_string())),
         ];
         let result = convert_messages(&messages, "me", &OtherAgentRole::User);
         assert_eq!(result.messages.len(), 1);
@@ -818,16 +845,12 @@ mod tests {
     #[test]
     fn convert_alternating_no_merge() {
         let messages = vec![
-            ChatMessage {
-                role: ChatRole::User,
-                content: "hi".to_string(),
-                name: None,
-            },
-            ChatMessage {
-                role: ChatRole::Assistant,
-                content: "hello".to_string(),
-                name: Some("agent1".to_string()),
-            },
+            ChatMessage::text(ChatRole::User, "hi".to_string(), None),
+            ChatMessage::text(
+                ChatRole::Assistant,
+                "hello".to_string(),
+                Some("agent1".to_string()),
+            ),
         ];
         let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
         assert_eq!(result.messages.len(), 2);
@@ -836,21 +859,13 @@ mod tests {
     #[test]
     fn convert_system_in_middle_separated() {
         let messages = vec![
-            ChatMessage {
-                role: ChatRole::User,
-                content: "hi".to_string(),
-                name: None,
-            },
-            ChatMessage {
-                role: ChatRole::System,
-                content: "be nice".to_string(),
-                name: None,
-            },
-            ChatMessage {
-                role: ChatRole::Assistant,
-                content: "hello".to_string(),
-                name: Some("agent1".to_string()),
-            },
+            ChatMessage::text(ChatRole::User, "hi".to_string(), None),
+            ChatMessage::text(ChatRole::System, "be nice".to_string(), None),
+            ChatMessage::text(
+                ChatRole::Assistant,
+                "hello".to_string(),
+                Some("agent1".to_string()),
+            ),
         ];
         let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
         assert_eq!(result.system.as_deref(), Some("be nice"));

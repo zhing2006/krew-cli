@@ -104,6 +104,28 @@ impl App {
             .collect()
     }
 
+    /// Insert a tool display line with 2-space indent and dimmed text.
+    ///
+    /// The `prefix` and `prefix_style` control the leading symbol:
+    /// - Start: yellow `⚡ `
+    /// - Done:  dim `⎿  `
+    pub(crate) fn insert_tool_line(
+        &self,
+        terminal: &mut custom_terminal::Terminal,
+        prefix: &str,
+        prefix_style: Style,
+        display: &str,
+    ) -> anyhow::Result<()> {
+        let line = Line::from(vec![
+            Span::raw("  "),
+            Span::styled(prefix.to_string(), prefix_style),
+            Span::raw(display.to_string()),
+        ]);
+
+        terminal.insert_lines_above(vec![line])?;
+        Ok(())
+    }
+
     /// Insert error line: `  ✗ {message}`
     pub(crate) fn insert_agent_error(
         &self,
@@ -120,3 +142,33 @@ impl App {
         render::insert_lines(terminal, vec![line])
     }
 }
+
+/// Format a tool call start display: `read_file("src/main.rs", offset=10)`
+pub(crate) fn format_tool_call_display(name: &str, arguments: &str) -> String {
+    let args: serde_json::Value = serde_json::from_str(arguments).unwrap_or_default();
+
+    let params = match args.as_object() {
+        Some(obj) => {
+            let parts: Vec<String> = obj
+                .iter()
+                .map(|(key, val)| {
+                    let display = match val {
+                        serde_json::Value::String(s) => format!("\"{s}\""),
+                        other => other.to_string(),
+                    };
+                    // First parameter shows value only, rest show key=value.
+                    if obj.keys().next() == Some(key) {
+                        display
+                    } else {
+                        format!("{key}={display}")
+                    }
+                })
+                .collect();
+            parts.join(", ")
+        }
+        None => String::new(),
+    };
+
+    format!("{name}({params})")
+}
+
