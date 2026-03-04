@@ -10,7 +10,7 @@ use crate::custom_terminal;
 use crate::render;
 
 use super::App;
-use super::agent_display::format_tool_call_display;
+use super::agent_display::{format_tool_call_display, render_tool_diff_preview};
 
 impl App {
     /// Execute a slash command.
@@ -243,6 +243,13 @@ impl App {
                             let display = format_tool_call_display(&tc.name, &tc.arguments);
                             let yellow = Style::default().fg(Color::Yellow);
                             self.insert_tool_line(terminal, "\u{26A1} ", yellow, display)?;
+
+                            // Render diff preview for write/edit tools (same as streaming).
+                            let width = terminal.size().map(|s| s.width as usize).unwrap_or(80);
+                            let preview = render_tool_diff_preview(&tc.name, &tc.arguments, width);
+                            if !preview.is_empty() {
+                                terminal.insert_lines_above(preview)?;
+                            }
                         }
                     } else {
                         // Regular text-only assistant message: show header + markdown.
@@ -265,8 +272,15 @@ impl App {
                     }
                 }
                 "tool" => {
-                    // Tool result message: show summary line.
+                    // Tool result message: show shell output and summary line.
                     let tool_name = msg.agent_name.as_deref().unwrap_or("tool");
+
+                    // Render shell output with separators (same as streaming).
+                    if tool_name == "shell" {
+                        let width = terminal.size().map(|s| s.width as usize).unwrap_or(80);
+                        render_resume_shell_output(terminal, &msg.content, width)?;
+                    }
+
                     let summary = generate_tool_result_summary(tool_name, &msg.content);
                     let dim = Style::default().fg(Color::DarkGray);
                     self.insert_tool_line(
@@ -345,4 +359,56 @@ fn generate_tool_result_summary(_tool_name: &str, content: &str) -> String {
         return summary.to_string();
     }
     "done".to_string()
+}
+
+/// Render shell output with separators during resume replay.
+///
+/// Extracts the output portion from shell tool result content (stripping
+/// the trailing summary like `(exit code N)` or `(no output, ...)`), then
+/// renders it with `────` separators and 4-space indentation, matching the
+/// streaming display format.
+fn render_resume_shell_output(
+    terminal: &mut custom_terminal::Terminal,
+    content: &str,
+    width: usize,
+) -> anyhow::Result<()> {
+    // Extract output lines by stripping the trailing summary.
+    // Content formats:
+    //   "(no output, exit code N)"         → no output to render
+    //   "output text"                      → full content is output (success)
+    //   "output text\n\n(exit code N)"     → strip trailing summary (error)
+    //   "User denied execution of shell."  → no output to render
+    let output = if content.starts_with('(') && content.ends_with(')') {
+        // Summary-only message like "(no output, exit code 0)".
+        ""
+    } else if let Some(pos) = content.rfind("\n\n(") {
+        // Strip trailing "\n\n(exit code N)" from error output.
+        if content.ends_with(')') {
+            &content[..pos]
+        } else {
+            content
+        }
+    } else {
+        content
+    };
+
+    if output.is_empty() {
+        return Ok(());
+    }
+
+    let dim = Style::default().fg(Color::DarkGray);
+    let sep = "\u{2500}".repeat(width.saturating_sub(6).min(40));
+
+    // Begin separator.
+    terminal.insert_lines_above(vec![Line::from(Span::styled(format!("    {sep}"), dim))])?;
+
+    // Output lines with 4-space indent.
+    for line in output.lines() {
+        terminal.insert_lines_above(vec![Line::from(format!("    {line}"))])?;
+    }
+
+    // End separator.
+    terminal.insert_lines_above(vec![Line::from(Span::styled(format!("    {sep}"), dim))])?;
+
+    Ok(())
 }
