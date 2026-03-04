@@ -71,10 +71,7 @@ impl ToolHandler for McpToolHandler {
 /// - `trust = Confirm` + `read_only_hint = true` → auto
 /// - `trust = Confirm` + `destructive_hint = true` → requires approval
 /// - `trust = Confirm` + no clear signal → requires approval (safe default)
-pub(crate) fn check_mcp_approval(
-    trust: McpTrust,
-    annotations: Option<&McpToolAnnotations>,
-) -> bool {
+pub fn check_mcp_approval(trust: McpTrust, annotations: Option<&McpToolAnnotations>) -> bool {
     match trust {
         McpTrust::Auto => false,
         McpTrust::Confirm => match annotations {
