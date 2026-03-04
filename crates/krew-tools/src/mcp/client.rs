@@ -1,5 +1,6 @@
-//! MCP client wrapping the rmcp SDK for stdio transport.
+//! MCP client wrapping the rmcp SDK for stdio and HTTP transports.
 
+use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,6 +9,7 @@ use anyhow::{Result, anyhow};
 use rmcp::model::CallToolRequestParams;
 use rmcp::service::{RoleClient, RunningService};
 use rmcp::transport::child_process::TokioChildProcess;
+use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::{ClientHandler, service};
 use serde_json::Value;
 use tokio::process::Command;
@@ -76,6 +78,45 @@ impl McpClient {
                 )
             })?
             .map_err(|e| anyhow!("MCP handshake with '{command}' failed: {e}"))?;
+
+        Ok(Self {
+            service: Arc::new(service),
+        })
+    }
+
+    /// Connect to an MCP server via Streamable HTTP transport.
+    pub async fn connect_http(url: &str, headers: &HashMap<String, String>) -> Result<Self> {
+        use rmcp::transport::StreamableHttpClientTransport;
+
+        let mut config = StreamableHttpClientTransportConfig::with_uri(url);
+
+        // Map custom headers (using types re-exported by rmcp's reqwest).
+        let mut header_map = HashMap::new();
+        for (k, v) in headers {
+            let name: http::HeaderName = k
+                .parse()
+                .map_err(|e| anyhow!("invalid header name '{k}': {e}"))?;
+            let value: http::HeaderValue = v
+                .parse()
+                .map_err(|e| anyhow!("invalid header value for '{k}': {e}"))?;
+            header_map.insert(name, value);
+        }
+        if !header_map.is_empty() {
+            config = config.custom_headers(header_map);
+        }
+
+        let transport = StreamableHttpClientTransport::from_config(config);
+        let handler = McpClientHandler;
+
+        let service = tokio::time::timeout(INIT_TIMEOUT, service::serve_client(handler, transport))
+            .await
+            .map_err(|_| {
+                anyhow!(
+                    "MCP server '{url}' did not respond within {} seconds.",
+                    INIT_TIMEOUT.as_secs()
+                )
+            })?
+            .map_err(|e| anyhow!("MCP handshake with '{url}' failed: {e}"))?;
 
         Ok(Self {
             service: Arc::new(service),
