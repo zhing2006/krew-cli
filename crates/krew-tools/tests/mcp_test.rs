@@ -1,11 +1,10 @@
 //! Tests for MCP module.
 
 use krew_config::McpTrust;
-
-use super::*;
-use crate::mcp::client::McpToolAnnotations;
-use crate::mcp::handler::check_mcp_approval;
-use crate::mcp::manager::expand_env;
+use krew_tools::mcp::{
+    McpToolAnnotations, check_mcp_approval, display_name, display_name_from_qualified, expand_env,
+    is_mcp_tool, qualified_name, sanitize,
+};
 
 // ─── Qualified name generation ─────────────────────────────────────
 
@@ -230,7 +229,7 @@ fn tool_spec_description_includes_display_name() {
     let qname = qualified_name("github", "create_issue");
     let dname = display_name("github", "create_issue");
 
-    let spec = crate::ToolSpec {
+    let spec = krew_tools::ToolSpec {
         name: qname,
         description: format!("[{dname}] Create a GitHub issue"),
         parameters: serde_json::json!({
