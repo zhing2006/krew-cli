@@ -5,8 +5,8 @@ mod handler;
 mod manager;
 
 pub use client::{McpClient, McpToolAnnotations, McpToolInfo};
-pub use handler::McpToolHandler;
-pub use manager::McpManager;
+pub use handler::{McpToolHandler, check_mcp_approval};
+pub use manager::{McpManager, expand_env};
 
 /// Generate a qualified tool name for LLM consumption.
 ///
@@ -39,7 +39,7 @@ pub fn display_name_from_qualified(qualified: &str) -> Option<String> {
 }
 
 /// Sanitize a name to only contain `[a-zA-Z0-9_-]`.
-fn sanitize(name: &str) -> String {
+pub fn sanitize(name: &str) -> String {
     name.chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
@@ -50,6 +50,3 @@ fn sanitize(name: &str) -> String {
         })
         .collect()
 }
-
-#[cfg(test)]
-mod tests;
