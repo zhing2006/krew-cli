@@ -284,19 +284,34 @@ pub enum ProviderType {
 }
 
 /// MCP (Model Context Protocol) server configuration.
+///
+/// Supports two transport modes:
+/// - **stdio**: Set `command` (and optionally `args` / `env`) to spawn a child process.
+/// - **HTTP**: Set `url` (and optionally `headers`) to connect via Streamable HTTP.
 #[derive(Debug, Clone, Deserialize)]
 pub struct McpServerConfig {
     /// Server name for identification.
     pub name: String,
-    /// Command to launch the MCP server process.
-    pub command: String,
-    /// Command-line arguments for the server process.
+    /// Command to launch the MCP server process (stdio transport).
+    pub command: Option<String>,
+    /// Command-line arguments for the server process (stdio transport).
     #[serde(default)]
     pub args: Vec<String>,
-    /// Environment variables passed to the server process.
+    /// Environment variables passed to the server process (stdio transport).
     pub env: Option<HashMap<String, String>>,
+    /// HTTP endpoint URL for Streamable HTTP transport.
+    pub url: Option<String>,
+    /// HTTP headers sent with every request (HTTP transport).
+    pub headers: Option<HashMap<String, String>>,
     /// Trust level controlling tool approval behavior.
     pub trust: Option<McpTrust>,
+}
+
+impl McpServerConfig {
+    /// Returns true if this server uses HTTP transport.
+    pub fn is_http(&self) -> bool {
+        self.url.is_some()
+    }
 }
 
 /// Tool approval policy.

@@ -6,7 +6,7 @@ mod manager;
 
 pub use client::{McpClient, McpToolAnnotations, McpToolInfo};
 pub use handler::{McpToolHandler, check_mcp_approval};
-pub use manager::{McpManager, expand_env};
+pub use manager::{McpManager, McpServerInfo, expand_env};
 
 /// Generate a qualified tool name for LLM consumption.
 ///

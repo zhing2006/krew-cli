@@ -1,7 +1,9 @@
 use std::io::Write;
 use tempfile::NamedTempFile;
 
-use krew_config::{AgentConfig, ApprovalMode, Config, ConfigError, ProviderConfig, ThinkingEffort};
+use krew_config::{
+    AgentConfig, ApprovalMode, Config, ConfigError, McpServerConfig, ProviderConfig, ThinkingEffort,
+};
 
 const VALID_CONFIG: &str = r#"
 [settings]
@@ -391,4 +393,104 @@ fn full_config_e2e_with_new_fields() {
     let google = &config.providers["google"];
     assert_eq!(google.vertex_project.as_deref(), Some("my-proj"));
     assert_eq!(google.vertex_location.as_deref(), Some("us-central1"));
+}
+
+// ── McpServerConfig deserialization ─────────────────────────────────────
+
+#[test]
+fn mcp_server_config_stdio() {
+    let toml_str = r#"
+        name = "filesystem"
+        command = "npx"
+        args = ["-y", "@modelcontextprotocol/server-filesystem"]
+    "#;
+    let config: McpServerConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.name, "filesystem");
+    assert_eq!(config.command.as_deref(), Some("npx"));
+    assert_eq!(
+        config.args,
+        vec!["-y", "@modelcontextprotocol/server-filesystem"]
+    );
+    assert!(!config.is_http());
+    assert!(config.url.is_none());
+    assert!(config.headers.is_none());
+}
+
+#[test]
+fn mcp_server_config_http() {
+    let toml_str = r#"
+        name = "firecrawl"
+        url = "https://mcp.firecrawl.dev/v2/mcp"
+
+        [headers]
+        Authorization = "Bearer fc-abc123"
+    "#;
+    let config: McpServerConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.name, "firecrawl");
+    assert!(config.is_http());
+    assert_eq!(
+        config.url.as_deref(),
+        Some("https://mcp.firecrawl.dev/v2/mcp")
+    );
+    let headers = config.headers.as_ref().unwrap();
+    assert_eq!(headers.get("Authorization").unwrap(), "Bearer fc-abc123");
+    assert!(config.command.is_none());
+}
+
+#[test]
+fn mcp_server_config_http_no_headers() {
+    let toml_str = r#"
+        name = "local"
+        url = "http://localhost:8080/mcp"
+    "#;
+    let config: McpServerConfig = toml::from_str(toml_str).unwrap();
+    assert!(config.is_http());
+    assert!(config.headers.is_none());
+}
+
+#[test]
+fn mcp_server_config_in_full_config() {
+    let toml_str = r#"
+        [settings]
+        approval_mode = "suggest"
+        reply_order = ["agent1"]
+
+        [[agents]]
+        name = "agent1"
+        display_name = "Agent 1"
+        provider = "openai"
+        model = "gpt-5"
+        color = "green"
+
+        [providers.openai]
+        type = "openai"
+        api_key_env = "OPENAI_API_KEY"
+
+        [[mcp_servers]]
+        name = "stdio-server"
+        command = "node"
+        args = ["server.js"]
+
+        [[mcp_servers]]
+        name = "http-server"
+        url = "https://example.com/mcp"
+        [mcp_servers.headers]
+        Authorization = "Bearer token123"
+        X-Custom = "value"
+    "#;
+    let config: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.mcp_servers.len(), 2);
+
+    let stdio = &config.mcp_servers[0];
+    assert_eq!(stdio.name, "stdio-server");
+    assert!(!stdio.is_http());
+    assert_eq!(stdio.command.as_deref(), Some("node"));
+
+    let http = &config.mcp_servers[1];
+    assert_eq!(http.name, "http-server");
+    assert!(http.is_http());
+    assert_eq!(http.url.as_deref(), Some("https://example.com/mcp"));
+    let headers = http.headers.as_ref().unwrap();
+    assert_eq!(headers.len(), 2);
+    assert_eq!(headers.get("Authorization").unwrap(), "Bearer token123");
 }
