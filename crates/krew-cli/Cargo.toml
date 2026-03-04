@@ -11,6 +11,7 @@ path = "src/main.rs"
 krew-core = { workspace = true }
 krew-config = { workspace = true }
 krew-llm = { workspace = true }
+krew-tools = { workspace = true }
 krew-storage = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
@@ -30,6 +31,8 @@ textwrap = { workspace = true }
 pulldown-cmark = { workspace = true }
 syntect = { workspace = true }
 two-face = { workspace = true }
+similar = { workspace = true }
+diffy = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 static_vcruntime = "3"

@@ -24,7 +24,8 @@ use crate::streaming::commit_tick::run_commit_tick;
 use crate::streaming::markdown_stream::MarkdownStreamCollector;
 use crate::textarea::TextArea;
 
-use super::agent_display::format_tool_call_display;
+use super::agent_display::{format_tool_call_display, render_tool_diff_preview};
+use super::approval::ApprovalOverlay;
 use super::paste_burst::{FlushResult, PasteBurst};
 
 /// Duration within which a second Ctrl+C triggers quit.
@@ -113,6 +114,10 @@ pub struct App {
     pub agent_status_text: Option<String>,
     /// Session ID to resume on startup (set by --resume, consumed by run()).
     pub(crate) pending_resume_id: Option<String>,
+    /// Active tool approval overlay (Some while awaiting user decision).
+    pub(crate) approval_overlay: Option<ApprovalOverlay>,
+    /// Whether we are inside a streaming shell output section.
+    shell_output_started: bool,
 }
 
 impl App {
@@ -188,6 +193,8 @@ impl App {
             agent_color: None,
             agent_status_text: None,
             pending_resume_id: None,
+            approval_overlay: None,
+            shell_output_started: false,
         })
     }
 
@@ -274,13 +281,17 @@ impl App {
                     // Sync completion popup based on current input.
                     self.sync_popup();
 
-                    // Adjust viewport height to fit textarea + status line + popup.
+                    // Adjust viewport height to fit content.
                     let term_width = terminal.size()?.width.saturating_sub(2);
-                    let input_lines = self.textarea.desired_height(term_width.max(1));
                     let status_line_height: u16 =
                         if self.agent_start_time.is_some() { 1 } else { 0 };
-                    let needed =
-                        input_lines.max(1) + 3 + status_line_height + self.popup.extra_height();
+                    let needed = if let Some(overlay) = &self.approval_overlay {
+                        // Approval overlay replaces the input area.
+                        overlay.desired_height() + status_line_height
+                    } else {
+                        let input_lines = self.textarea.desired_height(term_width.max(1));
+                        input_lines.max(1) + 3 + status_line_height + self.popup.extra_height()
+                    };
                     terminal.ensure_viewport_height(needed)?;
 
                     // Render input prompt + status bar inside the inline viewport.
@@ -418,11 +429,43 @@ impl App {
                 let display = format_tool_call_display(&name, &arguments);
                 let yellow = ratatui::style::Style::default().fg(ratatui::style::Color::Yellow);
                 self.insert_tool_line(terminal, "\u{26A1} ", yellow, display)?;
+
+                // Render diff preview for write/edit tools below the header.
+                let width = terminal.size().map(|s| s.width as usize).unwrap_or(80);
+                let preview = render_tool_diff_preview(&name, &arguments, width);
+                if !preview.is_empty() {
+                    terminal.insert_lines_above(preview)?;
+                }
+            }
+            AgentEvent::ToolCallOutput { text } => {
+                // On first streaming output, render the begin separator.
+                if !self.shell_output_started {
+                    self.shell_output_started = true;
+                    let dim = ratatui::style::Style::default().fg(ratatui::style::Color::DarkGray);
+                    let width = terminal.size().map(|s| s.width as usize).unwrap_or(80);
+                    let sep = "\u{2500}".repeat(width.saturating_sub(6).min(40));
+                    terminal.insert_lines_above(vec![ratatui::text::Line::from(
+                        ratatui::text::Span::styled(format!("    {sep}"), dim),
+                    )])?;
+                }
+                terminal
+                    .insert_lines_above(vec![ratatui::text::Line::from(format!("    {text}"))])?;
             }
             AgentEvent::ToolCallDone {
                 name: _,
                 result_summary,
             } => {
+                // Close shell output section with end separator.
+                if self.shell_output_started {
+                    self.shell_output_started = false;
+                    let dim = ratatui::style::Style::default().fg(ratatui::style::Color::DarkGray);
+                    let width = terminal.size().map(|s| s.width as usize).unwrap_or(80);
+                    let sep = "\u{2500}".repeat(width.saturating_sub(6).min(40));
+                    terminal.insert_lines_above(vec![ratatui::text::Line::from(
+                        ratatui::text::Span::styled(format!("    {sep}"), dim),
+                    )])?;
+                }
+
                 // Render result line below the tool call: ⎿  summary + blank line
                 let dim = ratatui::style::Style::default().fg(ratatui::style::Color::DarkGray);
                 self.insert_tool_line(
@@ -553,6 +596,44 @@ impl App {
                 // Error isolation: continue with next pending agent.
                 self.start_next_agent(terminal)?;
             }
+            AgentEvent::ApprovalRequest {
+                tool_name,
+                arguments,
+                allow_session_approval,
+                respond,
+            } => {
+                // Clear retry status.
+                self.agent_status_text = None;
+
+                // Finalize thinking if still active.
+                if self.is_thinking {
+                    self.finalize_thinking(terminal)?;
+                }
+
+                // Flush any buffered text content before showing the overlay.
+                if let Some(mut collector) = self.stream_collector.take() {
+                    let remaining = collector.finalize();
+                    if !remaining.is_empty() {
+                        self.stream_state.enqueue(remaining);
+                    }
+                }
+                let remaining_lines = self.stream_state.drain_all();
+                if !remaining_lines.is_empty() {
+                    self.insert_indented_lines(terminal, remaining_lines)?;
+                }
+
+                // Create or enqueue approval overlay.
+                if let Some(overlay) = &mut self.approval_overlay {
+                    overlay.enqueue(tool_name, arguments, allow_session_approval, respond);
+                } else {
+                    self.approval_overlay = Some(ApprovalOverlay::new(
+                        tool_name,
+                        arguments,
+                        allow_session_approval,
+                        respond,
+                    ));
+                }
+            }
         }
 
         Ok(())
@@ -660,6 +741,18 @@ impl App {
                 if key_event.kind != KeyEventKind::Press {
                     return Ok(());
                 }
+
+                // Route to approval overlay first if active.
+                if let Some(overlay) = &mut self.approval_overlay {
+                    if let Some(decision) = overlay.handle_key(key_event) {
+                        Self::insert_decision_line(terminal, &decision)?;
+                    }
+                    if overlay.is_done() {
+                        self.approval_overlay = None;
+                    }
+                    return Ok(());
+                }
+
                 self.handle_key(key_event, terminal)?;
             }
             Event::Paste(text) => {

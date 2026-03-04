@@ -5,7 +5,7 @@
 
 use std::time::{Duration, Instant};
 
-// --- Thresholds (matching codex values) ---
+// --- Thresholds ---
 
 /// Enter CatchUp when queue depth reaches this.
 const ENTER_QUEUE_DEPTH: usize = 8;

@@ -31,13 +31,11 @@ impl<'a> Frame<'a> {
     }
 
     /// Request the cursor to be shown at `position` after this frame.
-    #[allow(dead_code)]
     pub fn set_cursor_position<P: Into<Position>>(&mut self, position: P) {
         self.cursor_position = Some(position.into());
     }
 
     /// Direct access to the underlying buffer.
-    #[allow(dead_code)]
     pub fn buffer_mut(&mut self) -> &mut Buffer {
         self.buffer
     }
