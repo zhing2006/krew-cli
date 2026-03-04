@@ -292,19 +292,21 @@ fn render_status_bar(frame: &mut custom_terminal::Frame, app: &App, area: Rect) 
         let sep = Span::styled(" · ", Style::default().fg(Color::DarkGray));
 
         let mode_str = format!("{}", app.config.settings.approval_mode);
+        let mode_color = match app.config.settings.approval_mode {
+            krew_config::ApprovalMode::Suggest => Color::DarkGray,
+            krew_config::ApprovalMode::AutoEdit => Color::Yellow,
+            krew_config::ApprovalMode::FullAuto => Color::Red,
+        };
 
-        let compact_str = match app.config.settings.auto_compact_threshold {
-            Some(t) if t > 0 => format!("{}k", t / 1000),
-            _ => "auto-compact off".to_string(),
+        let (compact_str, compact_color) = match app.config.settings.auto_compact_threshold {
+            Some(t) if t > 0 => (format!("auto-compact {}k", t / 1000), Color::Cyan),
+            _ => ("auto-compact off".to_string(), Color::DarkGray),
         };
 
         Line::from(vec![
-            Span::styled(
-                format!("  {mode_str}"),
-                Style::default().fg(Color::DarkGray),
-            ),
+            Span::styled(format!("  {mode_str}"), Style::default().fg(mode_color)),
             sep.clone(),
-            Span::styled(compact_str, Style::default().fg(Color::DarkGray)),
+            Span::styled(compact_str, Style::default().fg(compact_color)),
             sep,
             Span::styled(format!("{dir}"), Style::default().fg(Color::DarkGray)),
         ])
