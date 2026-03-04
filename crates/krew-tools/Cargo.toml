@@ -15,6 +15,10 @@ walkdir = { workspace = true }
 globset = { workspace = true }
 regex = { workspace = true }
 similar = { workspace = true }
+rmcp = { workspace = true }
+futures = { workspace = true }
+krew-config = { workspace = true }
+anyhow = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
