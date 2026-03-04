@@ -13,8 +13,8 @@ struct ToolUseRef {
 /// Scan messages and return references to stale (superseded) tool calls.
 ///
 /// Staleness rules:
-/// - `read_file` is stale if a later `read_file` on the same file has an
-///   overlapping byte range, OR if a later `write_file`/`edit_file` targets
+/// - `read_file` is stale if a later `read_file` on the same file fully
+///   covers its byte range, OR if a later `write_file`/`edit_file` targets
 ///   the same file.
 /// - `glob` / `grep` with identical canonicalized arguments are stale.
 fn find_stale_tool_calls(messages: &[ChatMessage]) -> Vec<ToolUseRef> {
@@ -80,9 +80,9 @@ fn find_stale_tool_calls(messages: &[ChatMessage]) -> Vec<ToolUseRef> {
 
                 // Check if any existing read on same file overlaps.
                 let entries = latest_reads.entry(file_path.clone()).or_default();
-                // Mark overlapping earlier reads as stale.
+                // Mark earlier reads as stale only when the new read fully covers them.
                 for (prev_aidx, prev_tcidx, prev_id, prev_offset, prev_end) in entries.iter() {
-                    if ranges_overlap(offset, end, *prev_offset, *prev_end) {
+                    if offset <= *prev_offset && end >= *prev_end {
                         stale.push(ToolUseRef {
                             assistant_idx: *prev_aidx,
                             tool_call_idx: *prev_tcidx,
@@ -91,7 +91,7 @@ fn find_stale_tool_calls(messages: &[ChatMessage]) -> Vec<ToolUseRef> {
                     }
                 }
                 // Remove stale entries and add current.
-                entries.retain(|(_, _, _, po, pe)| !ranges_overlap(offset, end, *po, *pe));
+                entries.retain(|(_, _, _, po, pe)| !(offset <= *po && end >= *pe));
                 entries.push((
                     loc.assistant_idx,
                     loc.tool_call_idx,
@@ -230,11 +230,6 @@ pub(super) fn prune_stale_tool_calls(messages: Vec<ChatMessage>) -> Vec<ChatMess
 fn normalize_file_path(path: &str) -> String {
     let p = path.replace('\\', "/");
     p.strip_prefix("./").unwrap_or(&p).to_string()
-}
-
-/// Check if two ranges [a_start, a_end) and [b_start, b_end) overlap.
-fn ranges_overlap(a_start: u64, a_end: u64, b_start: u64, b_end: u64) -> bool {
-    a_start < b_end && b_start < a_end
 }
 
 /// Produce a canonical string from tool arguments for deduplication.
@@ -387,6 +382,94 @@ mod tests {
         let result = prune_stale_tool_calls(messages);
         // Both should be preserved (non-overlapping ranges).
         assert_eq!(result.len(), 4);
+    }
+
+    #[test]
+    fn partial_overlap_not_pruned() {
+        // Old reads [0,50), new reads [30,80) — partial overlap, should NOT prune.
+        let messages = vec![
+            assistant_with_tools(
+                "a",
+                "",
+                vec![tc(
+                    "1",
+                    "read_file",
+                    r#"{"file_path":"f.rs","offset":0,"limit":50}"#,
+                )],
+            ),
+            tool_result("read_file", "first", "1"),
+            assistant_with_tools(
+                "a",
+                "",
+                vec![tc(
+                    "2",
+                    "read_file",
+                    r#"{"file_path":"f.rs","offset":30,"limit":50}"#,
+                )],
+            ),
+            tool_result("read_file", "second", "2"),
+        ];
+        let result = prune_stale_tool_calls(messages);
+        assert_eq!(result.len(), 4);
+    }
+
+    #[test]
+    fn old_covers_new_not_pruned() {
+        // Old reads [0,100), new reads [20,50) — old is larger, should NOT prune.
+        let messages = vec![
+            assistant_with_tools(
+                "a",
+                "",
+                vec![tc(
+                    "1",
+                    "read_file",
+                    r#"{"file_path":"f.rs","offset":0,"limit":100}"#,
+                )],
+            ),
+            tool_result("read_file", "full", "1"),
+            assistant_with_tools(
+                "a",
+                "",
+                vec![tc(
+                    "2",
+                    "read_file",
+                    r#"{"file_path":"f.rs","offset":20,"limit":30}"#,
+                )],
+            ),
+            tool_result("read_file", "partial", "2"),
+        ];
+        let result = prune_stale_tool_calls(messages);
+        assert_eq!(result.len(), 4);
+    }
+
+    #[test]
+    fn new_covers_old_pruned() {
+        // Old reads [20,50), new reads [0,100) — new fully covers old, should prune.
+        let messages = vec![
+            assistant_with_tools(
+                "a",
+                "",
+                vec![tc(
+                    "1",
+                    "read_file",
+                    r#"{"file_path":"f.rs","offset":20,"limit":30}"#,
+                )],
+            ),
+            tool_result("read_file", "partial", "1"),
+            assistant_with_tools(
+                "a",
+                "",
+                vec![tc(
+                    "2",
+                    "read_file",
+                    r#"{"file_path":"f.rs","offset":0,"limit":100}"#,
+                )],
+            ),
+            tool_result("read_file", "full", "2"),
+        ];
+        let result = prune_stale_tool_calls(messages);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].tool_calls.as_ref().unwrap()[0].id, "2");
     }
 
     #[test]
