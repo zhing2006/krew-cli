@@ -21,6 +21,11 @@ pub struct MarkdownStreamCollector {
 }
 
 impl MarkdownStreamCollector {
+    /// Return a reference to the raw text buffer.
+    pub fn buffer(&self) -> &str {
+        &self.buffer
+    }
+
     pub fn new() -> Self {
         Self {
             buffer: String::new(),
