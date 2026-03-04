@@ -184,7 +184,7 @@ fn register_mcp_tools(
 /// Expand environment variable references in the config env map.
 ///
 /// Values starting with `$` are resolved from the process environment.
-pub(crate) fn expand_env(env: &Option<HashMap<String, String>>) -> Vec<(String, String)> {
+pub fn expand_env(env: &Option<HashMap<String, String>>) -> Vec<(String, String)> {
     let Some(env_map) = env else {
         return Vec::new();
     };
