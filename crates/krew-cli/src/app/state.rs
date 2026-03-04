@@ -90,8 +90,6 @@ pub struct App {
     pub(crate) commit_tick_active: bool,
     /// Whether the agent is currently in thinking phase.
     pub(crate) is_thinking: bool,
-    /// Accumulated response text for the current streaming agent.
-    pub(crate) current_response_text: String,
     /// Name of the agent currently streaming.
     pub(crate) current_agent_name: Option<String>,
     /// Accumulated token usage per agent (agent_name → total_tokens).
@@ -182,7 +180,6 @@ impl App {
             chunking_policy: AdaptiveChunkingPolicy::new(),
             commit_tick_active: false,
             is_thinking: false,
-            current_response_text: String::new(),
             current_agent_name: None,
             agent_token_usage: HashMap::new(),
             startup_warnings: init_result.warnings,
@@ -320,7 +317,6 @@ impl App {
                 color,
             } => {
                 self.current_agent_name = Some(agent_name.clone());
-                self.current_response_text.clear();
 
                 // Activate the agent status indicator line.
                 self.agent_start_time = Some(Instant::now());
@@ -382,8 +378,6 @@ impl App {
                 if self.is_thinking {
                     self.finalize_thinking(terminal)?;
                 }
-
-                self.current_response_text.push_str(&text);
 
                 // Push delta into markdown stream collector.
                 let collector = self
@@ -521,9 +515,6 @@ impl App {
                     self.save_session();
                 }
 
-                // Clear accumulated streaming text (no longer used for message).
-                self.current_response_text.clear();
-
                 // Clear agent status indicator.
                 self.agent_start_time = None;
                 self.agent_display_name = None;
@@ -547,6 +538,13 @@ impl App {
                     self.finalize_thinking(terminal)?;
                 }
 
+                // Extract raw buffer text BEFORE finalize clears it.
+                let partial_text = self
+                    .stream_collector
+                    .as_ref()
+                    .map(|c| c.buffer().to_string())
+                    .unwrap_or_default();
+
                 // Flush remaining buffered content to screen.
                 if let Some(mut collector) = self.stream_collector.take() {
                     let remaining = collector.finalize();
@@ -568,8 +566,8 @@ impl App {
 
                     // If the agent produced partial text output, preserve it
                     // with the error annotation.
-                    if !self.current_response_text.is_empty() {
-                        let mut content = std::mem::take(&mut self.current_response_text);
+                    if !partial_text.is_empty() {
+                        let mut content = partial_text;
                         content.push_str(&format!("\n\n[Error: {msg}]"));
                         self.messages.push(ChatMessage::text(
                             ChatRole::Assistant,
@@ -590,7 +588,6 @@ impl App {
                 self.commit_tick_active = false;
                 self.is_thinking = false;
                 // Do NOT update last_respondent on error.
-                self.current_response_text.clear();
                 self.chunking_policy.reset();
 
                 // Error isolation: continue with next pending agent.
