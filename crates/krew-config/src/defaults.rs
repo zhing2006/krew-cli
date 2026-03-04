@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::{
-    AgentConfig, ApprovalMode, Config, DEFAULT_INPUT_HISTORY_LIMIT, DEFAULT_WORKER_THREADS,
-    OtherAgentRole, RetryConfig, Settings,
+    AgentConfig, ApprovalMode, Config, DEFAULT_INPUT_HISTORY_LIMIT, DEFAULT_SHELL_ALLOW_COMMANDS,
+    DEFAULT_WORKER_THREADS, OtherAgentRole, RetryConfig, Settings,
 };
 
 /// Default auto-compact threshold in tokens.
@@ -20,6 +20,10 @@ impl Default for Config {
                 worker_threads: DEFAULT_WORKER_THREADS,
                 other_agent_role: OtherAgentRole::User,
                 retry: RetryConfig::default(),
+                shell_allow_commands: DEFAULT_SHELL_ALLOW_COMMANDS
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
             },
             agents: vec![AgentConfig {
                 name: "echo".to_string(),

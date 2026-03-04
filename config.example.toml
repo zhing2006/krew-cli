@@ -8,6 +8,13 @@ auto_compact_threshold = 120000        # auto-compact token threshold (0 = disab
 paste_burst_detection = true           # timing-based paste detection for Windows (auto-disables if terminal supports bracketed paste)
 worker_threads = 4                     # tokio worker thread count (default: 4)
 
+# Shell commands auto-approved without user confirmation (prefix-matched).
+# "ls" matches all ls invocations; "cargo build" matches only cargo build (not cargo test).
+# Default: cat, cd, cut, date, df, du, echo, env, expr, false, file, find, grep, head,
+#          hostname, id, ls, nl, paste, printenv, pwd, rev, rg, seq, sort, stat, tail,
+#          tr, true, uname, uniq, wc, which, whoami
+# shell_allow_commands = ["ls", "cat", "grep", "cargo", "git status", "git log", "git diff"]
+
 # Agent definitions
 
 [[agents]]

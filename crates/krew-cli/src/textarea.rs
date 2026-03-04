@@ -129,7 +129,6 @@ fn map_owned_wrapped_line_to_range(
 
 #[derive(Debug, Clone)]
 struct TextElement {
-    #[allow(dead_code)]
     id: u64,
     range: Range<usize>,
     name: Option<String>,

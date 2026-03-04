@@ -74,6 +74,15 @@ pub struct Settings {
     /// Retry configuration for LLM API requests.
     #[serde(default)]
     pub retry: RetryConfig,
+    /// Shell commands that are auto-approved without user confirmation.
+    ///
+    /// Entries are prefix-matched against extracted command prefixes:
+    /// - `"ls"` matches all `ls` invocations
+    /// - `"cargo"` matches `cargo build`, `cargo test`, etc.
+    /// - `"cargo build"` matches only `cargo build` (not `cargo test`)
+    /// - `"git status"` matches only `git status` (not `git push`)
+    #[serde(default = "default_shell_allow_commands")]
+    pub shell_allow_commands: Vec<String>,
 }
 
 /// Retry configuration for LLM API requests.
@@ -164,6 +173,20 @@ fn default_retry_server_error_interval_secs() -> f64 {
 }
 fn default_retry_request_timeout_secs() -> u64 {
     DEFAULT_RETRY_REQUEST_TIMEOUT_SECS
+}
+
+/// Default shell commands that are auto-approved (read-only / side-effect-free).
+pub const DEFAULT_SHELL_ALLOW_COMMANDS: &[&str] = &[
+    "cat", "cd", "cut", "date", "df", "du", "echo", "env", "expr", "false", "file", "find", "grep",
+    "head", "hostname", "id", "ls", "nl", "paste", "printenv", "pwd", "rev", "rg", "seq", "sort",
+    "stat", "tail", "tr", "true", "uname", "uniq", "wc", "which", "whoami",
+];
+
+fn default_shell_allow_commands() -> Vec<String> {
+    DEFAULT_SHELL_ALLOW_COMMANDS
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
 }
 
 /// Configuration for a single AI agent.

@@ -203,16 +203,13 @@ impl PasteBurst {
         before: &str,
         retro_chars: usize,
     ) -> Option<RetroGrab> {
-        let start_byte = retro_start_index(before, retro_chars);
-        let grabbed = before[start_byte..].to_string();
+        let idx = retro_start_index(before, retro_chars);
+        let grabbed = before[idx..].to_string();
         let looks_pastey =
             grabbed.chars().any(char::is_whitespace) || grabbed.chars().count() >= 16;
         if looks_pastey {
-            self.begin_with_retro_grabbed(grabbed.clone(), now);
-            Some(RetroGrab {
-                start_byte,
-                grabbed,
-            })
+            self.begin_with_retro_grabbed(grabbed, now);
+            Some(RetroGrab)
         } else {
             None
         }
@@ -287,12 +284,8 @@ impl PasteBurst {
     }
 }
 
-pub(crate) struct RetroGrab {
-    #[allow(dead_code)]
-    pub start_byte: usize,
-    #[allow(dead_code)]
-    pub grabbed: String,
-}
+/// Marker returned when retroactive grab begins buffering.
+pub(crate) struct RetroGrab;
 
 fn retro_start_index(before: &str, retro_chars: usize) -> usize {
     if retro_chars == 0 {

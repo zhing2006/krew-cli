@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use walkdir::WalkDir;
 
-use crate::{ToolError, ToolHandler, ToolResult, ToolSpec, validate_path};
+use crate::{ToolContext, ToolError, ToolHandler, ToolResult, ToolSpec, validate_path};
 
 const DEFAULT_LIMIT: usize = 200;
 const MAX_LIMIT: usize = 2000;
@@ -74,7 +74,7 @@ impl ToolHandler for GlobTool {
         false
     }
 
-    async fn execute(&self, args: Value) -> Result<ToolResult, ToolError> {
+    async fn execute(&self, args: Value, _ctx: &ToolContext) -> Result<ToolResult, ToolError> {
         let args: GlobArgs =
             serde_json::from_value(args).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
 
@@ -204,7 +204,10 @@ mod tests {
         let dir = setup_test_tree();
         let tool = GlobTool::new(dir.path().to_path_buf());
 
-        let result = tool.execute(json!({ "pattern": "**/*.rs" })).await.unwrap();
+        let result = tool
+            .execute(json!({ "pattern": "**/*.rs" }), &ToolContext::default())
+            .await
+            .unwrap();
 
         assert!(!result.is_error);
         assert!(result.content.contains("main.rs"));
@@ -219,7 +222,10 @@ mod tests {
         let tool = GlobTool::new(dir.path().to_path_buf());
 
         let result = tool
-            .execute(json!({ "pattern": "*.rs", "path": "src" }))
+            .execute(
+                json!({ "pattern": "*.rs", "path": "src" }),
+                &ToolContext::default(),
+            )
             .await
             .unwrap();
 
@@ -232,7 +238,10 @@ mod tests {
         let dir = setup_test_tree();
         let tool = GlobTool::new(dir.path().to_path_buf());
 
-        let result = tool.execute(json!({ "pattern": "**/*.py" })).await.unwrap();
+        let result = tool
+            .execute(json!({ "pattern": "**/*.py" }), &ToolContext::default())
+            .await
+            .unwrap();
 
         assert!(!result.is_error);
         assert!(result.content.contains("No files matched"));
@@ -243,7 +252,9 @@ mod tests {
         let dir = setup_test_tree();
         let tool = GlobTool::new(dir.path().to_path_buf());
 
-        let result = tool.execute(json!({ "pattern": "[invalid" })).await;
+        let result = tool
+            .execute(json!({ "pattern": "[invalid" }), &ToolContext::default())
+            .await;
         assert!(result.is_err());
     }
 
@@ -253,7 +264,10 @@ mod tests {
         let tool = GlobTool::new(dir.path().to_path_buf());
 
         let result = tool
-            .execute(json!({ "pattern": "**/*", "limit": 2 }))
+            .execute(
+                json!({ "pattern": "**/*", "limit": 2 }),
+                &ToolContext::default(),
+            )
             .await
             .unwrap();
 
