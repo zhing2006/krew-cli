@@ -6,7 +6,7 @@ mod prune;
 
 use std::sync::Arc;
 
-use krew_config::{ApprovalMode, AgentConfig, OtherAgentRole};
+use krew_config::{AgentConfig, ApprovalMode, OtherAgentRole};
 use krew_llm::{ChatMessage, ChatRole, ToolDefinition};
 use krew_tools::ToolRegistry;
 use tokio::sync::mpsc;

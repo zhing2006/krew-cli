@@ -29,10 +29,7 @@ pub(super) struct AgentLoopContext<'a> {
 ///
 /// The loop exits when the LLM finishes without tool calls, when the
 /// maximum number of tool rounds is reached, or on error.
-pub(super) async fn run_agent_loop(
-    ctx: &AgentLoopContext<'_>,
-    messages: &mut Vec<ChatMessage>,
-) {
+pub(super) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Vec<ChatMessage>) {
     let mut total_usage = Usage {
         prompt_tokens: 0,
         completion_tokens: 0,
