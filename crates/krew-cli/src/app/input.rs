@@ -125,6 +125,12 @@ impl App {
             self.flush_and_apply_burst();
         }
 
+        // ESC while agent is streaming: cancel the current response.
+        if matches!(key_event.code, KeyCode::Esc) && self.agent_event_rx.is_some() {
+            self.cancel_agent_response(terminal)?;
+            return Ok(());
+        }
+
         // Match key events directly via crossterm KeyEvent.
         match key_event {
             // Enter (no modifiers) => send message, or newline if agent is active.
