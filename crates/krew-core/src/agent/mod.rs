@@ -64,13 +64,17 @@ impl AgentRuntime {
 
         // Build agent identity + optional custom system prompt.
         let other_agent_hint = "Their messages are prefixed with [agent_name] in the content.";
+        let now = chrono::Local::now()
+            .format("%Y-%m-%d %H:%M (%A)")
+            .to_string();
         let identity = format!(
             "You are {display_name}, powered by the {model} model.\n\
              Your agent name in this conversation is \"{name}\".\n\
              You are participating in a multi-agent conversation hosted by krew-cli.\n\
              Other agents in this conversation are DIFFERENT AI models, not you. \
              {other_agent_hint}\n\
-             Respond as yourself — do not role-play or impersonate other agents.",
+             Respond as yourself — do not role-play or impersonate other agents.\n\
+             Current date/time: {now}",
             display_name = self.config.display_name,
             model = self.config.model,
             name = self.config.name,
