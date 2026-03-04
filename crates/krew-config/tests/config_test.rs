@@ -1,7 +1,9 @@
 use std::io::Write;
 use tempfile::NamedTempFile;
 
-use krew_config::{ApprovalMode, Config, ConfigError};
+use krew_config::{
+    AgentConfig, ApprovalMode, Config, ConfigError, ProviderConfig, ThinkingEffort,
+};
 
 const VALID_CONFIG: &str = r#"
 [settings]
@@ -250,4 +252,145 @@ fn overrides_invalid_approval_mode() {
         msg.contains("suggest"),
         "error should list valid options: {msg}"
     );
+}
+
+// ── ThinkingEffort deserialization ──────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct ThinkingEffortWrapper {
+    val: ThinkingEffort,
+}
+
+#[test]
+fn thinking_effort_deserialize_low() {
+    let w: ThinkingEffortWrapper = toml::from_str("val = \"low\"").unwrap();
+    assert_eq!(w.val, ThinkingEffort::Low);
+}
+
+#[test]
+fn thinking_effort_deserialize_medium() {
+    let w: ThinkingEffortWrapper = toml::from_str("val = \"medium\"").unwrap();
+    assert_eq!(w.val, ThinkingEffort::Medium);
+}
+
+#[test]
+fn thinking_effort_deserialize_high() {
+    let w: ThinkingEffortWrapper = toml::from_str("val = \"high\"").unwrap();
+    assert_eq!(w.val, ThinkingEffort::High);
+}
+
+#[test]
+fn thinking_effort_deserialize_invalid() {
+    let result: Result<ThinkingEffortWrapper, _> = toml::from_str("val = \"extreme\"");
+    assert!(result.is_err());
+}
+
+// ── AgentConfig deserialization ─────────────────────────────────────────
+
+#[test]
+fn agent_config_enable_thinking_default_false() {
+    let toml_str = r#"
+        name = "test"
+        display_name = "Test"
+        provider = "openai"
+        model = "gpt-4"
+        color = "blue"
+    "#;
+    let agent: AgentConfig = toml::from_str(toml_str).unwrap();
+    assert!(!agent.enable_thinking);
+}
+
+#[test]
+fn agent_config_enable_thinking_with_effort() {
+    let toml_str = r#"
+        name = "test"
+        display_name = "Test"
+        provider = "openai"
+        model = "gpt-4"
+        color = "blue"
+        enable_thinking = true
+        thinking_effort = "high"
+    "#;
+    let agent: AgentConfig = toml::from_str(toml_str).unwrap();
+    assert!(agent.enable_thinking);
+    assert_eq!(agent.thinking_effort, Some(ThinkingEffort::High));
+}
+
+#[test]
+fn agent_config_enable_thinking_without_effort() {
+    let toml_str = r#"
+        name = "test"
+        display_name = "Test"
+        provider = "openai"
+        model = "gpt-4"
+        color = "blue"
+        enable_thinking = true
+    "#;
+    let agent: AgentConfig = toml::from_str(toml_str).unwrap();
+    assert!(agent.enable_thinking);
+    assert!(agent.thinking_effort.is_none());
+}
+
+// ── ProviderConfig deserialization ──────────────────────────────────────
+
+#[test]
+fn provider_config_vertex_fields() {
+    let toml_str = r#"
+        type = "google"
+        api_key_env = "GOOGLE_API_KEY"
+        vertex_project = "my-proj"
+        vertex_location = "us-central1"
+    "#;
+    let provider: ProviderConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(provider.vertex_project.as_deref(), Some("my-proj"));
+    assert_eq!(provider.vertex_location.as_deref(), Some("us-central1"));
+}
+
+#[test]
+fn provider_config_vertex_fields_missing() {
+    let toml_str = r#"
+        type = "google"
+        api_key_env = "GOOGLE_API_KEY"
+    "#;
+    let provider: ProviderConfig = toml::from_str(toml_str).unwrap();
+    assert!(provider.vertex_project.is_none());
+    assert!(provider.vertex_location.is_none());
+}
+
+// ── Full config E2E ─────────────────────────────────────────────────────
+
+#[test]
+fn full_config_e2e_with_new_fields() {
+    let toml_str = r#"
+        [settings]
+        approval_mode = "suggest"
+        reply_order = ["agent1"]
+
+        [[agents]]
+        name = "agent1"
+        display_name = "Agent 1"
+        provider = "anthropic"
+        model = "claude-opus-4-6"
+        color = "green"
+        enable_thinking = true
+        thinking_effort = "medium"
+
+        [providers.anthropic]
+        type = "anthropic"
+        api_key_env = "ANTHROPIC_API_KEY"
+
+        [providers.google]
+        type = "google"
+        api_key_env = "GOOGLE_API_KEY"
+        vertex_project = "my-proj"
+        vertex_location = "us-central1"
+    "#;
+    let config: Config = toml::from_str(toml_str).unwrap();
+    let agent = &config.agents[0];
+    assert!(agent.enable_thinking);
+    assert_eq!(agent.thinking_effort, Some(ThinkingEffort::Medium));
+
+    let google = &config.providers["google"];
+    assert_eq!(google.vertex_project.as_deref(), Some("my-proj"));
+    assert_eq!(google.vertex_location.as_deref(), Some("us-central1"));
 }
