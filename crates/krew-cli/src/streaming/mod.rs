@@ -1,6 +1,5 @@
 //! Streaming rendering pipeline with adaptive backpressure.
 //!
-//! Inspired by codex-rs/tui streaming architecture:
 //! - MarkdownStreamCollector: newline-gated markdown rendering
 //! - StreamState: FIFO queue with timestamps
 //! - AdaptiveChunkingPolicy: smooth/catch-up mode switching

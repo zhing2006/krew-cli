@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use futures::StreamExt;
-use krew_config::{AgentConfig, ApiType, Config, OtherAgentRole, ProviderType};
+use krew_config::{AgentConfig, ApiType, ApprovalMode, Config, OtherAgentRole, ProviderType};
 use krew_llm::{
     AnthropicClient, ChatMessage, ChatRole, GoogleClient, LlmClient, LlmClientConfig,
     OpenAiChatClient, OpenAiResponsesClient, StreamEvent, ToolCallInfo, ToolDefinition, Usage,
@@ -11,7 +11,7 @@ use krew_llm::{
 use krew_tools::ToolRegistry;
 use tokio::sync::mpsc;
 
-use crate::event::AgentEvent;
+use crate::event::{AgentEvent, ApprovalCache, ReviewDecision};
 
 /// Default maximum number of tool-call loop rounds per agent turn.
 const DEFAULT_MAX_TOOL_ROUNDS: u32 = 25;
@@ -28,6 +28,12 @@ pub struct AgentRuntime {
     pub is_responding: bool,
     /// How to present other agents' messages in this agent's conversation.
     pub other_agent_role: OtherAgentRole,
+    /// Tool approval policy for this session.
+    pub approval_mode: ApprovalMode,
+    /// Session-scoped approval cache (persists across agent turns).
+    pub approval_cache: ApprovalCache,
+    /// Shell commands that are auto-approved without user confirmation.
+    pub shell_allow_commands: Vec<String>,
 }
 
 impl AgentRuntime {
@@ -80,6 +86,9 @@ impl AgentRuntime {
         let client = Arc::clone(&self.client);
         let tools = Arc::clone(&self.tools);
         let max_rounds = max_tool_rounds.unwrap_or(DEFAULT_MAX_TOOL_ROUNDS);
+        let approval_mode = self.approval_mode;
+        let approval_cache = self.approval_cache.clone();
+        let shell_allow_commands = self.shell_allow_commands.clone();
 
         // Spawn the HTTP request + stream consumption + tool loop so the
         // event loop is free to redraw immediately.
@@ -106,40 +115,46 @@ impl AgentRuntime {
                 })
                 .collect();
 
-            run_agent_loop(
-                &client,
-                &tools,
-                &tool_defs,
-                &mut full_messages,
-                &sampling,
-                &on_retry,
-                &tx,
-                &agent_name,
+            let ctx = AgentLoopContext {
+                client: &client,
+                tools: &tools,
+                tool_defs: &tool_defs,
+                sampling: &sampling,
+                on_retry: &on_retry,
+                tx: &tx,
+                agent_name: &agent_name,
                 max_rounds,
-            )
-            .await;
+                approval_mode,
+                approval_cache: &approval_cache,
+                shell_allow_commands: &shell_allow_commands,
+            };
+            run_agent_loop(&ctx, &mut full_messages).await;
         });
 
         rx
     }
 }
 
+/// Context for a single agent loop execution, grouping all shared references.
+struct AgentLoopContext<'a> {
+    client: &'a Arc<dyn LlmClient>,
+    tools: &'a ToolRegistry,
+    tool_defs: &'a [ToolDefinition],
+    sampling: &'a krew_config::SamplingConfig,
+    on_retry: &'a (dyn Fn(krew_llm::common::RetryInfo) + Send + Sync),
+    tx: &'a mpsc::UnboundedSender<AgentEvent>,
+    agent_name: &'a str,
+    max_rounds: u32,
+    approval_mode: ApprovalMode,
+    approval_cache: &'a ApprovalCache,
+    shell_allow_commands: &'a [String],
+}
+
 /// Run the agent's tool-call loop: stream LLM → execute tools → re-call LLM.
 ///
 /// The loop exits when the LLM finishes without tool calls, when the
 /// maximum number of tool rounds is reached, or on error.
-#[allow(clippy::too_many_arguments)]
-async fn run_agent_loop(
-    client: &Arc<dyn LlmClient>,
-    tools: &ToolRegistry,
-    tool_defs: &[ToolDefinition],
-    messages: &mut Vec<ChatMessage>,
-    sampling: &krew_config::SamplingConfig,
-    on_retry: &(dyn Fn(krew_llm::common::RetryInfo) + Send + Sync),
-    tx: &mpsc::UnboundedSender<AgentEvent>,
-    agent_name: &str,
-    max_rounds: u32,
-) {
+async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Vec<ChatMessage>) {
     let mut total_usage = Usage {
         prompt_tokens: 0,
         completion_tokens: 0,
@@ -151,15 +166,16 @@ async fn run_agent_loop(
     // persistence in the main session history.
     let mut tool_round_messages: Vec<ChatMessage> = Vec::new();
 
-    for round in 0..=max_rounds {
+    for round in 0..=ctx.max_rounds {
         // Call the LLM.
-        let stream = match client
-            .chat_stream(messages, tool_defs, sampling, Some(on_retry))
+        let stream = match ctx
+            .client
+            .chat_stream(messages, ctx.tool_defs, ctx.sampling, Some(ctx.on_retry))
             .await
         {
             Ok(s) => s,
             Err(e) => {
-                let _ = tx.send(AgentEvent::Error {
+                let _ = ctx.tx.send(AgentEvent::Error {
                     message: e.to_string(),
                     intermediate_messages: std::mem::take(&mut tool_round_messages),
                 });
@@ -168,7 +184,7 @@ async fn run_agent_loop(
         };
 
         // Consume the stream, collecting text and tool calls.
-        let result = consume_stream(stream, tx, agent_name).await;
+        let result = consume_stream(stream, ctx.tx, ctx.agent_name).await;
 
         // Accumulate usage.
         if let Some(usage) = &result.usage {
@@ -179,7 +195,7 @@ async fn run_agent_loop(
 
         // If there was a stream error, stop and report with collected messages.
         if let Some(error_msg) = result.error {
-            let _ = tx.send(AgentEvent::Error {
+            let _ = ctx.tx.send(AgentEvent::Error {
                 message: error_msg,
                 intermediate_messages: tool_round_messages,
             });
@@ -188,7 +204,7 @@ async fn run_agent_loop(
 
         // If no tool calls, we're done.
         if result.tool_calls.is_empty() {
-            let _ = tx.send(AgentEvent::Done {
+            let _ = ctx.tx.send(AgentEvent::Done {
                 usage: total_usage,
                 intermediate_messages: tool_round_messages,
                 final_text: result.text,
@@ -197,9 +213,12 @@ async fn run_agent_loop(
         }
 
         // Safety check: max rounds exceeded.
-        if round >= max_rounds {
-            let _ = tx.send(AgentEvent::Error {
-                message: format!("Tool call loop exceeded maximum of {max_rounds} rounds"),
+        if round >= ctx.max_rounds {
+            let _ = ctx.tx.send(AgentEvent::Error {
+                message: format!(
+                    "Tool call loop exceeded maximum of {} rounds",
+                    ctx.max_rounds
+                ),
                 intermediate_messages: std::mem::take(&mut tool_round_messages),
             });
             return;
@@ -209,7 +228,7 @@ async fn run_agent_loop(
         let assistant_msg = ChatMessage {
             role: ChatRole::Assistant,
             content: result.text,
-            name: Some(agent_name.to_string()),
+            name: Some(ctx.agent_name.to_string()),
             tool_calls: Some(
                 result
                     .tool_calls
@@ -227,39 +246,171 @@ async fn run_agent_loop(
         tool_round_messages.push(assistant_msg.clone());
         messages.push(assistant_msg);
 
-        // Execute all tool calls in parallel (readonly tools are safe to
-        // run concurrently).
-        let tool_futures: Vec<_> = result
-            .tool_calls
+        // Split tool calls into three groups:
+        // 1. readonly_calls: truly side-effect-free tools → parallel
+        // 2. auto_write_calls: write/shell auto-approved (FullAuto, cache hit, allowlist) → serial
+        // 3. approval_calls: need user approval → serial with prompt
+        let mut readonly_calls = Vec::new();
+        let mut auto_write_calls = Vec::new();
+        let mut approval_calls: Vec<(&StreamToolCall, bool)> = Vec::new();
+        for tc in &result.tool_calls {
+            match check_tool_approval(
+                &tc.name,
+                &tc.arguments,
+                ctx.tools,
+                ctx.approval_mode,
+                ctx.approval_cache,
+                ctx.shell_allow_commands,
+            )
+            .await
+            {
+                ToolApproval::Auto => {
+                    if ctx.tools.requires_approval(&tc.name) {
+                        // Write tool auto-approved — execute serially to avoid races.
+                        auto_write_calls.push(tc);
+                    } else {
+                        // Truly readonly — safe to execute in parallel.
+                        readonly_calls.push(tc);
+                    }
+                }
+                ToolApproval::NeedsApproval {
+                    allow_session_approval,
+                } => approval_calls.push((tc, allow_session_approval)),
+            }
+        }
+
+        // Phase 1: Execute readonly tools in parallel.
+        let readonly_futures: Vec<_> = readonly_calls
             .iter()
             .map(|tc| {
                 let name = tc.name.clone();
                 let args_str = tc.arguments.clone();
                 let id = tc.id.clone();
-
-                // Notify TUI of tool call start.
-                let _ = tx.send(AgentEvent::ToolCallStart {
+                let _ = ctx.tx.send(AgentEvent::ToolCallStart {
                     name: name.clone(),
                     arguments: args_str.clone(),
                 });
-
-                let tools_ref = &tools;
+                let tools_ref = &ctx.tools;
+                let tx_ref = ctx.tx.clone();
                 async move {
                     let args: serde_json::Value =
                         serde_json::from_str(&args_str).unwrap_or_default();
-                    let result = tools_ref.dispatch(&name, args).await;
-                    (id, name, result)
+                    let handle = create_tool_context(&name, &tx_ref);
+                    let result = tools_ref.dispatch(&name, args, &handle.ctx).await;
+                    // Drop the sender so the forwarder sees channel closed.
+                    drop(handle.ctx);
+                    if let Some(f) = handle.forwarder {
+                        let _ = f.await;
+                    }
+                    (id, name, args_str, result)
                 }
             })
             .collect();
 
-        let results = futures::future::join_all(tool_futures).await;
+        let readonly_results = futures::future::join_all(readonly_futures).await;
 
-        // Append tool result messages and notify TUI.
-        for (id, name, result) in results {
-            // Generate summary for TUI display.
+        // Phase 2: Execute auto-approved write tools serially (avoid races on same file).
+        let mut auto_write_results = Vec::new();
+        for tc in &auto_write_calls {
+            let name = tc.name.clone();
+            let args_str = tc.arguments.clone();
+            let id = tc.id.clone();
+            let _ = ctx.tx.send(AgentEvent::ToolCallStart {
+                name: name.clone(),
+                arguments: args_str.clone(),
+            });
+            let args: serde_json::Value = serde_json::from_str(&args_str).unwrap_or_default();
+            let handle = create_tool_context(&name, ctx.tx);
+            let result = ctx.tools.dispatch(&name, args, &handle.ctx).await;
+            drop(handle.ctx);
+            if let Some(f) = handle.forwarder {
+                let _ = f.await;
+            }
+            auto_write_results.push((id, name, args_str, result));
+        }
+
+        // Phase 3: Execute approval-needed tools sequentially.
+        let mut approval_results = Vec::new();
+        let mut aborted = false;
+
+        for (tc, allow_session_approval) in &approval_calls {
+            let name = tc.name.clone();
+            let args_str = tc.arguments.clone();
+            let id = tc.id.clone();
+
+            let _ = ctx.tx.send(AgentEvent::ToolCallStart {
+                name: name.clone(),
+                arguments: args_str.clone(),
+            });
+
+            // Send approval request and block until user responds.
+            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+            let _ = ctx.tx.send(AgentEvent::ApprovalRequest {
+                tool_name: name.clone(),
+                arguments: args_str.clone(),
+                allow_session_approval: *allow_session_approval,
+                respond: resp_tx,
+            });
+
+            let decision = resp_rx.await.unwrap_or_default();
+
+            match decision {
+                ReviewDecision::Approved => {
+                    let args: serde_json::Value =
+                        serde_json::from_str(&args_str).unwrap_or_default();
+                    let handle = create_tool_context(&name, ctx.tx);
+                    let result = ctx.tools.dispatch(&name, args, &handle.ctx).await;
+                    drop(handle.ctx);
+                    if let Some(f) = handle.forwarder {
+                        let _ = f.await;
+                    }
+                    approval_results.push((id, name, args_str, result));
+                }
+                ReviewDecision::ApprovedForSession => {
+                    // Cache approval keys for this tool.
+                    cache_session_approval(&name, &args_str, ctx.approval_cache).await;
+                    let args: serde_json::Value =
+                        serde_json::from_str(&args_str).unwrap_or_default();
+                    let handle = create_tool_context(&name, ctx.tx);
+                    let result = ctx.tools.dispatch(&name, args, &handle.ctx).await;
+                    drop(handle.ctx);
+                    if let Some(f) = handle.forwarder {
+                        let _ = f.await;
+                    }
+                    approval_results.push((id, name, args_str, result));
+                }
+                ReviewDecision::Denied => {
+                    let result = krew_tools::ToolResult {
+                        content: format!("User denied execution of {name}."),
+                        is_error: true,
+                    };
+                    approval_results.push((id, name, args_str, result));
+                }
+                ReviewDecision::Abort => {
+                    aborted = true;
+                    break;
+                }
+            }
+        }
+
+        if aborted {
+            let _ = ctx.tx.send(AgentEvent::Error {
+                message: "User aborted the current operation.".to_string(),
+                intermediate_messages: std::mem::take(&mut tool_round_messages),
+            });
+            return;
+        }
+
+        // Combine all results and append to messages.
+        let all_results = readonly_results
+            .into_iter()
+            .chain(auto_write_results)
+            .chain(approval_results)
+            .collect::<Vec<_>>();
+
+        for (id, name, _args_str, result) in all_results {
             let summary = generate_tool_summary(&name, &result);
-            let _ = tx.send(AgentEvent::ToolCallDone {
+            let _ = ctx.tx.send(AgentEvent::ToolCallDone {
                 name: name.clone(),
                 result_summary: summary,
             });
@@ -444,6 +595,163 @@ fn format_tool_call_text(name: &str, arguments: &str) -> String {
     format!("{name}({params})")
 }
 
+/// Result of creating a tool context, including an optional forwarder handle
+/// that must be awaited before sending `ToolCallDone`.
+struct ToolContextHandle {
+    ctx: krew_tools::ToolContext,
+    /// Forwarder task that forwards streaming output to the TUI.
+    /// Must be awaited after tool execution to ensure all output is delivered.
+    forwarder: Option<tokio::task::JoinHandle<()>>,
+}
+
+/// Create a `ToolContext` for the given tool.
+///
+/// For shell tools, sets up an output channel that forwards each line
+/// to the TUI as `AgentEvent::ToolCallOutput`. The returned handle
+/// includes a forwarder task that must be awaited to drain output.
+fn create_tool_context(
+    tool_name: &str,
+    tx: &mpsc::UnboundedSender<AgentEvent>,
+) -> ToolContextHandle {
+    if tool_name == "shell" {
+        let (output_tx, mut output_rx) = mpsc::unbounded_channel::<String>();
+        let event_tx = tx.clone();
+        let forwarder = tokio::spawn(async move {
+            while let Some(text) = output_rx.recv().await {
+                let _ = event_tx.send(AgentEvent::ToolCallOutput { text });
+            }
+        });
+        ToolContextHandle {
+            ctx: krew_tools::ToolContext {
+                output_tx: Some(output_tx),
+            },
+            forwarder: Some(forwarder),
+        }
+    } else {
+        ToolContextHandle {
+            ctx: krew_tools::ToolContext::default(),
+            forwarder: None,
+        }
+    }
+}
+
+/// Result of checking whether a tool call needs user approval.
+enum ToolApproval {
+    /// Tool can be executed without asking the user.
+    Auto,
+    /// Tool requires user approval before execution.
+    NeedsApproval {
+        /// Whether the "Approve for Session" option should be shown.
+        allow_session_approval: bool,
+    },
+}
+
+/// Check whether a tool call needs user approval, considering:
+/// - The tool's intrinsic approval requirement
+/// - The global approval mode
+/// - For shell tools: the extracted command prefixes, allowlist, and cache
+async fn check_tool_approval(
+    tool_name: &str,
+    arguments: &str,
+    tools: &ToolRegistry,
+    mode: ApprovalMode,
+    cache: &ApprovalCache,
+    shell_allow_commands: &[String],
+) -> ToolApproval {
+    // Readonly tools never need approval.
+    if !tools.requires_approval(tool_name) {
+        return ToolApproval::Auto;
+    }
+
+    // FullAuto mode skips all approval.
+    if mode == ApprovalMode::FullAuto {
+        return ToolApproval::Auto;
+    }
+
+    // AutoEdit mode auto-approves write tools (only shell needs approval).
+    if mode == ApprovalMode::AutoEdit && tool_name != "shell" {
+        return ToolApproval::Auto;
+    }
+
+    // For non-shell tools: simple tool-name-based approval.
+    if tool_name != "shell" {
+        if cache.is_approved(tool_name).await {
+            return ToolApproval::Auto;
+        }
+        return ToolApproval::NeedsApproval {
+            allow_session_approval: true,
+        };
+    }
+
+    // Shell tool: command-level approval.
+    let command = extract_shell_command(arguments);
+    let Some(command) = command else {
+        // Cannot parse arguments — require approval, no session option.
+        return ToolApproval::NeedsApproval {
+            allow_session_approval: false,
+        };
+    };
+
+    let prefixes = krew_tools::builtin::extract_command_prefixes(&command);
+    let Some(prefixes) = prefixes else {
+        // Complex command — require approval, no session option.
+        return ToolApproval::NeedsApproval {
+            allow_session_approval: false,
+        };
+    };
+
+    // Check all prefixes against allowlist and cache.
+    let mut all_approved = true;
+    for prefix in &prefixes {
+        // Check allowlist.
+        let in_allowlist = shell_allow_commands
+            .iter()
+            .any(|entry| krew_tools::builtin::matches_allowlist_entry(prefix, entry));
+        if in_allowlist {
+            continue;
+        }
+        // Check session cache (key: "shell:<prefix>").
+        let cache_key = format!("shell:{prefix}");
+        if !cache.is_approved(&cache_key).await {
+            all_approved = false;
+            break;
+        }
+    }
+
+    if all_approved {
+        ToolApproval::Auto
+    } else {
+        ToolApproval::NeedsApproval {
+            allow_session_approval: true,
+        }
+    }
+}
+
+/// Cache session approval for a tool call.
+///
+/// For shell tools, caches each extracted command prefix separately
+/// (e.g. `shell:cargo build`). For other tools, caches by tool name.
+async fn cache_session_approval(tool_name: &str, arguments: &str, cache: &ApprovalCache) {
+    if tool_name == "shell"
+        && let Some(command) = extract_shell_command(arguments)
+        && let Some(prefixes) = krew_tools::builtin::extract_command_prefixes(&command)
+    {
+        for prefix in prefixes {
+            let key = format!("shell:{prefix}");
+            cache.approve_for_session(key).await;
+        }
+        return;
+    }
+    // Non-shell tools or shell parse failure: cache by tool name.
+    cache.approve_for_session(tool_name.to_string()).await;
+}
+
+/// Extract the shell command string from a tool call's JSON arguments.
+fn extract_shell_command(arguments: &str) -> Option<String> {
+    let args: serde_json::Value = serde_json::from_str(arguments).ok()?;
+    args.get("command")?.as_str().map(|s| s.to_string())
+}
+
 /// Generate a short summary string for TUI display of a tool result.
 fn generate_tool_summary(tool_name: &str, result: &krew_tools::ToolResult) -> String {
     if result.is_error {
@@ -510,6 +818,7 @@ pub struct InitAgentsResult {
 pub fn init_agents(config: &Config, cwd: Option<PathBuf>) -> InitAgentsResult {
     let mut agents = HashMap::new();
     let mut warnings = Vec::new();
+    let shared_approval_cache = ApprovalCache::new();
 
     for agent_config in &config.agents {
         if agent_config.provider == "builtin" {
@@ -589,7 +898,7 @@ pub fn init_agents(config: &Config, cwd: Option<PathBuf>) -> InitAgentsResult {
         // Create tool registry for this agent.
         let tools = if agent_config.tools {
             if let Some(ref cwd) = cwd {
-                Arc::new(krew_tools::builtin::create_readonly_registry(cwd.clone()))
+                Arc::new(krew_tools::builtin::create_full_registry(cwd.clone()))
             } else {
                 Arc::new(ToolRegistry::empty())
             }
@@ -603,6 +912,9 @@ pub fn init_agents(config: &Config, cwd: Option<PathBuf>) -> InitAgentsResult {
             tools,
             is_responding: false,
             other_agent_role: config.settings.other_agent_role,
+            approval_mode: config.settings.approval_mode,
+            approval_cache: shared_approval_cache.clone(),
+            shell_allow_commands: config.settings.shell_allow_commands.clone(),
         };
 
         agents.insert(agent_config.name.clone(), runtime);
@@ -781,5 +1093,359 @@ mod tests {
         // Agent B's tool call should be native.
         assert!(result[3].tool_calls.is_some());
         assert_eq!(result[4].role, ChatRole::Tool);
+    }
+
+    // -- Approval policy tests ------------------------------------------------
+
+    fn test_registry() -> ToolRegistry {
+        use std::path::PathBuf;
+        krew_tools::builtin::create_full_registry(PathBuf::from("/tmp"))
+    }
+
+    /// Helper to check approval result.
+    async fn is_auto(
+        tool_name: &str,
+        arguments: &str,
+        registry: &ToolRegistry,
+        mode: ApprovalMode,
+        cache: &ApprovalCache,
+        allow_cmds: &[String],
+    ) -> bool {
+        matches!(
+            check_tool_approval(tool_name, arguments, registry, mode, cache, allow_cmds).await,
+            ToolApproval::Auto
+        )
+    }
+
+    #[tokio::test]
+    async fn suggest_mode_readonly_auto() {
+        let registry = test_registry();
+        let cache = ApprovalCache::new();
+        let allow = vec![];
+        assert!(
+            is_auto(
+                "read_file",
+                "{}",
+                &registry,
+                ApprovalMode::Suggest,
+                &cache,
+                &allow
+            )
+            .await
+        );
+        assert!(
+            is_auto(
+                "glob",
+                "{}",
+                &registry,
+                ApprovalMode::Suggest,
+                &cache,
+                &allow
+            )
+            .await
+        );
+        assert!(
+            is_auto(
+                "grep",
+                "{}",
+                &registry,
+                ApprovalMode::Suggest,
+                &cache,
+                &allow
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn suggest_mode_write_needs_approval() {
+        let registry = test_registry();
+        let cache = ApprovalCache::new();
+        let allow = vec![];
+        assert!(
+            !is_auto(
+                "write_file",
+                "{}",
+                &registry,
+                ApprovalMode::Suggest,
+                &cache,
+                &allow
+            )
+            .await
+        );
+        assert!(
+            !is_auto(
+                "edit_file",
+                "{}",
+                &registry,
+                ApprovalMode::Suggest,
+                &cache,
+                &allow
+            )
+            .await
+        );
+        // Shell with non-allowlisted command.
+        let shell_args = r#"{"command":"rm -rf /"}"#;
+        assert!(
+            !is_auto(
+                "shell",
+                shell_args,
+                &registry,
+                ApprovalMode::Suggest,
+                &cache,
+                &allow
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_edit_mode_write_auto() {
+        let registry = test_registry();
+        let cache = ApprovalCache::new();
+        let allow = vec![];
+        assert!(
+            is_auto(
+                "write_file",
+                "{}",
+                &registry,
+                ApprovalMode::AutoEdit,
+                &cache,
+                &allow
+            )
+            .await
+        );
+        assert!(
+            is_auto(
+                "edit_file",
+                "{}",
+                &registry,
+                ApprovalMode::AutoEdit,
+                &cache,
+                &allow
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_edit_mode_shell_needs_approval() {
+        let registry = test_registry();
+        let cache = ApprovalCache::new();
+        let allow = vec![];
+        let shell_args = r#"{"command":"rm -rf /"}"#;
+        assert!(
+            !is_auto(
+                "shell",
+                shell_args,
+                &registry,
+                ApprovalMode::AutoEdit,
+                &cache,
+                &allow
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn full_auto_mode_all_auto() {
+        let registry = test_registry();
+        let cache = ApprovalCache::new();
+        let allow = vec![];
+        assert!(
+            is_auto(
+                "read_file",
+                "{}",
+                &registry,
+                ApprovalMode::FullAuto,
+                &cache,
+                &allow
+            )
+            .await
+        );
+        assert!(
+            is_auto(
+                "write_file",
+                "{}",
+                &registry,
+                ApprovalMode::FullAuto,
+                &cache,
+                &allow
+            )
+            .await
+        );
+        assert!(
+            is_auto(
+                "edit_file",
+                "{}",
+                &registry,
+                ApprovalMode::FullAuto,
+                &cache,
+                &allow
+            )
+            .await
+        );
+        let shell_args = r#"{"command":"rm -rf /"}"#;
+        assert!(
+            is_auto(
+                "shell",
+                shell_args,
+                &registry,
+                ApprovalMode::FullAuto,
+                &cache,
+                &allow
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_tool_no_approval() {
+        let registry = test_registry();
+        let cache = ApprovalCache::new();
+        let allow = vec![];
+        assert!(
+            is_auto(
+                "unknown_tool",
+                "{}",
+                &registry,
+                ApprovalMode::Suggest,
+                &cache,
+                &allow
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_allowlist_auto_approves() {
+        let registry = test_registry();
+        let cache = ApprovalCache::new();
+        let allow = vec!["ls".to_string(), "cargo build".to_string()];
+        // ls is in allowlist.
+        let args = r#"{"command":"ls -la"}"#;
+        assert!(
+            is_auto(
+                "shell",
+                args,
+                &registry,
+                ApprovalMode::Suggest,
+                &cache,
+                &allow
+            )
+            .await
+        );
+        // cargo build is in allowlist.
+        let args = r#"{"command":"cargo build --release"}"#;
+        assert!(
+            is_auto(
+                "shell",
+                args,
+                &registry,
+                ApprovalMode::Suggest,
+                &cache,
+                &allow
+            )
+            .await
+        );
+        // cargo test is NOT in allowlist (only cargo build is).
+        let args = r#"{"command":"cargo test"}"#;
+        assert!(
+            !is_auto(
+                "shell",
+                args,
+                &registry,
+                ApprovalMode::Suggest,
+                &cache,
+                &allow
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_session_cache_by_prefix() {
+        let registry = test_registry();
+        let cache = ApprovalCache::new();
+        let allow = vec![];
+        // Initially needs approval.
+        let args = r#"{"command":"cargo build --release"}"#;
+        assert!(
+            !is_auto(
+                "shell",
+                args,
+                &registry,
+                ApprovalMode::Suggest,
+                &cache,
+                &allow
+            )
+            .await
+        );
+        // Cache "cargo build" for session.
+        cache_session_approval("shell", args, &cache).await;
+        // Now auto-approved.
+        assert!(
+            is_auto(
+                "shell",
+                args,
+                &registry,
+                ApprovalMode::Suggest,
+                &cache,
+                &allow
+            )
+            .await
+        );
+        // Same prefix with different flags also auto-approved.
+        let args2 = r#"{"command":"cargo build -p krew-core"}"#;
+        assert!(
+            is_auto(
+                "shell",
+                args2,
+                &registry,
+                ApprovalMode::Suggest,
+                &cache,
+                &allow
+            )
+            .await
+        );
+        // Different subcommand still needs approval.
+        let args3 = r#"{"command":"cargo test"}"#;
+        assert!(
+            !is_auto(
+                "shell",
+                args3,
+                &registry,
+                ApprovalMode::Suggest,
+                &cache,
+                &allow
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_complex_command_no_session_option() {
+        let registry = test_registry();
+        let cache = ApprovalCache::new();
+        let allow = vec![];
+        // Complex command with command substitution.
+        let args = r#"{"command":"echo $(whoami)"}"#;
+        let result = check_tool_approval(
+            "shell",
+            args,
+            &registry,
+            ApprovalMode::Suggest,
+            &cache,
+            &allow,
+        )
+        .await;
+        match result {
+            ToolApproval::NeedsApproval {
+                allow_session_approval,
+            } => {
+                assert!(!allow_session_approval);
+            }
+            ToolApproval::Auto => panic!("expected NeedsApproval"),
+        }
     }
 }

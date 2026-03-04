@@ -5,6 +5,7 @@ use ratatui::text::{Line, Span};
 
 use crate::custom_terminal;
 use crate::render;
+use crate::render::diff_render;
 
 use super::App;
 
@@ -142,11 +143,103 @@ impl App {
 
         render::insert_lines(terminal, vec![line])
     }
+
+    /// Insert an approval decision feedback line in the scrollback.
+    pub(crate) fn insert_decision_line(
+        terminal: &mut custom_terminal::Terminal,
+        decision: &krew_core::event::ReviewDecision,
+    ) -> anyhow::Result<()> {
+        use krew_core::event::ReviewDecision;
+
+        let (symbol, text, color) = match decision {
+            ReviewDecision::Approved => ("\u{2713}", "Approved", Color::Green),
+            ReviewDecision::ApprovedForSession => {
+                ("\u{2713}", "Approved (for session)", Color::Green)
+            }
+            ReviewDecision::Denied => ("\u{2717}", "Denied", Color::Red),
+            ReviewDecision::Abort => ("\u{2717}", "Aborted", Color::Red),
+        };
+
+        let line = Line::from(Span::styled(
+            format!("  {symbol} {text}"),
+            Style::default().fg(color),
+        ));
+        terminal.insert_lines_above(vec![line])?;
+        Ok(())
+    }
+}
+
+/// Render a diff preview for write/edit tool calls.
+///
+/// For write_file: generates an all-additions diff from the content.
+/// For edit_file: generates a unified diff from old_string → new_string.
+/// Returns indented diff lines ready for `insert_lines_above()`.
+pub(crate) fn render_tool_diff_preview(
+    name: &str,
+    arguments: &str,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let args: serde_json::Value = serde_json::from_str(arguments).unwrap_or_default();
+    let obj = match args.as_object() {
+        Some(o) => o,
+        None => return Vec::new(),
+    };
+
+    let (file_path, old, new) = match name {
+        "write_file" => {
+            let fp = obj.get("file_path").and_then(|v| v.as_str()).unwrap_or("");
+            let content = obj.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            if content.is_empty() {
+                return Vec::new();
+            }
+            (fp, "", content)
+        }
+        "edit_file" => {
+            let fp = obj.get("file_path").and_then(|v| v.as_str()).unwrap_or("");
+            let old_s = obj.get("old_string").and_then(|v| v.as_str()).unwrap_or("");
+            let new_s = obj.get("new_string").and_then(|v| v.as_str()).unwrap_or("");
+            if old_s.is_empty() && new_s.is_empty() {
+                return Vec::new();
+            }
+            (fp, old_s, new_s)
+        }
+        _ => return Vec::new(),
+    };
+
+    let unified = similar::TextDiff::from_lines(old, new)
+        .unified_diff()
+        .header(&format!("a/{file_path}"), &format!("b/{file_path}"))
+        .to_string();
+
+    let diff_lines = diff_render::render_unified_diff(&unified, file_path, width.saturating_sub(4));
+
+    // Indent each diff line by 4 spaces.
+    diff_lines
+        .into_iter()
+        .map(|dl| {
+            let mut spans = vec![Span::raw("    ")];
+            spans.extend(dl.spans);
+            Line::from(spans).style(dl.style)
+        })
+        .collect()
+}
+
+/// Parameters to skip in the tool call display line.
+///
+/// These are content parameters whose values are rendered separately
+/// (e.g. as a diff preview below the tool call line).
+fn is_content_param(tool_name: &str, param_name: &str) -> bool {
+    matches!(
+        (tool_name, param_name),
+        ("write_file", "content") | ("edit_file", "old_string") | ("edit_file", "new_string")
+    )
 }
 
 /// Format a tool call start display: `**read_file**("src/main.rs", offset=10)`
 ///
 /// Returns styled spans with the tool name in bold.
+/// Content parameters (write_file.content, edit_file.old_string/new_string)
+/// are omitted — they are rendered as diff previews separately.
 pub(crate) fn format_tool_call_display(name: &str, arguments: &str) -> Vec<Span<'static>> {
     let args: serde_json::Value = serde_json::from_str(arguments).unwrap_or_default();
 
@@ -154,13 +247,14 @@ pub(crate) fn format_tool_call_display(name: &str, arguments: &str) -> Vec<Span<
         Some(obj) => {
             let parts: Vec<String> = obj
                 .iter()
+                .filter(|(key, _)| !is_content_param(name, key))
                 .map(|(key, val)| {
                     let display = match val {
                         serde_json::Value::String(s) => format!("\"{s}\""),
                         other => other.to_string(),
                     };
                     // First parameter shows value only, rest show key=value.
-                    if obj.keys().next() == Some(key) {
+                    if obj.keys().find(|k| !is_content_param(name, k)) == Some(key) {
                         display
                     } else {
                         format!("{key}={display}")

@@ -7,7 +7,8 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::{
-    ToolError, ToolHandler, ToolResult, ToolSpec, check_binary, check_file_size, validate_path,
+    ToolContext, ToolError, ToolHandler, ToolResult, ToolSpec, check_binary, check_file_size,
+    validate_path,
 };
 
 const MAX_LINE_LENGTH: usize = 2000;
@@ -79,7 +80,7 @@ impl ToolHandler for ReadFileTool {
         false
     }
 
-    async fn execute(&self, args: Value) -> Result<ToolResult, ToolError> {
+    async fn execute(&self, args: Value, _ctx: &ToolContext) -> Result<ToolResult, ToolError> {
         let args: ReadFileArgs =
             serde_json::from_value(args).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
 
@@ -189,7 +190,10 @@ mod tests {
         let tool = ReadFileTool::new(dir.path().to_path_buf());
 
         let result = tool
-            .execute(json!({ "file_path": file_path.to_str().unwrap() }))
+            .execute(
+                json!({ "file_path": file_path.to_str().unwrap() }),
+                &ToolContext::default(),
+            )
             .await
             .unwrap();
 
@@ -206,11 +210,14 @@ mod tests {
         let tool = ReadFileTool::new(dir.path().to_path_buf());
 
         let result = tool
-            .execute(json!({
-                "file_path": file_path.to_str().unwrap(),
-                "offset": 2,
-                "limit": 2
-            }))
+            .execute(
+                json!({
+                    "file_path": file_path.to_str().unwrap(),
+                    "offset": 2,
+                    "limit": 2
+                }),
+                &ToolContext::default(),
+            )
             .await
             .unwrap();
 
@@ -227,10 +234,13 @@ mod tests {
         let tool = ReadFileTool::new(dir.path().to_path_buf());
 
         let result = tool
-            .execute(json!({
-                "file_path": file_path.to_str().unwrap(),
-                "offset": 10
-            }))
+            .execute(
+                json!({
+                    "file_path": file_path.to_str().unwrap(),
+                    "offset": 10
+                }),
+                &ToolContext::default(),
+            )
             .await
             .unwrap();
 
@@ -243,7 +253,12 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let tool = ReadFileTool::new(dir.path().to_path_buf());
 
-        let result = tool.execute(json!({ "file_path": "/etc/passwd" })).await;
+        let result = tool
+            .execute(
+                json!({ "file_path": "/etc/passwd" }),
+                &ToolContext::default(),
+            )
+            .await;
 
         assert!(result.is_err());
     }
@@ -254,7 +269,10 @@ mod tests {
         let tool = ReadFileTool::new(dir.path().to_path_buf());
 
         let result = tool
-            .execute(json!({ "file_path": file_path.to_str().unwrap() }))
+            .execute(
+                json!({ "file_path": file_path.to_str().unwrap() }),
+                &ToolContext::default(),
+            )
             .await
             .unwrap();
 
@@ -271,7 +289,10 @@ mod tests {
         let tool = ReadFileTool::new(dir.path().to_path_buf());
 
         let result = tool
-            .execute(json!({ "file_path": file_path.to_str().unwrap() }))
+            .execute(
+                json!({ "file_path": file_path.to_str().unwrap() }),
+                &ToolContext::default(),
+            )
             .await
             .unwrap();
 
@@ -285,10 +306,13 @@ mod tests {
         let tool = ReadFileTool::new(dir.path().to_path_buf());
 
         let result = tool
-            .execute(json!({
-                "file_path": file_path.to_str().unwrap(),
-                "offset": 0
-            }))
+            .execute(
+                json!({
+                    "file_path": file_path.to_str().unwrap(),
+                    "offset": 0
+                }),
+                &ToolContext::default(),
+            )
             .await;
 
         assert!(result.is_err());

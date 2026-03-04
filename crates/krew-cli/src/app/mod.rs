@@ -1,4 +1,5 @@
 mod agent_display;
+pub mod approval;
 mod commands;
 mod input;
 mod message;

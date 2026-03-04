@@ -60,12 +60,6 @@ impl Terminal {
         self.backend.size()
     }
 
-    /// Mutable access to the backend (for raw crossterm commands).
-    #[allow(dead_code)]
-    pub fn backend_mut(&mut self) -> &mut CrosstermBackend<io::Stdout> {
-        &mut self.backend
-    }
-
     /// Resize both internal buffers and update the viewport area.
     pub fn set_viewport_area(&mut self, area: Rect) {
         self.buffers[self.current].resize(area);
