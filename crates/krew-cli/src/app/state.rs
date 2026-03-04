@@ -14,6 +14,8 @@ use krew_core::agent::{AgentRuntime, init_agents};
 use krew_core::event::AgentEvent;
 use krew_llm::{ChatMessage, ChatRole};
 
+use krew_tools::mcp::McpManager;
+
 use crate::completion::ActivePopup;
 use crate::custom_terminal;
 use crate::frame_scheduler::FrameRequester;
@@ -116,6 +118,9 @@ pub struct App {
     pub(crate) approval_overlay: Option<ApprovalOverlay>,
     /// Whether we are inside a streaming shell output section.
     shell_output_started: bool,
+    /// MCP server lifecycle manager (dropped on App shutdown).
+    #[allow(dead_code)]
+    mcp_manager: Option<McpManager>,
 }
 
 impl App {
@@ -192,11 +197,17 @@ impl App {
             pending_resume_id: None,
             approval_overlay: None,
             shell_output_started: false,
+            mcp_manager: None,
         })
     }
 
     /// Run the main event loop.
     pub async fn run(&mut self, terminal: &mut custom_terminal::Terminal) -> anyhow::Result<()> {
+        // Initialize MCP servers (if configured) before the event loop.
+        if !self.config.mcp_servers.is_empty() {
+            self.init_mcp().await;
+        }
+
         // Print the header above the viewport (scrolls into scrollback).
         render::insert_header(terminal, self)?;
 
@@ -302,6 +313,26 @@ impl App {
         }
 
         Ok(())
+    }
+
+    /// Initialize MCP servers and register their tools into agent registries.
+    async fn init_mcp(&mut self) {
+        let manager = McpManager::start_all(&self.config.mcp_servers).await;
+
+        if manager.server_count() > 0 {
+            // Register MCP tools into each agent's tool registry.
+            for runtime in self.agents.values_mut() {
+                if runtime.config.tools
+                    && let Some(registry) = Arc::get_mut(&mut runtime.tools)
+                {
+                    manager.register_tools(registry);
+                }
+            }
+
+            tracing::info!("MCP: {} server(s) initialized", manager.server_count());
+        }
+
+        self.mcp_manager = Some(manager);
     }
 
     /// Handle an incoming agent event.

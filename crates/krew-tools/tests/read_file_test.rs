@@ -1,9 +1,9 @@
 use std::io::Write;
 use std::path::PathBuf;
 
+use krew_tools::ToolContext;
 use krew_tools::ToolHandler;
 use krew_tools::builtin::ReadFileTool;
-use krew_tools::ToolContext;
 use serde_json::json;
 use tempfile::TempDir;
 

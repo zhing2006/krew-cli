@@ -1,9 +1,7 @@
 use std::io::Write;
 use tempfile::NamedTempFile;
 
-use krew_config::{
-    AgentConfig, ApprovalMode, Config, ConfigError, ProviderConfig, ThinkingEffort,
-};
+use krew_config::{AgentConfig, ApprovalMode, Config, ConfigError, ProviderConfig, ThinkingEffort};
 
 const VALID_CONFIG: &str = r#"
 [settings]

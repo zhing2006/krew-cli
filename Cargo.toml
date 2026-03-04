@@ -40,6 +40,7 @@ dunce = { version = "1", default-features = false }
 walkdir = { version = "2", default-features = false }
 globset = { version = "0.4", default-features = false }
 regex = { version = "1", default-features = false, features = ["std"] }
+rmcp = { version = "1", default-features = false, features = ["client", "transport-child-process"] }
 
 # Internal workspace crates
 krew-config = { path = "crates/krew-config" }
