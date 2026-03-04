@@ -110,6 +110,28 @@ fn fmt_elapsed(secs: u64) -> String {
 pub fn render_input_viewport(frame: &mut custom_terminal::Frame, app: &mut App) {
     let area = frame.area();
 
+    // When an approval overlay is active, render it instead of the normal input.
+    if let Some(overlay) = &app.approval_overlay {
+        let overlay_height = overlay.desired_height();
+        let has_status_line = app.agent_start_time.is_some();
+
+        let mut constraints = Vec::new();
+        if has_status_line {
+            constraints.push(Constraint::Length(1)); // Agent status line
+        }
+        constraints.push(Constraint::Length(overlay_height)); // Approval overlay
+
+        let chunks = Layout::vertical(constraints).split(area);
+        let mut i = 0;
+
+        if has_status_line {
+            render_agent_status(frame, app, chunks[i]);
+            i += 1;
+        }
+        overlay.render_widget(chunks[i], frame.buffer_mut());
+        return;
+    }
+
     // Use visual line count (after word wrapping) for layout.
     let textarea_width = area.width.saturating_sub(2); // minus prompt "› "
     let textarea_lines = app.textarea.desired_height(textarea_width.max(1));

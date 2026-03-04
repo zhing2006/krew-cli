@@ -14,6 +14,7 @@ dunce = { workspace = true }
 walkdir = { workspace = true }
 globset = { workspace = true }
 regex = { workspace = true }
+similar = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

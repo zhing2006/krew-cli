@@ -12,7 +12,8 @@ use serde_json::{Value, json};
 use walkdir::WalkDir;
 
 use crate::{
-    ToolError, ToolHandler, ToolResult, ToolSpec, check_binary, check_file_size, validate_path,
+    ToolContext, ToolError, ToolHandler, ToolResult, ToolSpec, check_binary, check_file_size,
+    validate_path,
 };
 
 const DEFAULT_LIMIT: usize = 100;
@@ -87,7 +88,7 @@ impl ToolHandler for GrepTool {
         false
     }
 
-    async fn execute(&self, args: Value) -> Result<ToolResult, ToolError> {
+    async fn execute(&self, args: Value, _ctx: &ToolContext) -> Result<ToolResult, ToolError> {
         let args: GrepArgs =
             serde_json::from_value(args).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
 
@@ -262,7 +263,10 @@ mod tests {
         let dir = setup_test_files();
         let tool = GrepTool::new(dir.path().to_path_buf());
 
-        let result = tool.execute(json!({ "pattern": "TODO" })).await.unwrap();
+        let result = tool
+            .execute(json!({ "pattern": "TODO" }), &ToolContext::default())
+            .await
+            .unwrap();
 
         assert!(!result.is_error);
         assert!(result.content.contains("TODO"));
@@ -275,7 +279,10 @@ mod tests {
         let tool = GrepTool::new(dir.path().to_path_buf());
 
         let result = tool
-            .execute(json!({ "pattern": "TODO", "include": "*.rs" }))
+            .execute(
+                json!({ "pattern": "TODO", "include": "*.rs" }),
+                &ToolContext::default(),
+            )
             .await
             .unwrap();
 
@@ -290,7 +297,10 @@ mod tests {
         let tool = GrepTool::new(dir.path().to_path_buf());
 
         let result = tool
-            .execute(json!({ "pattern": "TODO", "limit": 1 }))
+            .execute(
+                json!({ "pattern": "TODO", "limit": 1 }),
+                &ToolContext::default(),
+            )
             .await
             .unwrap();
 
@@ -304,7 +314,10 @@ mod tests {
         let tool = GrepTool::new(dir.path().to_path_buf());
 
         let result = tool
-            .execute(json!({ "pattern": "NONEXISTENT_PATTERN_xyz123" }))
+            .execute(
+                json!({ "pattern": "NONEXISTENT_PATTERN_xyz123" }),
+                &ToolContext::default(),
+            )
             .await
             .unwrap();
 
@@ -317,7 +330,9 @@ mod tests {
         let dir = setup_test_files();
         let tool = GrepTool::new(dir.path().to_path_buf());
 
-        let result = tool.execute(json!({ "pattern": "[invalid" })).await;
+        let result = tool
+            .execute(json!({ "pattern": "[invalid" }), &ToolContext::default())
+            .await;
         assert!(result.is_err());
     }
 
@@ -327,7 +342,10 @@ mod tests {
         let tool = GrepTool::new(dir.path().to_path_buf());
 
         let result = tool
-            .execute(json!({ "pattern": "fn", "path": "src" }))
+            .execute(
+                json!({ "pattern": "fn", "path": "src" }),
+                &ToolContext::default(),
+            )
             .await
             .unwrap();
 

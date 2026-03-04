@@ -34,6 +34,8 @@ textwrap = { version = "0.16", default-features = false }
 pulldown-cmark = { version = "0.13", default-features = false }
 syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
 two-face = { version = "0.4", default-features = false, features = ["syntect-default-fancy"] }
+similar = { version = "2", default-features = false, features = ["text"] }
+diffy = { version = "0.4", default-features = false }
 dunce = { version = "1", default-features = false }
 walkdir = { version = "2", default-features = false }
 globset = { version = "0.4", default-features = false }

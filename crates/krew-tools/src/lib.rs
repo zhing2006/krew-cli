@@ -48,6 +48,17 @@ pub struct ToolSpec {
     pub parameters: Value,
 }
 
+/// Execution context passed to tool handlers.
+///
+/// Provides optional capabilities like streaming output. Tools that do not
+/// need these capabilities can ignore the context.
+#[derive(Default)]
+pub struct ToolContext {
+    /// Optional channel for streaming incremental output lines to the caller.
+    /// Used by the shell tool to send output as it becomes available.
+    pub output_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+}
+
 /// Trait for tool execution logic.
 ///
 /// This is the "how it runs" half of the tool system. Implementations
@@ -59,7 +70,7 @@ pub trait ToolHandler: Send + Sync {
     /// Whether this tool requires user approval before execution.
     fn requires_approval(&self) -> bool;
     /// Execute the tool with the given arguments.
-    async fn execute(&self, args: Value) -> Result<ToolResult, ToolError>;
+    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult, ToolError>;
 }
 
 /// Registry that pairs tool specs (for LLM) with handlers (for execution).
@@ -93,11 +104,21 @@ impl ToolRegistry {
         self.specs.is_empty()
     }
 
+    /// Check whether a tool requires user approval before execution.
+    ///
+    /// Returns `false` for unknown tools (safe default: unknown tools will
+    /// fail at dispatch anyway).
+    pub fn requires_approval(&self, name: &str) -> bool {
+        self.handlers
+            .get(name)
+            .is_some_and(|h| h.requires_approval())
+    }
+
     /// Dispatch a tool call to the registered handler.
     ///
     /// Returns a `ToolResult` with `is_error = true` when the tool is not
     /// found or the handler returns an error, so the LLM always gets feedback.
-    pub async fn dispatch(&self, name: &str, args: Value) -> ToolResult {
+    pub async fn dispatch(&self, name: &str, args: Value, ctx: &ToolContext) -> ToolResult {
         let handler = match self.handlers.get(name) {
             Some(h) => h,
             None => {
@@ -108,7 +129,7 @@ impl ToolRegistry {
             }
         };
 
-        match handler.execute(args).await {
+        match handler.execute(args, ctx).await {
             Ok(result) => result,
             Err(e) => ToolResult {
                 content: e.to_string(),
