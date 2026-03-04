@@ -93,9 +93,13 @@ api_key_env = "DOUBAO_API_KEY"
 base_url = "https://ark.cn-beijing.volces.com/api/v3"
 
 # MCP servers
+[[mcp_servers]]
+name = "context7"
+command = "cmd"
+args = ["/c", "npx", "-y", "@upstash/context7-mcp", "--api-key", "ctx7sk-your-api-key"]
 
-# [[mcp_servers]]
-# name = "filesystem"
-# command = "npx"
-# args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
-# trust = "confirm"
+[[mcp_servers]]
+name = "firecrawl"
+url = "https://mcp.firecrawl.dev/v2/mcp"
+[mcp_servers.headers]
+Authorization = "Bearer fc-your-api-key"

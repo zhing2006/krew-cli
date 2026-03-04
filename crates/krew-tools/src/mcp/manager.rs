@@ -11,6 +11,16 @@ use super::{display_name, qualified_name};
 use crate::{ToolRegistry, ToolSpec};
 use krew_config::{McpServerConfig, McpTrust};
 
+/// Summary info about a connected MCP server (for `/mcp` display).
+pub struct McpServerInfo {
+    /// Server name.
+    pub name: String,
+    /// Number of discovered tools.
+    pub tool_count: usize,
+    /// Names of discovered tools.
+    pub tool_names: Vec<String>,
+}
+
 /// Discovered tools from a single MCP server.
 struct ServerTools {
     name: String,
@@ -23,6 +33,8 @@ struct ServerTools {
 pub struct McpManager {
     /// Active server connections with their discovered tools.
     servers: Vec<ServerTools>,
+    /// Error messages from servers that failed to start.
+    errors: Vec<String>,
 }
 
 impl McpManager {
@@ -33,9 +45,10 @@ impl McpManager {
     /// register discovered tools into agent registries.
     pub async fn start_all(configs: &[McpServerConfig]) -> Self {
         let mut servers = Vec::new();
+        let mut errors = Vec::new();
 
         if configs.is_empty() {
-            return Self { servers };
+            return Self { servers, errors };
         }
 
         // Start all servers concurrently.
@@ -44,8 +57,19 @@ impl McpManager {
             .map(|config| {
                 let config = config.clone();
                 async move {
-                    let env = expand_env(&config.env);
-                    let result = McpClient::connect(&config.command, &config.args, &env).await;
+                    let result = if config.is_http() {
+                        let url = config.url.as_deref().unwrap();
+                        let headers = config.headers.clone().unwrap_or_default();
+                        McpClient::connect_http(url, &headers).await
+                    } else if let Some(ref command) = config.command {
+                        let env = expand_env(&config.env);
+                        McpClient::connect(command, &config.args, &env).await
+                    } else {
+                        Err(anyhow::anyhow!(
+                            "MCP server '{}': must set either 'command' (stdio) or 'url' (HTTP)",
+                            config.name
+                        ))
+                    };
                     (config, result)
                 }
             })
@@ -75,20 +99,21 @@ impl McpManager {
                             });
                         }
                         Err(e) => {
-                            error!(
-                                "MCP server '{}' started but list_tools failed: {e}",
-                                config.name
-                            );
+                            let msg = format!("MCP '{}': list_tools failed: {e}", config.name);
+                            error!("{msg}");
+                            errors.push(msg);
                         }
                     }
                 }
                 Err(e) => {
-                    error!("Failed to start MCP server '{}': {e}", config.name);
+                    let msg = format!("MCP '{}': {e}", config.name);
+                    error!("{msg}");
+                    errors.push(msg);
                 }
             }
         }
 
-        Self { servers }
+        Self { servers, errors }
     }
 
     /// Register all discovered MCP tools into a ToolRegistry.
@@ -123,6 +148,23 @@ impl McpManager {
     /// Get the number of active MCP server connections.
     pub fn server_count(&self) -> usize {
         self.servers.len()
+    }
+
+    /// Get error messages from servers that failed to start.
+    pub fn errors(&self) -> &[String] {
+        &self.errors
+    }
+
+    /// Get summary info for each connected MCP server.
+    pub fn server_info(&self) -> Vec<McpServerInfo> {
+        self.servers
+            .iter()
+            .map(|s| McpServerInfo {
+                name: s.name.clone(),
+                tool_count: s.tools.len(),
+                tool_names: s.tools.iter().map(|t| t.name.clone()).collect(),
+            })
+            .collect()
     }
 }
 
