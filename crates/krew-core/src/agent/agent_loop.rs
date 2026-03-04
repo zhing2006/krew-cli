@@ -284,6 +284,16 @@ pub(super) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
             .collect::<Vec<_>>();
 
         for (id, name, _args_str, result) in all_results {
+            // Forward MCP tool result content to TUI (displayed like shell output).
+            if krew_tools::mcp::is_mcp_tool(&name) && !result.is_error && !result.content.is_empty()
+            {
+                for line in result.content.lines() {
+                    let _ = ctx.tx.send(AgentEvent::ToolCallOutput {
+                        text: line.to_string(),
+                    });
+                }
+            }
+
             let summary = generate_tool_summary(&name, &result);
             let _ = ctx.tx.send(AgentEvent::ToolCallDone {
                 name: name.clone(),
