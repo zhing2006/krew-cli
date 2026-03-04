@@ -46,7 +46,10 @@ impl App {
             SlashCommand::Resume => {
                 self.execute_resume(terminal)?;
             }
-            SlashCommand::Compact(_) | SlashCommand::Mcp | SlashCommand::Skills => {
+            SlashCommand::Mcp => {
+                self.execute_mcp(terminal)?;
+            }
+            SlashCommand::Compact(_) | SlashCommand::Skills => {
                 self.show_info(terminal, &format!("{} — not yet implemented", cmd.name()))?;
             }
         }
@@ -137,6 +140,47 @@ impl App {
                 Span::styled(thread_text, Style::default().fg(Color::White)),
             ]),
         ];
+
+        render::insert_lines(terminal, lines)
+    }
+
+    /// Execute /mcp: display MCP servers and their tools.
+    fn execute_mcp(&self, terminal: &mut custom_terminal::Terminal) -> anyhow::Result<()> {
+        let Some(ref manager) = self.mcp_manager else {
+            return self.show_info(terminal, "No MCP servers configured");
+        };
+
+        let servers = manager.server_info();
+        if servers.is_empty() {
+            return self.show_info(terminal, "No MCP servers connected");
+        }
+
+        let mut lines: Vec<Line<'static>> = vec![Line::from(Span::styled(
+            "MCP Servers:",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ))];
+
+        for server in &servers {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    format!("[{}]", server.name),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(format!("  {} tool(s)", server.tool_count)),
+            ]));
+
+            for tool_name in &server.tool_names {
+                lines.push(Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled(tool_name.clone(), Style::default().fg(Color::DarkGray)),
+                ]));
+            }
+        }
 
         render::insert_lines(terminal, lines)
     }
@@ -275,8 +319,8 @@ impl App {
                     // Tool result message: show shell output and summary line.
                     let tool_name = msg.agent_name.as_deref().unwrap_or("tool");
 
-                    // Render shell output with separators (same as streaming).
-                    if tool_name == "shell" {
+                    // Render shell/MCP output with separators (same as streaming).
+                    if tool_name == "shell" || krew_tools::mcp::is_mcp_tool(tool_name) {
                         let width = terminal.size().map(|s| s.width as usize).unwrap_or(80);
                         render_resume_shell_output(terminal, &msg.content, width)?;
                     }

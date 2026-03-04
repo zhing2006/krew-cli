@@ -119,8 +119,7 @@ pub struct App {
     /// Whether we are inside a streaming shell output section.
     shell_output_started: bool,
     /// MCP server lifecycle manager (dropped on App shutdown).
-    #[allow(dead_code)]
-    mcp_manager: Option<McpManager>,
+    pub(crate) mcp_manager: Option<McpManager>,
 }
 
 impl App {
@@ -318,6 +317,11 @@ impl App {
     /// Initialize MCP servers and register their tools into agent registries.
     async fn init_mcp(&mut self) {
         let manager = McpManager::start_all(&self.config.mcp_servers).await;
+
+        // Surface connection errors as startup warnings.
+        for err in manager.errors() {
+            self.startup_warnings.push(err.clone());
+        }
 
         if manager.server_count() > 0 {
             // Register MCP tools into each agent's tool registry.
