@@ -15,6 +15,7 @@ walkdir = { workspace = true }
 globset = { workspace = true }
 regex = { workspace = true }
 similar = { workspace = true }
+http = { workspace = true }
 rmcp = { workspace = true }
 futures = { workspace = true }
 krew-config = { workspace = true }
