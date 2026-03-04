@@ -266,11 +266,12 @@ pub(crate) fn format_tool_call_display(name: &str, arguments: &str) -> Vec<Span<
         None => String::new(),
     };
 
+    // Convert MCP qualified names (mcp__server__tool) to display format (mcp:server/tool).
+    let display =
+        krew_tools::mcp::display_name_from_qualified(name).unwrap_or_else(|| name.to_string());
+
     vec![
-        Span::styled(
-            name.to_string(),
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
+        Span::styled(display, Style::default().add_modifier(Modifier::BOLD)),
         Span::raw(format!("({params})")),
     ]
 }
