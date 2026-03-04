@@ -671,6 +671,78 @@ impl App {
         Ok(())
     }
 
+    /// Cancel the current agent response (triggered by ESC).
+    ///
+    /// Drops the event receiver, flushes any buffered content, clears pending
+    /// agents, and resets streaming state.
+    pub(crate) fn cancel_agent_response(
+        &mut self,
+        terminal: &mut custom_terminal::Terminal,
+    ) -> anyhow::Result<()> {
+        // Finalize thinking if still active.
+        if self.is_thinking {
+            self.finalize_thinking(terminal)?;
+        }
+
+        // Extract partial text before finalizing the collector.
+        let partial_text = self
+            .stream_collector
+            .as_ref()
+            .map(|c| c.buffer().to_string())
+            .unwrap_or_default();
+
+        // Flush remaining buffered content to screen.
+        if let Some(mut collector) = self.stream_collector.take() {
+            let remaining = collector.finalize();
+            if !remaining.is_empty() {
+                self.stream_state.enqueue(remaining);
+            }
+        }
+        let remaining_lines = self.stream_state.drain_all();
+        if !remaining_lines.is_empty() {
+            self.insert_indented_lines(terminal, remaining_lines)?;
+        }
+
+        // Show cancellation message.
+        self.insert_agent_error(terminal, "Cancelled by user (ESC)")?;
+
+        // Preserve partial content in message history.
+        if let Some(agent_name) = self.current_agent_name.take()
+            && !partial_text.is_empty()
+        {
+            self.messages.push(ChatMessage::text(
+                ChatRole::Assistant,
+                format!("{partial_text}\n\n[Cancelled by user]"),
+                Some(agent_name),
+            ));
+        }
+
+        // Clear pending agents (cancel the entire @all dispatch).
+        self.pending_agents.clear();
+
+        // Close shell output section if open.
+        if self.shell_output_started {
+            self.shell_output_started = false;
+        }
+
+        // Clear approval overlay if active.
+        self.approval_overlay = None;
+
+        // Clear agent status indicator.
+        self.agent_start_time = None;
+        self.agent_display_name = None;
+        self.agent_color = None;
+        self.agent_status_text = None;
+
+        // Reset streaming state.
+        self.agent_event_rx = None;
+        self.commit_tick_active = false;
+        self.is_thinking = false;
+        self.chunking_policy.reset();
+
+        Ok(())
+    }
+
     /// Handle a commit tick: drain queued lines per adaptive chunking policy.
     fn handle_commit_tick(
         &mut self,
