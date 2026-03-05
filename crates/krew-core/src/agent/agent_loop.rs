@@ -23,6 +23,7 @@ pub(super) struct AgentLoopContext<'a> {
     pub(super) approval_mode: ApprovalMode,
     pub(super) approval_cache: &'a ApprovalCache,
     pub(super) shell_allow_commands: &'a [String],
+    pub(super) fetch_allow_domains: &'a [String],
 }
 
 /// Run the agent's tool-call loop: stream LLM → execute tools → re-call LLM.
@@ -40,6 +41,7 @@ pub(super) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
     // across all tool rounds, so they can be returned to the TUI for
     // persistence in the main session history.
     let mut tool_round_messages: Vec<ChatMessage> = Vec::new();
+    let mut all_server_tool_uses: Vec<krew_llm::ServerToolUseInfo> = Vec::new();
 
     for round in 0..=ctx.max_rounds {
         // Call the LLM.
@@ -60,6 +62,9 @@ pub(super) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
 
         // Consume the stream, collecting text and tool calls.
         let result = consume_stream(stream, ctx.tx, ctx.agent_name).await;
+
+        // Accumulate server tool uses.
+        all_server_tool_uses.extend(result.server_tool_uses);
 
         // Accumulate usage.
         if let Some(usage) = &result.usage {
@@ -83,6 +88,7 @@ pub(super) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
                 usage: total_usage,
                 intermediate_messages: tool_round_messages,
                 final_text: result.text,
+                server_tool_uses: all_server_tool_uses,
             });
             return;
         }
@@ -117,6 +123,7 @@ pub(super) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
                     .collect(),
             ),
             tool_call_id: None,
+            server_tool_uses: Vec::new(),
         };
         tool_round_messages.push(assistant_msg.clone());
         messages.push(assistant_msg);
@@ -136,6 +143,7 @@ pub(super) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
                 ctx.approval_mode,
                 ctx.approval_cache,
                 ctx.shell_allow_commands,
+                ctx.fetch_allow_domains,
             )
             .await
             {
@@ -284,12 +292,25 @@ pub(super) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
             .collect::<Vec<_>>();
 
         for (id, name, _args_str, result) in all_results {
-            // Forward MCP tool result content to TUI (displayed like shell output).
-            if krew_tools::mcp::is_mcp_tool(&name) && !result.is_error && !result.content.is_empty()
-            {
-                for line in result.content.lines() {
+            // Forward MCP / fetch_url result content to TUI (displayed like shell output).
+            let show_output = !result.is_error
+                && !result.content.is_empty()
+                && (krew_tools::mcp::is_mcp_tool(&name) || name == "fetch_url");
+            if show_output {
+                // Limit display to first N lines to keep the TUI readable.
+                const MAX_DISPLAY_LINES: usize = 200;
+                let total_lines = result.content.lines().count();
+                for line in result.content.lines().take(MAX_DISPLAY_LINES) {
                     let _ = ctx.tx.send(AgentEvent::ToolCallOutput {
                         text: line.to_string(),
+                    });
+                }
+                if total_lines > MAX_DISPLAY_LINES {
+                    let _ = ctx.tx.send(AgentEvent::ToolCallOutput {
+                        text: format!(
+                            "... ({} more lines omitted)",
+                            total_lines - MAX_DISPLAY_LINES
+                        ),
                     });
                 }
             }
@@ -306,6 +327,7 @@ pub(super) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
                 name: Some(name),
                 tool_calls: None,
                 tool_call_id: Some(id),
+                server_tool_uses: Vec::new(),
             };
             tool_round_messages.push(tool_msg.clone());
             messages.push(tool_msg);
@@ -319,6 +341,8 @@ struct StreamResult {
     text: String,
     /// Tool calls received during the stream.
     tool_calls: Vec<StreamToolCall>,
+    /// Server-side tool uses (e.g. web_search) for persistence.
+    server_tool_uses: Vec<krew_llm::ServerToolUseInfo>,
     /// Token usage from the stream (if received).
     usage: Option<Usage>,
     /// Error message if the stream reported an error.
@@ -343,6 +367,7 @@ async fn consume_stream(
     let mut result = StreamResult {
         text: String::new(),
         tool_calls: Vec::new(),
+        server_tool_uses: Vec::new(),
         usage: None,
         error: None,
     };
@@ -357,6 +382,20 @@ async fn consume_stream(
             }
             StreamEvent::ThinkingDelta(text) => {
                 if tx.send(AgentEvent::ThinkingDelta(text)).is_err() {
+                    return result;
+                }
+            }
+            StreamEvent::ServerToolStart { name } => {
+                if tx.send(AgentEvent::ServerToolStart { name }).is_err() {
+                    return result;
+                }
+            }
+            StreamEvent::ServerToolDone { name, query } => {
+                result.server_tool_uses.push(krew_llm::ServerToolUseInfo {
+                    name: name.clone(),
+                    query: query.clone(),
+                });
+                if tx.send(AgentEvent::ServerToolDone { name, query }).is_err() {
                     return result;
                 }
             }

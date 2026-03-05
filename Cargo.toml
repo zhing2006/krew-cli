@@ -23,7 +23,7 @@ tracing-appender = { version = "0.2", default-features = false }
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
 uuid = { version = "1", default-features = false, features = ["v4"] }
 toml = { version = "0.9", default-features = false, features = ["parse", "display", "serde"] }
-reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls", "gzip", "brotli", "deflate"] }
 eventsource-stream = { version = "0.2", default-features = false }
 futures = { version = "0.3", default-features = false }
 crossterm = { version = "0.29", default-features = false, features = ["event-stream", "bracketed-paste"] }
@@ -33,7 +33,7 @@ unicode-segmentation = { version = "1", default-features = false }
 textwrap = { version = "0.16", default-features = false }
 pulldown-cmark = { version = "0.13", default-features = false }
 syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
-two-face = { version = "0.4", default-features = false, features = ["syntect-default-fancy"] }
+two-face = { version = "0.5", default-features = false, features = ["syntect-default-fancy"] }
 similar = { version = "2", default-features = false, features = ["text"] }
 diffy = { version = "0.4", default-features = false }
 dunce = { version = "1", default-features = false }
@@ -42,6 +42,7 @@ globset = { version = "0.4", default-features = false }
 regex = { version = "1", default-features = false, features = ["std"] }
 http = { version = "1", default-features = false }
 rmcp = { version = "1", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
+htmd = { version = "0.5", default-features = false }
 
 # Internal workspace crates
 krew-config = { path = "crates/krew-config" }

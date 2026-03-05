@@ -39,6 +39,8 @@ pub struct AgentRuntime {
     pub approval_cache: ApprovalCache,
     /// Shell commands that are auto-approved without user confirmation.
     pub shell_allow_commands: Vec<String>,
+    /// Domains that skip approval for the fetch_url tool.
+    pub fetch_allow_domains: Vec<String>,
 }
 
 impl AgentRuntime {
@@ -98,6 +100,7 @@ impl AgentRuntime {
         let approval_mode = self.approval_mode;
         let approval_cache = self.approval_cache.clone();
         let shell_allow_commands = self.shell_allow_commands.clone();
+        let fetch_allow_domains = self.fetch_allow_domains.clone();
 
         // Spawn the HTTP request + stream consumption + tool loop so the
         // event loop is free to redraw immediately.
@@ -136,6 +139,7 @@ impl AgentRuntime {
                 approval_mode,
                 approval_cache: &approval_cache,
                 shell_allow_commands: &shell_allow_commands,
+                fetch_allow_domains: &fetch_allow_domains,
             };
             run_agent_loop(&ctx, &mut full_messages).await;
         });

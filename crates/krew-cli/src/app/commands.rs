@@ -270,15 +270,42 @@ impl App {
         render::insert_header(terminal, self)?;
 
         // Replay messages visually (TUI concern).
+        // Track whether the agent header has been shown for the current agent turn
+        // so we don't duplicate it across tool-call rounds.
+        let mut header_shown_for: Option<String> = None;
+
         for msg in &restored.session_file.messages {
             match msg.role.as_str() {
                 "user" => {
+                    header_shown_for = None;
                     self.insert_user_message(terminal, &[], &msg.content)?;
                 }
                 "assistant" => {
+                    // Show agent header if this is the first assistant message
+                    // for this agent (across tool-call rounds).
+                    if let Some(agent_name) = &msg.agent_name {
+                        let already_shown = header_shown_for
+                            .as_ref()
+                            .is_some_and(|shown| shown == agent_name);
+                        if !already_shown {
+                            let agent_cfg =
+                                self.config.agents.iter().find(|a| &a.name == agent_name);
+                            let display_name = agent_cfg
+                                .map(|a| a.display_name.as_str())
+                                .unwrap_or(agent_name);
+                            let color_name = agent_cfg.map(|a| a.color.as_str()).unwrap_or("white");
+                            self.insert_agent_header(
+                                terminal,
+                                agent_name,
+                                display_name,
+                                color_name,
+                            )?;
+                            header_shown_for = Some(agent_name.clone());
+                        }
+                    }
+
                     if let Some(ref tool_calls) = msg.tool_calls {
                         // Assistant message with tool calls: show text + tool call lines.
-                        // No header — the header is shown on the final text-only message.
                         if !msg.content.is_empty() {
                             let md_lines = render::markdown::render_markdown(&msg.content);
                             self.insert_indented_lines(terminal, md_lines)?;
@@ -296,31 +323,65 @@ impl App {
                             }
                         }
                     } else {
-                        // Regular text-only assistant message: show header + markdown.
-                        if let Some(agent_name) = &msg.agent_name {
-                            let agent_cfg =
-                                self.config.agents.iter().find(|a| &a.name == agent_name);
-                            let display_name = agent_cfg
-                                .map(|a| a.display_name.as_str())
-                                .unwrap_or(agent_name);
-                            let color_name = agent_cfg.map(|a| a.color.as_str()).unwrap_or("white");
-                            self.insert_agent_header(
+                        // Regular text-only assistant message.
+                        // Split server tool uses: "before text" (begin/end) vs "after text" (Gemini).
+                        let (before_text, after_text): (Vec<_>, Vec<_>) = msg
+                            .server_tool_uses
+                            .iter()
+                            .partition(|s| s.name != "google_search");
+
+                        // Render before-text server tools (OpenAI/Anthropic) in begin/end format.
+                        for stu in &before_text {
+                            let bold = Style::default().add_modifier(Modifier::BOLD);
+                            let display = vec![Span::styled(stu.name.clone(), bold)];
+                            let cyan = Style::default().fg(Color::Cyan);
+                            self.insert_tool_line(terminal, "\u{1F310} ", cyan, display)?;
+                            let dim = Style::default().fg(Color::DarkGray);
+                            let summary = stu
+                                .query
+                                .as_ref()
+                                .map(|q| format!("\"{q}\""))
+                                .unwrap_or_default();
+                            self.insert_tool_line(
                                 terminal,
-                                agent_name,
-                                display_name,
-                                color_name,
+                                "   \u{23BF}  ",
+                                dim,
+                                vec![Span::raw(summary)],
                             )?;
+                            terminal.insert_lines_above(vec![Line::default()])?;
                         }
+
                         let md_lines = render::markdown::render_markdown(&msg.content);
                         self.insert_indented_lines(terminal, md_lines)?;
+
+                        // Render after-text server tools (Gemini) as full 🌐 line with query.
+                        for stu in &after_text {
+                            let bold = Style::default().add_modifier(Modifier::BOLD);
+                            let normal = Style::default();
+                            let done_name = format!("{}_done", stu.name);
+                            let display = if let Some(q) = &stu.query {
+                                vec![
+                                    Span::styled(done_name, bold),
+                                    Span::styled(format!("(\"{q}\")"), normal),
+                                ]
+                            } else {
+                                vec![Span::styled(done_name, bold)]
+                            };
+                            let cyan = Style::default().fg(Color::Cyan);
+                            self.insert_tool_line(terminal, "\u{1F310} ", cyan, display)?;
+                            terminal.insert_lines_above(vec![Line::default()])?;
+                        }
                     }
                 }
                 "tool" => {
                     // Tool result message: show shell output and summary line.
                     let tool_name = msg.agent_name.as_deref().unwrap_or("tool");
 
-                    // Render shell/MCP output with separators (same as streaming).
-                    if tool_name == "shell" || krew_tools::mcp::is_mcp_tool(tool_name) {
+                    // Render shell/MCP/fetch_url output with separators (same as streaming).
+                    if tool_name == "shell"
+                        || tool_name == "fetch_url"
+                        || krew_tools::mcp::is_mcp_tool(tool_name)
+                    {
                         let width = terminal.size().map(|s| s.width as usize).unwrap_or(80);
                         render_resume_shell_output(terminal, &msg.content, width)?;
                     }
@@ -405,6 +466,9 @@ fn generate_tool_result_summary(_tool_name: &str, content: &str) -> String {
     "done".to_string()
 }
 
+/// Maximum lines to display for tool output during resume replay.
+const MAX_RESUME_DISPLAY_LINES: usize = 200;
+
 /// Render shell output with separators during resume replay.
 ///
 /// Extracts the output portion from shell tool result content (stripping
@@ -446,9 +510,19 @@ fn render_resume_shell_output(
     // Begin separator.
     terminal.insert_lines_above(vec![Line::from(Span::styled(format!("    {sep}"), dim))])?;
 
-    // Output lines with 4-space indent.
-    for line in output.lines() {
+    // Output lines with 4-space indent, truncated to match streaming display.
+    let total_lines = output.lines().count();
+    for line in output.lines().take(MAX_RESUME_DISPLAY_LINES) {
         terminal.insert_lines_above(vec![Line::from(format!("    {line}"))])?;
+    }
+    if total_lines > MAX_RESUME_DISPLAY_LINES {
+        terminal.insert_lines_above(vec![Line::from(Span::styled(
+            format!(
+                "    ... ({} more lines omitted)",
+                total_lines - MAX_RESUME_DISPLAY_LINES
+            ),
+            dim,
+        ))])?;
     }
 
     // End separator.
