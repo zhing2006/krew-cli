@@ -58,6 +58,9 @@ pub struct Settings {
     pub reply_order: Vec<String>,
     /// Token threshold for auto-compact (0 or None = disabled).
     pub auto_compact_threshold: Option<u32>,
+    /// Number of conversation rounds to keep during compaction.
+    #[serde(default = "default_compact_keep_rounds")]
+    pub compact_keep_rounds: usize,
     /// Maximum number of input history entries to keep.
     #[serde(default = "default_input_history_limit")]
     pub input_history_limit: usize,
@@ -131,6 +134,13 @@ impl Default for RetryConfig {
             request_timeout_secs: DEFAULT_RETRY_REQUEST_TIMEOUT_SECS,
         }
     }
+}
+
+/// Default number of conversation rounds to keep during compaction.
+pub const DEFAULT_COMPACT_KEEP_ROUNDS: usize = 10;
+
+fn default_compact_keep_rounds() -> usize {
+    DEFAULT_COMPACT_KEEP_ROUNDS
 }
 
 fn default_input_history_limit() -> usize {
