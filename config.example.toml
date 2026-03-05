@@ -15,6 +15,11 @@ worker_threads = 4                     # tokio worker thread count (default: 4)
 #          tr, true, uname, uniq, wc, which, whoami
 # shell_allow_commands = ["ls", "cat", "grep", "cargo", "git status", "git log", "git diff"]
 
+# Domains auto-approved for fetch_url tool (suffix-matched against URL host).
+# "github.com" matches github.com and docs.github.com.
+# Default: [] (all domains require approval)
+# fetch_allow_domains = ["docs.rs", "github.com", "stackoverflow.com"]
+
 # Agent definitions
 
 [[agents]]

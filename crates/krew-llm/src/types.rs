@@ -15,6 +15,10 @@ pub enum StreamEvent {
     },
     /// Incremental thinking/reasoning content (if supported).
     ThinkingDelta(String),
+    /// A server-side tool (e.g. web_search) has started executing.
+    ServerToolStart { name: String },
+    /// A server-side tool has completed, with optional query/context for display.
+    ServerToolDone { name: String, query: Option<String> },
     /// Stream completed, carrying final token usage.
     Done(Usage),
     /// An error occurred during streaming.

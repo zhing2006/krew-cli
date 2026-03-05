@@ -25,6 +25,7 @@ pub struct AnthropicClient {
     agent_name: String,
     enable_thinking: bool,
     thinking_effort: Option<ThinkingEffort>,
+    enable_web_search: bool,
     other_agent_role: OtherAgentRole,
     retry_config: RetryConfig,
 }
@@ -47,6 +48,7 @@ impl AnthropicClient {
             agent_name: config.agent_name,
             enable_thinking: config.enable_thinking,
             thinking_effort: config.thinking_effort,
+            enable_web_search: config.enable_web_search,
             other_agent_role: config.other_agent_role,
             retry_config: config.retry_config,
         }
@@ -428,6 +430,24 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                                         state.tool_args.clear();
                                     }
 
+                                    // Server-side tool (e.g. web_search): emit start,
+                                    // accumulate input JSON, emit done at content_block_stop.
+                                    if block_type == "server_tool_use" {
+                                        state.tool_name = block
+                                            .get("name")
+                                            .and_then(|n| n.as_str())
+                                            .unwrap_or("server_tool")
+                                            .to_string();
+                                        state.tool_args.clear();
+                                        state.current_block_type = Some(block_type);
+                                        return Some((
+                                            StreamEvent::ServerToolStart {
+                                                name: state.tool_name.clone(),
+                                            },
+                                            (sse_stream, state, done),
+                                        ));
+                                    }
+
                                     state.current_block_type = Some(block_type);
                                 }
                                 continue;
@@ -493,6 +513,25 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                                     };
                                     state.current_block_type = None;
                                     state.tool_id.clear();
+                                    state.tool_name.clear();
+                                    state.tool_args.clear();
+                                    return Some((event, (sse_stream, state, done)));
+                                }
+                                // Emit server tool done with accumulated query.
+                                if state.current_block_type.as_deref() == Some("server_tool_use") {
+                                    let query =
+                                        serde_json::from_str::<serde_json::Value>(&state.tool_args)
+                                            .ok()
+                                            .and_then(|v| {
+                                                v.get("query")
+                                                    .and_then(|q| q.as_str())
+                                                    .map(|s| s.to_string())
+                                            });
+                                    let event = StreamEvent::ServerToolDone {
+                                        name: state.tool_name.clone(),
+                                        query,
+                                    };
+                                    state.current_block_type = None;
                                     state.tool_name.clear();
                                     state.tool_args.clear();
                                     return Some((event, (sse_stream, state, done)));
@@ -615,8 +654,15 @@ impl LlmClient for AnthropicClient {
         }
 
         // Add tools if provided.
-        if !tools.is_empty() {
-            body["tools"] = serde_json::json!(convert_tools(tools));
+        if !tools.is_empty() || self.enable_web_search {
+            let mut tool_list = convert_tools(tools);
+            if self.enable_web_search {
+                tool_list.push(serde_json::json!({
+                    "type": "web_search_20250305",
+                    "name": "web_search",
+                }));
+            }
+            body["tools"] = serde_json::json!(tool_list);
         }
 
         // Send request with retry.
@@ -1163,5 +1209,36 @@ mod tests {
     fn convert_empty_tools() {
         let result = convert_tools(&[]);
         assert!(result.is_empty());
+    }
+
+    // ---- Web search injection tests ----
+
+    #[test]
+    fn web_search_tool_appended_to_tools_list() {
+        let tools = vec![ToolDefinition {
+            name: "read_file".to_string(),
+            description: "Read".to_string(),
+            parameters: serde_json::json!({}),
+        }];
+        let mut tool_list = convert_tools(&tools);
+        tool_list.push(serde_json::json!({
+            "type": "web_search_20250305",
+            "name": "web_search",
+        }));
+        assert_eq!(tool_list.len(), 2);
+        assert_eq!(tool_list[0]["name"], "read_file");
+        assert_eq!(tool_list[1]["type"], "web_search_20250305");
+        assert_eq!(tool_list[1]["name"], "web_search");
+    }
+
+    #[test]
+    fn web_search_only_no_function_tools() {
+        let mut tool_list = convert_tools(&[]);
+        tool_list.push(serde_json::json!({
+            "type": "web_search_20250305",
+            "name": "web_search",
+        }));
+        assert_eq!(tool_list.len(), 1);
+        assert_eq!(tool_list[0]["type"], "web_search_20250305");
     }
 }

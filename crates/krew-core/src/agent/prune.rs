@@ -120,7 +120,7 @@ fn find_stale_tool_calls(messages: &[ChatMessage]) -> Vec<ToolUseRef> {
                 }
                 written_files.insert(file_path, loc.assistant_idx);
             }
-            "glob" | "grep" => {
+            "glob" | "grep" | "fetch_url" => {
                 let key = format!("{}:{}", loc.name, canonicalize_args(&loc.args));
                 if let Some((prev_aidx, prev_tcidx, prev_id)) = latest_idempotent.remove(&key) {
                     stale.push(ToolUseRef {
@@ -216,6 +216,7 @@ pub(super) fn prune_stale_tool_calls(messages: Vec<ChatMessage>) -> Vec<ChatMess
                 name: msg.name,
                 tool_calls: Some(filtered),
                 tool_call_id: msg.tool_call_id,
+                server_tool_uses: msg.server_tool_uses,
             });
             continue;
         }
@@ -272,6 +273,7 @@ mod tests {
             name: Some(name.to_string()),
             tool_calls: Some(tools),
             tool_call_id: None,
+            server_tool_uses: Vec::new(),
         }
     }
 
@@ -282,6 +284,7 @@ mod tests {
             name: Some(tool_name.to_string()),
             tool_calls: None,
             tool_call_id: Some(call_id.to_string()),
+            server_tool_uses: Vec::new(),
         }
     }
 
@@ -540,6 +543,49 @@ mod tests {
                 vec![tc("2", "read_file", r#"{"file_path":"b.rs"}"#)],
             ),
             tool_result("read_file", "content_b", "2"),
+        ];
+        let result = prune_stale_tool_calls(messages);
+        assert_eq!(result.len(), 4);
+    }
+
+    #[test]
+    fn prune_duplicate_fetch_url() {
+        let messages = vec![
+            assistant_with_tools(
+                "a",
+                "",
+                vec![tc("1", "fetch_url", r#"{"url":"https://example.com"}"#)],
+            ),
+            tool_result("fetch_url", "old page content\n\n(5000 chars)", "1"),
+            assistant_with_tools(
+                "b",
+                "",
+                vec![tc("2", "fetch_url", r#"{"url":"https://example.com"}"#)],
+            ),
+            tool_result("fetch_url", "new page content\n\n(6000 chars)", "2"),
+        ];
+        let result = prune_stale_tool_calls(messages);
+        // First fetch + result should be pruned, second kept.
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].tool_calls.as_ref().unwrap()[0].id, "2");
+        assert_eq!(result[1].content, "new page content\n\n(6000 chars)");
+    }
+
+    #[test]
+    fn different_urls_not_pruned() {
+        let messages = vec![
+            assistant_with_tools(
+                "a",
+                "",
+                vec![tc("1", "fetch_url", r#"{"url":"https://example.com"}"#)],
+            ),
+            tool_result("fetch_url", "page A\n\n(100 chars)", "1"),
+            assistant_with_tools(
+                "a",
+                "",
+                vec![tc("2", "fetch_url", r#"{"url":"https://other.com"}"#)],
+            ),
+            tool_result("fetch_url", "page B\n\n(200 chars)", "2"),
         ];
         let result = prune_stale_tool_calls(messages);
         assert_eq!(result.len(), 4);

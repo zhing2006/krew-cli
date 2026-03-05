@@ -28,5 +28,5 @@
 | 9 | [工具系统 — 写入 + 审批](./phases/phase-09-tools-write-approval.md) | write_file、edit_file、shell、审批流 | ✅ 已完成 | write_file/edit_file/shell 工具、审批 overlay、会话级审批缓存、命令级 shell 审批、可配置免审批列表、流式 shell 输出、diff 预览 |
 | 10 | [MCP 集成](./phases/phase-10-mcp.md) | MCP Client、工具发现、信任级别 | ✅ 已完成 | rmcp SDK 集成、McpClient/McpManager/McpToolHandler、annotations 审批、TUI 显示名转换 |
 | 11 | [Compact + Token 管理](./phases/phase-11-compact-tokens.md) | /compact、自动压缩、/agents token 统计 | ⬜ 待开始 | — |
-| 12 | [交互打磨](./phases/phase-12-interaction-polish.md) | @ / 补全、思考过程、Ctrl+C 中断、Web Search、Fetch | ⬜ 待开始 | — |
+| 12 | [交互打磨](./phases/phase-12-interaction-polish.md) | @ / 补全、思考过程、ESC 中断、Web Search、Fetch | ✅ 已完成 | @ / 补全、思考过程显示、ESC 中断、Provider 原生 Web Search（OpenAI Responses/Anthropic/Gemini）、fetch_url 工具（htmd HTML→MD、域名白名单审批） |
 | 13 | [静态链接 + 发布](./phases/phase-13-release.md) | 三平台静态链接、CI/CD、二进制优化 | ⬜ 待开始 | — |

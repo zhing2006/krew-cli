@@ -23,6 +23,7 @@ pub struct OpenAiResponsesClient {
     agent_name: String,
     enable_thinking: bool,
     thinking_effort: Option<ThinkingEffort>,
+    enable_web_search: bool,
     other_agent_role: OtherAgentRole,
     retry_config: RetryConfig,
 }
@@ -45,6 +46,7 @@ impl OpenAiResponsesClient {
             agent_name: config.agent_name,
             enable_thinking: config.enable_thinking,
             thinking_effort: config.thinking_effort,
+            enable_web_search: config.enable_web_search,
             other_agent_role: config.other_agent_role,
             retry_config: config.retry_config,
         }
@@ -326,36 +328,55 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                             }
 
                             "response.output_item.done" => {
-                                // Complete function call item — extract all fields at once.
                                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data)
                                     && let Some(item) = v.get("item")
-                                    && item.get("type").and_then(|t| t.as_str())
-                                        == Some("function_call")
                                 {
-                                    let call_id = item
-                                        .get("call_id")
-                                        .and_then(|c| c.as_str())
-                                        .unwrap_or("")
-                                        .to_string();
-                                    let name = item
-                                        .get("name")
-                                        .and_then(|n| n.as_str())
-                                        .unwrap_or("")
-                                        .to_string();
-                                    let arguments = item
-                                        .get("arguments")
-                                        .and_then(|a| a.as_str())
-                                        .unwrap_or("{}")
-                                        .to_string();
-                                    return Some((
-                                        StreamEvent::ToolCall {
-                                            id: call_id,
-                                            name,
-                                            arguments,
-                                            thought_signature: None,
-                                        },
-                                        (sse_stream, pending, done),
-                                    ));
+                                    let item_type =
+                                        item.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
+                                    // Server-side web search call completed.
+                                    if item_type == "web_search_call" {
+                                        let query = item
+                                            .get("action")
+                                            .and_then(|a| a.get("query"))
+                                            .and_then(|q| q.as_str())
+                                            .map(|s| s.to_string());
+                                        return Some((
+                                            StreamEvent::ServerToolDone {
+                                                name: "web_search".to_string(),
+                                                query,
+                                            },
+                                            (sse_stream, pending, done),
+                                        ));
+                                    }
+
+                                    // Complete function call item — extract all fields at once.
+                                    if item_type == "function_call" {
+                                        let call_id = item
+                                            .get("call_id")
+                                            .and_then(|c| c.as_str())
+                                            .unwrap_or("")
+                                            .to_string();
+                                        let name = item
+                                            .get("name")
+                                            .and_then(|n| n.as_str())
+                                            .unwrap_or("")
+                                            .to_string();
+                                        let arguments = item
+                                            .get("arguments")
+                                            .and_then(|a| a.as_str())
+                                            .unwrap_or("{}")
+                                            .to_string();
+                                        return Some((
+                                            StreamEvent::ToolCall {
+                                                id: call_id,
+                                                name,
+                                                arguments,
+                                                thought_signature: None,
+                                            },
+                                            (sse_stream, pending, done),
+                                        ));
+                                    }
                                 }
                                 continue;
                             }
@@ -427,9 +448,26 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                                 ));
                             }
 
+                            "response.output_item.added" => {
+                                // Detect web search starting.
+                                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data)
+                                    && let Some(item) = v.get("item")
+                                    && item.get("type").and_then(|t| t.as_str())
+                                        == Some("web_search_call")
+                                {
+                                    return Some((
+                                        StreamEvent::ServerToolStart {
+                                            name: "web_search".to_string(),
+                                        },
+                                        (sse_stream, pending, done),
+                                    ));
+                                }
+                                continue;
+                            }
+
                             // Ignore all other events (response.queued, response.in_progress,
                             // response.content_part.added, response.output_text.done,
-                            // response.output_item.added, response.function_call_arguments.*,
+                            // response.function_call_arguments.*,
                             // response.reasoning_summary_text.done, etc.)
                             _ => continue,
                         }
@@ -492,8 +530,12 @@ impl LlmClient for OpenAiResponsesClient {
         }
 
         // Add tools if provided.
-        if !tools.is_empty() {
-            body["tools"] = serde_json::json!(convert_tools(tools));
+        if !tools.is_empty() || self.enable_web_search {
+            let mut tool_list = convert_tools(tools);
+            if self.enable_web_search {
+                tool_list.push(serde_json::json!({ "type": "web_search" }));
+            }
+            body["tools"] = serde_json::json!(tool_list);
         }
 
         // Send request with retry.
@@ -805,5 +847,30 @@ mod tests {
     fn convert_empty_tools() {
         let result = convert_tools(&[]);
         assert!(result.is_empty());
+    }
+
+    // ---- Web search injection tests ----
+
+    #[test]
+    fn web_search_tool_appended_to_tools_list() {
+        let tools = vec![ToolDefinition {
+            name: "read_file".to_string(),
+            description: "Read".to_string(),
+            parameters: serde_json::json!({}),
+        }];
+        let mut tool_list = convert_tools(&tools);
+        // Simulate web search injection.
+        tool_list.push(serde_json::json!({ "type": "web_search" }));
+        assert_eq!(tool_list.len(), 2);
+        assert_eq!(tool_list[0]["type"], "function");
+        assert_eq!(tool_list[1]["type"], "web_search");
+    }
+
+    #[test]
+    fn web_search_only_no_function_tools() {
+        let mut tool_list = convert_tools(&[]);
+        tool_list.push(serde_json::json!({ "type": "web_search" }));
+        assert_eq!(tool_list.len(), 1);
+        assert_eq!(tool_list[0]["type"], "web_search");
     }
 }

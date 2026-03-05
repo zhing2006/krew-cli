@@ -26,6 +26,7 @@ fn make_test_session() -> SessionFile {
                 usage: None,
                 tool_calls: None,
                 tool_call_id: None,
+                server_tool_uses: vec![],
                 created_at: now,
             },
             MessageEntry {
@@ -40,6 +41,7 @@ fn make_test_session() -> SessionFile {
                 }),
                 tool_calls: None,
                 tool_call_id: None,
+                server_tool_uses: vec![],
                 created_at: now,
             },
         ],
@@ -133,6 +135,7 @@ fn test_list_sessions() {
             usage: None,
             tool_calls: None,
             tool_call_id: None,
+            server_tool_uses: vec![],
             created_at: older,
         }],
     };
@@ -154,6 +157,7 @@ fn test_list_sessions() {
             usage: None,
             tool_calls: None,
             tool_call_id: None,
+            server_tool_uses: vec![],
             created_at: now,
         }],
     };

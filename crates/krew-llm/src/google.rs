@@ -27,6 +27,7 @@ pub struct GoogleClient {
     base_url: Option<String>,
     enable_thinking: bool,
     thinking_effort: Option<ThinkingEffort>,
+    enable_web_search: bool,
     other_agent_role: OtherAgentRole,
     retry_config: RetryConfig,
 }
@@ -54,6 +55,7 @@ impl GoogleClient {
             base_url: config.base_url.map(|s| s.trim_end_matches('/').to_string()),
             enable_thinking: config.enable_thinking,
             thinking_effort: config.thinking_effort,
+            enable_web_search: config.enable_web_search,
             other_agent_role: config.other_agent_role,
             retry_config: config.retry_config,
         }
@@ -360,16 +362,31 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
     let usage_state = std::sync::Arc::new(tokio::sync::Mutex::new(Usage::default()));
     let call_counter = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
 
+    // grounding_state: 0 = not seen, 1 = start emitted, 2 = done emitted
     futures::stream::unfold(
-        (sse_stream, usage_state, call_counter, false, false),
-        |(mut sse_stream, usage_state, call_counter, mut done, pending_done)| async move {
+        (sse_stream, usage_state, call_counter, false, false, 0u8),
+        |(
+            mut sse_stream,
+            usage_state,
+            call_counter,
+            mut done,
+            pending_done,
+            mut grounding_state,
+        )| async move {
             // Emit Done if the previous iteration saw a finishReason but
             // returned a content event first.
             if pending_done {
                 let usage = usage_state.lock().await.clone();
                 return Some((
                     StreamEvent::Done(usage),
-                    (sse_stream, usage_state, call_counter, true, false),
+                    (
+                        sse_stream,
+                        usage_state,
+                        call_counter,
+                        true,
+                        false,
+                        grounding_state,
+                    ),
                 ));
             }
             if done {
@@ -391,7 +408,14 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                                 done = true;
                                 return Some((
                                     StreamEvent::Error(format!("invalid JSON: {e}")),
-                                    (sse_stream, usage_state, call_counter, done, false),
+                                    (
+                                        sse_stream,
+                                        usage_state,
+                                        call_counter,
+                                        done,
+                                        false,
+                                        grounding_state,
+                                    ),
                                 ));
                             }
                         };
@@ -423,6 +447,58 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                         // Check for finish reason.
                         let finish_reason =
                             candidate.get("finishReason").and_then(|fr| fr.as_str());
+
+                        // Detect grounding (google_search) metadata.
+                        // Empty `{}` → emit ServerToolStart (search beginning).
+                        // Non-empty (with queries) → emit ServerToolDone.
+                        if grounding_state < 2
+                            && let Some(gm) = candidate.get("groundingMetadata")
+                        {
+                            let is_empty = gm.as_object().is_some_and(|m| m.is_empty());
+                            if is_empty && grounding_state == 0 {
+                                // Early empty metadata = search started.
+                                grounding_state = 1;
+                                let pend = finish_reason.is_some();
+                                return Some((
+                                    StreamEvent::ServerToolStart {
+                                        name: "google_search".to_string(),
+                                    },
+                                    (
+                                        sse_stream,
+                                        usage_state,
+                                        call_counter,
+                                        done,
+                                        pend,
+                                        grounding_state,
+                                    ),
+                                ));
+                            } else if !is_empty {
+                                // Non-empty metadata = search done with results.
+                                grounding_state = 2;
+                                let query = gm
+                                    .get("webSearchQueries")
+                                    .or_else(|| gm.get("retrievalQueries"))
+                                    .and_then(|q| q.as_array())
+                                    .and_then(|arr| arr.first())
+                                    .and_then(|q| q.as_str())
+                                    .map(|s| s.to_string());
+                                let pend = finish_reason.is_some();
+                                return Some((
+                                    StreamEvent::ServerToolDone {
+                                        name: "google_search".to_string(),
+                                        query,
+                                    },
+                                    (
+                                        sse_stream,
+                                        usage_state,
+                                        call_counter,
+                                        done,
+                                        pend,
+                                        grounding_state,
+                                    ),
+                                ));
+                            }
+                        }
 
                         // Process parts.
                         if let Some(content) = candidate.get("content")
@@ -487,7 +563,14 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                                 let pend = finish_reason.is_some();
                                 return Some((
                                     event,
-                                    (sse_stream, usage_state, call_counter, done, pend),
+                                    (
+                                        sse_stream,
+                                        usage_state,
+                                        call_counter,
+                                        done,
+                                        pend,
+                                        grounding_state,
+                                    ),
                                 ));
                             }
                         }
@@ -498,7 +581,14 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                             let usage = usage_state.lock().await.clone();
                             return Some((
                                 StreamEvent::Done(usage),
-                                (sse_stream, usage_state, call_counter, done, false),
+                                (
+                                    sse_stream,
+                                    usage_state,
+                                    call_counter,
+                                    done,
+                                    false,
+                                    grounding_state,
+                                ),
                             ));
                         }
 
@@ -508,7 +598,14 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                         done = true;
                         return Some((
                             StreamEvent::Error(format!("SSE stream error: {e}")),
-                            (sse_stream, usage_state, call_counter, done, false),
+                            (
+                                sse_stream,
+                                usage_state,
+                                call_counter,
+                                done,
+                                false,
+                                grounding_state,
+                            ),
                         ));
                     }
                     None => {
@@ -516,7 +613,14 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                         done = true;
                         return Some((
                             StreamEvent::Error("stream interrupted".into()),
-                            (sse_stream, usage_state, call_counter, done, false),
+                            (
+                                sse_stream,
+                                usage_state,
+                                call_counter,
+                                done,
+                                false,
+                                grounding_state,
+                            ),
                         ));
                     }
                 }
@@ -567,8 +671,16 @@ impl LlmClient for GoogleClient {
         }
 
         // Add tools if provided.
-        if !tools.is_empty() {
-            body["tools"] = convert_tools(tools);
+        if !tools.is_empty() || self.enable_web_search {
+            let mut tool_array = if tools.is_empty() {
+                vec![]
+            } else {
+                serde_json::from_value(convert_tools(tools)).unwrap_or_default()
+            };
+            if self.enable_web_search {
+                tool_array.push(serde_json::json!({ "google_search": {} }));
+            }
+            body["tools"] = serde_json::json!(tool_array);
         }
 
         // Send request with retry.
@@ -1053,5 +1165,29 @@ mod tests {
         let result = convert_tools(&[]);
         let decls = result[0]["functionDeclarations"].as_array().unwrap();
         assert!(decls.is_empty());
+    }
+
+    // ---- Web search injection tests ----
+
+    #[test]
+    fn web_search_google_search_tool_structure() {
+        let search_tool = serde_json::json!({ "google_search": {} });
+        assert!(search_tool.get("google_search").is_some());
+        assert!(search_tool["google_search"].as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn web_search_appended_to_function_tools() {
+        let tools = vec![ToolDefinition {
+            name: "read_file".to_string(),
+            description: "Read".to_string(),
+            parameters: serde_json::json!({}),
+        }];
+        let mut tool_array: Vec<serde_json::Value> =
+            serde_json::from_value(convert_tools(&tools)).unwrap();
+        tool_array.push(serde_json::json!({ "google_search": {} }));
+        assert_eq!(tool_array.len(), 2);
+        assert!(tool_array[0].get("functionDeclarations").is_some());
+        assert!(tool_array[1].get("google_search").is_some());
     }
 }

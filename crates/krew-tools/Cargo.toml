@@ -20,6 +20,8 @@ rmcp = { workspace = true }
 futures = { workspace = true }
 krew-config = { workspace = true }
 anyhow = { workspace = true }
+reqwest = { workspace = true }
+htmd = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

@@ -7,17 +7,19 @@ name = "gemini"
 display_name = "Gemini"
 provider = "google"
 model = "gemini-3.1-pro-preview"
-color = "cyan"
+enable_web_search = true
 enable_thinking = true
 thinking_effort = "high"
+color = "cyan"
 
 [[agents]]
 name = "opus"
 display_name = "Opus"
 provider = "anthropic"
 model = "claude-4-6-opus"
-color = "blue"
+enable_web_search = true
 enable_thinking = true
+color = "blue"
 
 [[agents]]
 name = "gpt"
@@ -25,6 +27,8 @@ display_name = "GPT"
 provider = "openai"
 model = "gpt-5.2"
 api_type = "responses"
+enable_web_search = true
+enable_thinking = true
 color = "green"
 
 [[agents]]
@@ -32,14 +36,16 @@ name = "sonnet"
 display_name = "Sonnet"
 provider = "anthropic"
 model = "claude-4-6-sonnet"
-color = "magenta"
+enable_web_search = true
 enable_thinking = true
+color = "magenta"
 
 [[agents]]
 name = "doubao"
 display_name = "豆包"
 provider = "litellm"
 model = "doubao-seed-2-0-lite"
+enable_thinking = true
 color = "yellow"
 
 [providers.litellm]

@@ -93,6 +93,7 @@ pub fn init_agents(config: &Config, cwd: Option<PathBuf>) -> InitAgentsResult {
             retry_config: config.settings.retry.clone(),
             enable_thinking: agent_config.enable_thinking,
             thinking_effort: agent_config.thinking_effort,
+            enable_web_search: agent_config.enable_web_search,
         };
 
         // Create LLM client based on provider type.
@@ -132,6 +133,7 @@ pub fn init_agents(config: &Config, cwd: Option<PathBuf>) -> InitAgentsResult {
             approval_mode: config.settings.approval_mode,
             approval_cache: shared_approval_cache.clone(),
             shell_allow_commands: config.settings.shell_allow_commands.clone(),
+            fetch_allow_domains: config.settings.fetch_allow_domains.clone(),
         };
 
         agents.insert(agent_config.name.clone(), runtime);
