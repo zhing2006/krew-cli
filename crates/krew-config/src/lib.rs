@@ -83,6 +83,13 @@ pub struct Settings {
     /// - `"git status"` matches only `git status` (not `git push`)
     #[serde(default = "default_shell_allow_commands")]
     pub shell_allow_commands: Vec<String>,
+    /// Domains that skip approval for the fetch_url tool.
+    ///
+    /// Entries are suffix-matched against the URL host:
+    /// - `"github.com"` matches `github.com` and `docs.github.com`
+    /// - `"docs.rs"` matches `docs.rs` and any subdomain
+    #[serde(default)]
+    pub fetch_allow_domains: Vec<String>,
 }
 
 /// Retry configuration for LLM API requests.

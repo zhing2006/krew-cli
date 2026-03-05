@@ -24,6 +24,7 @@ impl Default for Config {
                     .iter()
                     .map(|s| s.to_string())
                     .collect(),
+                fetch_allow_domains: Vec::new(),
             },
             agents: vec![AgentConfig {
                 name: "echo".to_string(),

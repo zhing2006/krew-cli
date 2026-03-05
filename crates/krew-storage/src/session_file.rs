@@ -49,6 +49,9 @@ pub struct MessageEntry {
     /// Tool call ID this tool-result message is responding to.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// Server-side tool uses (e.g. web_search) for display on resume.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub server_tool_uses: Vec<ServerToolUseEntry>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -61,6 +64,14 @@ pub struct ToolCallEntry {
     /// Opaque thought signature (Google thinking mode).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thought_signature: Option<String>,
+}
+
+/// A server-side tool use (e.g. web_search) recorded for resume display.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerToolUseEntry {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
 }
 
 /// Token usage for an assistant message.

@@ -60,6 +60,10 @@ pub enum AgentEvent {
     ThinkingDelta(String),
     /// Incremental text content from the model.
     TextDelta(String),
+    /// A server-side tool (e.g. web_search) has started executing.
+    ServerToolStart { name: String },
+    /// A server-side tool has completed with optional query/context.
+    ServerToolDone { name: String, query: Option<String> },
     /// A tool call is starting execution.
     ToolCallStart { name: String, arguments: String },
     /// Incremental output from a streaming tool (e.g. shell).
@@ -76,6 +80,8 @@ pub enum AgentEvent {
         intermediate_messages: Vec<ChatMessage>,
         /// Final text-only response from the last LLM call.
         final_text: String,
+        /// Server-side tool uses collected across all rounds (for persistence).
+        server_tool_uses: Vec<krew_llm::ServerToolUseInfo>,
     },
     /// An error occurred during the agent turn.
     Error {

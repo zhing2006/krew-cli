@@ -118,6 +118,10 @@ pub struct App {
     pub(crate) approval_overlay: Option<ApprovalOverlay>,
     /// Whether we are inside a streaming shell output section.
     shell_output_started: bool,
+    /// Whether a ServerToolStart event was received (for pairing with ServerToolDone).
+    server_tool_started: bool,
+    /// Whether text was emitted between ServerToolStart and ServerToolDone.
+    text_after_server_tool: bool,
     /// MCP server lifecycle manager (dropped on App shutdown).
     pub(crate) mcp_manager: Option<McpManager>,
 }
@@ -196,6 +200,8 @@ impl App {
             pending_resume_id: None,
             approval_overlay: None,
             shell_output_started: false,
+            server_tool_started: false,
+            text_after_server_tool: false,
             mcp_manager: None,
         })
     }
@@ -379,6 +385,11 @@ impl App {
             AgentEvent::ThinkingDelta(text) => {
                 tracing::debug!(delta = ?text, "ThinkingDelta received");
 
+                // Track content between ServerToolStart and ServerToolDone.
+                if self.server_tool_started {
+                    self.text_after_server_tool = true;
+                }
+
                 // Clear retry status once content starts arriving.
                 self.agent_status_text = None;
 
@@ -406,6 +417,11 @@ impl App {
             AgentEvent::TextDelta(text) => {
                 tracing::debug!(delta = ?text, "TextDelta received");
 
+                // Track text between ServerToolStart and ServerToolDone.
+                if self.server_tool_started {
+                    self.text_after_server_tool = true;
+                }
+
                 // Clear retry status once content starts arriving.
                 self.agent_status_text = None;
 
@@ -432,6 +448,84 @@ impl App {
                         self.commit_tick_active = true;
                     }
                 }
+            }
+            AgentEvent::ServerToolStart { name } => {
+                // Clear retry status.
+                self.agent_status_text = None;
+
+                // Finalize thinking if still active.
+                if self.is_thinking {
+                    self.finalize_thinking(terminal)?;
+                }
+
+                // Flush any buffered text content before server tool line.
+                if let Some(mut collector) = self.stream_collector.take() {
+                    let remaining = collector.finalize();
+                    if !remaining.is_empty() {
+                        self.stream_state.enqueue(remaining);
+                    }
+                }
+                let remaining_lines = self.stream_state.drain_all();
+                if !remaining_lines.is_empty() {
+                    self.insert_indented_lines(terminal, remaining_lines)?;
+                }
+
+                // Show: 🌐 web_search (skip display for google_search — only show done)
+                if name != "google_search" {
+                    let bold = ratatui::style::Style::default()
+                        .add_modifier(ratatui::style::Modifier::BOLD);
+                    let display = vec![ratatui::text::Span::styled(name, bold)];
+                    let cyan = ratatui::style::Style::default().fg(ratatui::style::Color::Cyan);
+                    self.insert_tool_line(terminal, "\u{1F310} ", cyan, display)?;
+                    terminal.insert_lines_above(vec![ratatui::text::Line::default()])?;
+                }
+                self.server_tool_started = true;
+            }
+            AgentEvent::ServerToolDone { name, query } => {
+                let had_text_between = self.text_after_server_tool;
+                self.server_tool_started = false;
+                self.text_after_server_tool = false;
+
+                if had_text_between {
+                    // Text was emitted between start and done (Gemini pattern).
+                    // Flush remaining text, then show: 🌐 name("query...")
+                    if let Some(mut collector) = self.stream_collector.take() {
+                        let remaining = collector.finalize();
+                        if !remaining.is_empty() {
+                            self.stream_state.enqueue(remaining);
+                        }
+                    }
+                    let remaining_lines = self.stream_state.drain_all();
+                    if !remaining_lines.is_empty() {
+                        self.insert_indented_lines(terminal, remaining_lines)?;
+                    }
+                    let bold = ratatui::style::Style::default()
+                        .add_modifier(ratatui::style::Modifier::BOLD);
+                    let normal = ratatui::style::Style::default();
+                    let done_name = format!("{name}_done");
+                    let display = if let Some(q) = &query {
+                        vec![
+                            ratatui::text::Span::styled(done_name, bold),
+                            ratatui::text::Span::styled(format!("(\"{q}\")"), normal),
+                        ]
+                    } else {
+                        vec![ratatui::text::Span::styled(done_name, bold)]
+                    };
+                    let cyan = ratatui::style::Style::default().fg(ratatui::style::Color::Cyan);
+                    self.insert_tool_line(terminal, "\u{1F310} ", cyan, display)?;
+                } else {
+                    // Start and done are adjacent (OpenAI/Anthropic pattern).
+                    // Show result line: ⎿  "query..."
+                    let dim = ratatui::style::Style::default().fg(ratatui::style::Color::DarkGray);
+                    let summary = query.map(|q| format!("\"{q}\"")).unwrap_or_default();
+                    self.insert_tool_line(
+                        terminal,
+                        "   \u{23BF}  ",
+                        dim,
+                        vec![ratatui::text::Span::raw(summary)],
+                    )?;
+                }
+                terminal.insert_lines_above(vec![ratatui::text::Line::default()])?;
             }
             AgentEvent::ToolCallStart { name, arguments } => {
                 // Clear retry status.
@@ -509,6 +603,7 @@ impl App {
                 usage,
                 intermediate_messages,
                 final_text,
+                server_tool_uses,
             } => {
                 // Finalize thinking if still active.
                 if self.is_thinking {
@@ -540,11 +635,10 @@ impl App {
                 if let Some(agent_name) = self.current_agent_name.take() {
                     self.last_respondent = Some(agent_name.clone());
                     self.messages.extend(intermediate_messages);
-                    self.messages.push(ChatMessage::text(
-                        ChatRole::Assistant,
-                        final_text,
-                        Some(agent_name),
-                    ));
+                    let mut final_msg =
+                        ChatMessage::text(ChatRole::Assistant, final_text, Some(agent_name));
+                    final_msg.server_tool_uses = server_tool_uses;
+                    self.messages.push(final_msg);
 
                     // Persist session after agent response.
                     self.save_session();
