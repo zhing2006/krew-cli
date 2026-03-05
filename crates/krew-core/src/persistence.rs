@@ -74,6 +74,14 @@ pub fn build_session_file(snapshot: &SessionSnapshot) -> SessionFile {
                         .collect()
                 }),
                 tool_call_id: msg.tool_call_id.clone(),
+                server_tool_uses: msg
+                    .server_tool_uses
+                    .iter()
+                    .map(|s| krew_storage::session_file::ServerToolUseEntry {
+                        name: s.name.clone(),
+                        query: s.query.clone(),
+                    })
+                    .collect(),
                 created_at: Utc::now(),
             }
         })
@@ -147,6 +155,14 @@ pub fn load_session_from_disk(session_path: &Path) -> anyhow::Result<RestoredSes
                     .collect()
             }),
             tool_call_id: msg.tool_call_id.clone(),
+            server_tool_uses: msg
+                .server_tool_uses
+                .iter()
+                .map(|s| krew_llm::ServerToolUseInfo {
+                    name: s.name.clone(),
+                    query: s.query.clone(),
+                })
+                .collect(),
         });
     }
 

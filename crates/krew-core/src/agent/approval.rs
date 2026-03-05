@@ -25,6 +25,7 @@ pub(super) async fn check_tool_approval(
     mode: ApprovalMode,
     cache: &ApprovalCache,
     shell_allow_commands: &[String],
+    fetch_allow_domains: &[String],
 ) -> ToolApproval {
     // Readonly tools never need approval.
     if !tools.requires_approval(tool_name) {
@@ -36,9 +37,24 @@ pub(super) async fn check_tool_approval(
         return ToolApproval::Auto;
     }
 
-    // AutoEdit mode auto-approves write tools (only shell needs approval).
-    if mode == ApprovalMode::AutoEdit && tool_name != "shell" {
+    // AutoEdit mode auto-approves write tools (only shell/fetch_url need approval).
+    if mode == ApprovalMode::AutoEdit && tool_name != "shell" && tool_name != "fetch_url" {
         return ToolApproval::Auto;
+    }
+
+    // fetch_url: check domain allowlist.
+    if tool_name == "fetch_url" {
+        if let Ok(args) = serde_json::from_str::<serde_json::Value>(arguments)
+            && krew_tools::builtin::fetch_url::is_fetch_domain_allowed(&args, fetch_allow_domains)
+        {
+            return ToolApproval::Auto;
+        }
+        if cache.is_approved(tool_name).await {
+            return ToolApproval::Auto;
+        }
+        return ToolApproval::NeedsApproval {
+            allow_session_approval: true,
+        };
     }
 
     // For non-shell tools: simple tool-name-based approval.
@@ -143,7 +159,7 @@ mod tests {
         allow_cmds: &[String],
     ) -> bool {
         matches!(
-            check_tool_approval(tool_name, arguments, registry, mode, cache, allow_cmds).await,
+            check_tool_approval(tool_name, arguments, registry, mode, cache, allow_cmds, &[]).await,
             ToolApproval::Auto
         )
     }
@@ -455,6 +471,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fetch_url_needs_approval_by_default() {
+        let registry = test_registry();
+        let cache = ApprovalCache::new();
+        let allow_cmds = vec![];
+        let args = r#"{"url":"https://evil.com/page"}"#;
+        let result = check_tool_approval(
+            "fetch_url",
+            args,
+            &registry,
+            ApprovalMode::Suggest,
+            &cache,
+            &allow_cmds,
+            &[],
+        )
+        .await;
+        assert!(matches!(result, ToolApproval::NeedsApproval { .. }));
+    }
+
+    #[tokio::test]
+    async fn fetch_url_allowed_domain_auto() {
+        let registry = test_registry();
+        let cache = ApprovalCache::new();
+        let allow_cmds = vec![];
+        let fetch_domains = vec!["docs.rs".to_string()];
+        let args = r#"{"url":"https://docs.rs/htmd/latest"}"#;
+        let result = check_tool_approval(
+            "fetch_url",
+            args,
+            &registry,
+            ApprovalMode::Suggest,
+            &cache,
+            &allow_cmds,
+            &fetch_domains,
+        )
+        .await;
+        assert!(matches!(result, ToolApproval::Auto));
+    }
+
+    #[tokio::test]
+    async fn fetch_url_subdomain_auto() {
+        let registry = test_registry();
+        let cache = ApprovalCache::new();
+        let allow_cmds = vec![];
+        let fetch_domains = vec!["github.com".to_string()];
+        let args = r#"{"url":"https://docs.github.com/en/repos"}"#;
+        let result = check_tool_approval(
+            "fetch_url",
+            args,
+            &registry,
+            ApprovalMode::Suggest,
+            &cache,
+            &allow_cmds,
+            &fetch_domains,
+        )
+        .await;
+        assert!(matches!(result, ToolApproval::Auto));
+    }
+
+    #[tokio::test]
+    async fn fetch_url_full_auto_mode() {
+        let registry = test_registry();
+        let cache = ApprovalCache::new();
+        let allow_cmds = vec![];
+        let args = r#"{"url":"https://evil.com/page"}"#;
+        assert!(matches!(
+            check_tool_approval(
+                "fetch_url",
+                args,
+                &registry,
+                ApprovalMode::FullAuto,
+                &cache,
+                &allow_cmds,
+                &[],
+            )
+            .await,
+            ToolApproval::Auto
+        ));
+    }
+
+    #[tokio::test]
     async fn shell_complex_command_no_session_option() {
         let registry = test_registry();
         let cache = ApprovalCache::new();
@@ -468,6 +564,7 @@ mod tests {
             ApprovalMode::Suggest,
             &cache,
             &allow,
+            &[],
         )
         .await;
         match result {

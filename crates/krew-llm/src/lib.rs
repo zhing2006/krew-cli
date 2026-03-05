@@ -38,6 +38,8 @@ pub struct LlmClientConfig {
     pub enable_thinking: bool,
     /// Thinking effort level (only used when `enable_thinking` is true).
     pub thinking_effort: Option<ThinkingEffort>,
+    /// Whether to inject the provider's native web search tool.
+    pub enable_web_search: bool,
 }
 
 /// Errors that can occur during LLM API interactions.
@@ -88,6 +90,18 @@ pub struct ChatMessage {
     pub tool_calls: Option<Vec<ToolCallInfo>>,
     /// Tool call ID this message is responding to (only for Tool messages).
     pub tool_call_id: Option<String>,
+    /// Server-side tool uses (e.g. web_search) recorded for display/persistence.
+    /// These are provider-executed tools, not dispatched by our tool system.
+    pub server_tool_uses: Vec<ServerToolUseInfo>,
+}
+
+/// Information about a server-side tool use (e.g. web_search, google_search).
+#[derive(Debug, Clone)]
+pub struct ServerToolUseInfo {
+    /// Tool name (e.g. "web_search").
+    pub name: String,
+    /// Optional query or context (e.g. search query string).
+    pub query: Option<String>,
 }
 
 /// Information about a tool call made by the assistant.
@@ -112,6 +126,7 @@ impl ChatMessage {
             name,
             tool_calls: None,
             tool_call_id: None,
+            server_tool_uses: Vec::new(),
         }
     }
 }

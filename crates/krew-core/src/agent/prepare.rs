@@ -110,6 +110,7 @@ mod tests {
             name: Some(name.to_string()),
             tool_calls: Some(tools),
             tool_call_id: None,
+            server_tool_uses: Vec::new(),
         }
     }
 
@@ -120,6 +121,7 @@ mod tests {
             name: Some(tool_name.to_string()),
             tool_calls: None,
             tool_call_id: Some(call_id.to_string()),
+            server_tool_uses: Vec::new(),
         }
     }
 

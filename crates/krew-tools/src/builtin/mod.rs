@@ -1,6 +1,7 @@
-//! Built-in tools: read_file, write_file, edit_file, shell, glob, grep.
+//! Built-in tools: read_file, write_file, edit_file, shell, glob, grep, fetch_url.
 
 mod edit_file;
+pub mod fetch_url;
 mod glob;
 mod grep;
 mod read_file;
@@ -13,6 +14,7 @@ use std::path::PathBuf;
 use crate::ToolRegistry;
 
 pub use edit_file::EditFileTool;
+pub use fetch_url::FetchUrlTool;
 pub use glob::GlobTool;
 pub use grep::GrepTool;
 pub use read_file::ReadFileTool;
@@ -38,7 +40,7 @@ pub fn create_readonly_registry(cwd: PathBuf) -> ToolRegistry {
     registry
 }
 
-/// Create a tool registry with all built-in tools (read + write + shell).
+/// Create a tool registry with all built-in tools (read + write + shell + fetch).
 ///
 /// The `cwd` path is used as the workspace boundary for path validation.
 pub fn create_full_registry(cwd: PathBuf) -> ToolRegistry {
@@ -64,6 +66,10 @@ pub fn create_full_registry(cwd: PathBuf) -> ToolRegistry {
     // Shell tool.
     let shell_tool = ShellTool::new(cwd);
     registry.register(shell_tool.spec(), Box::new(shell_tool));
+
+    // Fetch URL tool.
+    let fetch_tool = FetchUrlTool::new();
+    registry.register(fetch_tool.spec(), Box::new(fetch_tool));
 
     registry
 }
