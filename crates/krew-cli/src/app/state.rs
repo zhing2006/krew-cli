@@ -124,6 +124,10 @@ pub struct App {
     text_after_server_tool: bool,
     /// MCP server lifecycle manager (dropped on App shutdown).
     pub(crate) mcp_manager: Option<McpManager>,
+    /// Pending compact agent name (set by /compact, processed in event loop).
+    pub(crate) pending_compact_agent: Option<String>,
+    /// Whether auto-compact should trigger before the next user message.
+    pub(crate) needs_auto_compact: bool,
 }
 
 impl App {
@@ -203,6 +207,8 @@ impl App {
             server_tool_started: false,
             text_after_server_tool: false,
             mcp_manager: None,
+            pending_compact_agent: None,
+            needs_auto_compact: false,
         })
     }
 
@@ -243,6 +249,26 @@ impl App {
         commit_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
+            // Process pending compact (must run outside select! to borrow self mutably).
+            if let Some(agent_name) = self.pending_compact_agent.take() {
+                self.run_compact(&agent_name, terminal).await?;
+                self.request_redraw();
+            }
+
+            // Process auto-compact (triggered when prompt_tokens exceeded threshold).
+            if self.needs_auto_compact
+                && self.agent_event_rx.is_none()
+                && self.pending_agents.is_empty()
+            {
+                if let Some(compact_agent) = self.config.settings.reply_order.first().cloned()
+                    && self.agents.contains_key(&compact_agent)
+                {
+                    self.run_compact(&compact_agent, terminal).await?;
+                    self.request_redraw();
+                }
+                self.needs_auto_compact = false;
+            }
+
             tokio::select! {
                 // Branch 1: Terminal events (key, paste, resize).
                 maybe_event = event_stream.next() => {
@@ -343,6 +369,95 @@ impl App {
         }
 
         self.mcp_manager = Some(manager);
+    }
+
+    /// Run the compact operation asynchronously.
+    async fn run_compact(
+        &mut self,
+        agent_name: &str,
+        terminal: &mut custom_terminal::Terminal,
+    ) -> anyhow::Result<()> {
+        let agent = match self.agents.get(agent_name) {
+            Some(a) => a,
+            None => {
+                self.show_error(terminal, &format!("Agent \"{agent_name}\" not found"))?;
+                return Ok(());
+            }
+        };
+
+        let keep_rounds = self.config.settings.compact_keep_rounds;
+        let client = Arc::clone(&agent.client);
+
+        // Build current session file for backup.
+        let agent_names: Vec<String> = self
+            .config
+            .agents
+            .iter()
+            .filter(|a| self.agents.contains_key(&a.name))
+            .map(|a| a.name.clone())
+            .collect();
+        let snapshot = krew_core::persistence::SessionSnapshot {
+            session_id: &self.session_id,
+            cwd: &self.cwd,
+            agent_names,
+            messages: &self.messages,
+            token_usage: &self.agent_token_usage,
+        };
+        let current_session_file = krew_core::persistence::build_session_file(&snapshot);
+
+        // Show status while compacting.
+        self.show_info(terminal, &format!("Compacting with [{agent_name}]..."))?;
+
+        match krew_core::compact::compact_session(
+            &client,
+            &self.messages,
+            keep_rounds,
+            &self.session_dir,
+            &self.session_id,
+            &current_session_file,
+        )
+        .await
+        {
+            Ok(Some(result)) => {
+                // Replace messages with compacted version.
+                self.messages = krew_core::compact::build_compacted_messages(
+                    &self.messages,
+                    keep_rounds,
+                    &result.summary,
+                );
+
+                // Update token usage: clear old data since context changed.
+                self.agent_token_usage.clear();
+
+                // Reset auto-compact flag.
+                self.needs_auto_compact = false;
+
+                // Persist the compacted session.
+                self.save_session();
+
+                let backup_display = result
+                    .backup_path
+                    .file_name()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_default();
+
+                self.show_info(
+                    terminal,
+                    &format!(
+                        "\u{26A1} Session compacted ({} msgs \u{2192} {} msgs)\n  Backup: {}",
+                        result.original_count, result.new_count, backup_display
+                    ),
+                )?;
+            }
+            Ok(None) => {
+                self.show_info(terminal, "Nothing to compact — too few conversation rounds")?;
+            }
+            Err(e) => {
+                self.show_error(terminal, &format!("Compact failed: {e}"))?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Handle an incoming agent event.
@@ -629,6 +744,14 @@ impl App {
                     let entry = self.agent_token_usage.entry(name.clone()).or_insert((0, 0));
                     entry.0 += usage.prompt_tokens;
                     entry.1 += usage.completion_tokens;
+                }
+
+                // Check auto-compact threshold.
+                if let Some(threshold) = self.config.settings.auto_compact_threshold
+                    && threshold > 0
+                    && usage.prompt_tokens >= threshold
+                {
+                    self.needs_auto_compact = true;
                 }
 
                 // Persist intermediate tool-round messages and final text.

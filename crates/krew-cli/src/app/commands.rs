@@ -49,7 +49,10 @@ impl App {
             SlashCommand::Mcp => {
                 self.execute_mcp(terminal)?;
             }
-            SlashCommand::Compact(_) | SlashCommand::Skills => {
+            SlashCommand::Compact(agent_arg) => {
+                self.execute_compact(agent_arg, terminal)?;
+            }
+            SlashCommand::Skills => {
                 self.show_info(terminal, &format!("{} — not yet implemented", cmd.name()))?;
             }
         }
@@ -75,6 +78,36 @@ impl App {
         render::insert_lines(terminal, lines)
     }
 
+    /// Execute /compact: schedule compaction with the specified agent.
+    fn execute_compact(
+        &mut self,
+        agent_arg: String,
+        terminal: &mut custom_terminal::Terminal,
+    ) -> anyhow::Result<()> {
+        if self.messages.is_empty() {
+            return self.show_info(terminal, "Nothing to compact — session is empty");
+        }
+
+        // Resolve agent name: use argument or default to reply_order[0].
+        let agent_name = if agent_arg.is_empty() {
+            match self.config.settings.reply_order.first() {
+                Some(name) => name.clone(),
+                None => return self.show_error(terminal, "No agents available for compaction"),
+            }
+        } else {
+            agent_arg
+        };
+
+        // Validate agent exists and has an LLM client.
+        if !self.agents.contains_key(&agent_name) {
+            return self.show_error(terminal, &format!("Agent \"{agent_name}\" not found"));
+        }
+
+        // Schedule compact (processed in the main event loop).
+        self.pending_compact_agent = Some(agent_name);
+        Ok(())
+    }
+
     /// Execute /agents: display agent list with token stats.
     fn execute_agents(&self, terminal: &mut custom_terminal::Terminal) -> anyhow::Result<()> {
         let mut lines: Vec<Line<'static>> = vec![Line::from(Span::styled(
@@ -84,6 +117,9 @@ impl App {
                 .add_modifier(Modifier::BOLD),
         ))];
 
+        let mut total_prompt: u32 = 0;
+        let mut total_completion: u32 = 0;
+
         for agent in &self.config.agents {
             let color = render::parse_color(&agent.color);
             let (prompt_tokens, completion_tokens) = self
@@ -91,9 +127,16 @@ impl App {
                 .get(&agent.name)
                 .copied()
                 .unwrap_or((0, 0));
+            total_prompt += prompt_tokens;
+            total_completion += completion_tokens;
             let total = prompt_tokens + completion_tokens;
             let token_text = if total > 0 {
-                format!("  {total} tokens ({prompt_tokens} in / {completion_tokens} out)")
+                format!(
+                    "  {} tokens ({} in / {} out)",
+                    format_number(total),
+                    format_number(prompt_tokens),
+                    format_number(completion_tokens)
+                )
             } else {
                 "  0 tokens".to_string()
             };
@@ -109,6 +152,19 @@ impl App {
                 )),
                 Span::styled(token_text, Style::default().fg(Color::DarkGray)),
             ]));
+        }
+
+        // Total line.
+        let grand_total = total_prompt + total_completion;
+        if grand_total > 0 {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "  {}\n  Total: {} tokens",
+                    "\u{2500}".repeat(50),
+                    format_number(grand_total)
+                ),
+                Style::default().fg(Color::DarkGray),
+            )));
         }
 
         render::insert_lines(terminal, lines)
@@ -529,4 +585,17 @@ fn render_resume_shell_output(
     terminal.insert_lines_above(vec![Line::from(Span::styled(format!("    {sep}"), dim))])?;
 
     Ok(())
+}
+
+/// Format a number with comma separators (e.g. 12345 → "12,345").
+fn format_number(n: u32) -> String {
+    let s = n.to_string();
+    let mut result = String::with_capacity(s.len() + s.len() / 3);
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    result
 }
