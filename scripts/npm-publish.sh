@@ -17,11 +17,11 @@ SUB_PACKAGES=(
 
 echo "Publishing sub-packages..."
 for pkg in "${SUB_PACKAGES[@]}"; do
-  echo "  Publishing @zhing2006/$pkg"
+  echo "  Publishing @zhing2026/$pkg"
   (cd "$NPM_DIR/$pkg" && npm publish --access public)
 done
 
-echo "Publishing main package @zhing2006/krew..."
+echo "Publishing main package @zhing2026/krew..."
 (cd "$NPM_DIR/krew" && npm publish --access public)
 
 echo "All packages published successfully!"

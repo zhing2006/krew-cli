@@ -4,11 +4,11 @@ const { execFileSync } = require("child_process");
 const path = require("path");
 
 const PLATFORMS = {
-  "win32-x64": { pkg: "@zhing2006/krew-win32-x64", bin: "krew.exe" },
-  "linux-x64": { pkg: "@zhing2006/krew-linux-x64", bin: "krew" },
-  "linux-arm64": { pkg: "@zhing2006/krew-linux-arm64", bin: "krew" },
-  "darwin-x64": { pkg: "@zhing2006/krew-darwin-x64", bin: "krew" },
-  "darwin-arm64": { pkg: "@zhing2006/krew-darwin-arm64", bin: "krew" },
+  "win32-x64": { pkg: "@zhing2026/krew-win32-x64", bin: "krew.exe" },
+  "linux-x64": { pkg: "@zhing2026/krew-linux-x64", bin: "krew" },
+  "linux-arm64": { pkg: "@zhing2026/krew-linux-arm64", bin: "krew" },
+  "darwin-x64": { pkg: "@zhing2026/krew-darwin-x64", bin: "krew" },
+  "darwin-arm64": { pkg: "@zhing2026/krew-darwin-arm64", bin: "krew" },
 };
 
 const platformKey = `${process.platform}-${process.arch}`;
@@ -32,7 +32,7 @@ try {
   console.error(
     `Error: Could not find the binary for ${platformKey}.\n` +
       `The platform package ${info.pkg} does not appear to be installed.\n` +
-      `Try reinstalling: npm install -g @zhing2006/krew`
+      `Try reinstalling: npm install -g @zhing2026/krew`
   );
   process.exit(1);
 }
