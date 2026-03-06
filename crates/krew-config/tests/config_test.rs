@@ -72,13 +72,10 @@ fn load_invalid_toml() {
 // ── Config::default() ───────────────────────────────────────────────────
 
 #[test]
-fn default_config_has_echo_agent() {
+fn default_config_has_no_agents() {
     let config = Config::default();
-    assert_eq!(config.agents.len(), 1);
-    assert_eq!(config.agents[0].name, "echo");
-    assert_eq!(config.agents[0].display_name, "Echo");
-    assert_eq!(config.agents[0].provider, "builtin");
-    assert_eq!(config.settings.reply_order, vec!["echo"]);
+    assert!(config.agents.is_empty());
+    assert!(config.settings.reply_order.is_empty());
     assert!(matches!(
         config.settings.approval_mode,
         ApprovalMode::Suggest

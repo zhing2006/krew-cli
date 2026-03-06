@@ -1,4 +1,4 @@
-//! Message sending, user message rendering, and echo display.
+//! Message sending and user message rendering.
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -99,9 +99,9 @@ impl App {
     /// Start the next pending agent. Returns Ok(true) if an agent was started.
     pub(crate) fn start_next_agent(
         &mut self,
-        terminal: &mut custom_terminal::Terminal,
+        _terminal: &mut custom_terminal::Terminal,
     ) -> anyhow::Result<bool> {
-        if let Some(name) = self.pending_agents.pop_front() {
+        while let Some(name) = self.pending_agents.pop_front() {
             if let Some(agent) = self.agents.get(&name) {
                 let rx = agent.start_completion(
                     self.messages.clone(),
@@ -111,46 +111,9 @@ impl App {
                 self.agent_event_rx = Some(rx);
                 return Ok(true);
             }
-            // Agent not found (builtin/removed) — try next.
-            self.echo_reply(terminal, &Addressee::Single(name), "")?;
+            // Agent not found — skip and try next.
         }
         Ok(false)
-    }
-
-    /// Echo reply with yellow diamond prefix (for builtin agents).
-    fn echo_reply(
-        &self,
-        terminal: &mut custom_terminal::Terminal,
-        addressee: &Addressee,
-        body: &str,
-    ) -> anyhow::Result<()> {
-        let route_tag = match addressee {
-            Addressee::All => "[→ @all]".to_string(),
-            Addressee::Single(name) => format!("[→ @{name}]"),
-            Addressee::Multiple(names) => {
-                let joined = names.iter().map(|n| format!("@{n}")).collect::<Vec<_>>();
-                format!("[→ {}]", joined.join(" "))
-            }
-            Addressee::LastRespondent => "[→ last]".to_string(),
-        };
-
-        let diamond = Span::styled(
-            "\u{25c6} ".to_string(), // ◆
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        );
-        let echo_prefix = format!("{route_tag} echo: ");
-        let mut body_lines = body.lines();
-        let first_body = body_lines.next().unwrap_or("");
-        let mut echo_lines: Vec<Line<'static>> = vec![Line::from(vec![
-            diamond,
-            Span::raw(format!("{echo_prefix}{first_body}")),
-        ])];
-        for line in body_lines {
-            echo_lines.push(Line::from(Span::raw(line.to_string())));
-        }
-        render::insert_lines(terminal, echo_lines)
     }
 
     /// Insert user message with colored routing dots showing target agents.
