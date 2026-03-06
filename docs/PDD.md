@@ -572,7 +572,7 @@ krew --resume
 ### 7.4 兼容性
 
 - 支持 Windows x64 / macOS x64+arm64 / Linux x64+arm64（五平台静态链接二进制）
-- 通过 `npm install -g @zhing2006/krew` 或 GitHub Release 下载安装
+- 通过 `npm install -g @zhing2026/krew` 或 GitHub Release 下载安装
 - 支持常见终端模拟器（Windows Terminal、iTerm2、GNOME Terminal 等）
 - 最低终端宽度 80 列
 

@@ -8,7 +8,7 @@ krew-cli has completed all 12 functional phases and is ready for its first publi
 - Configure static linking for all 5 target platforms (Windows x64, Linux x64/arm64, macOS x64/arm64)
 - Add `mimalloc` as the allocator on Linux musl targets
 - Create GitHub Actions workflow for automated cross-platform builds on tag push
-- Create npm package structure with platform-specific optional dependencies (`@zhing2006/krew-*`) for binary distribution
+- Create npm package structure with platform-specific optional dependencies (`@zhing2026/krew-*`) for binary distribution
 - Add publish helper scripts for downloading release artifacts and publishing to npm
 
 ## Capabilities
@@ -16,7 +16,7 @@ krew-cli has completed all 12 functional phases and is ready for its first publi
 ### New Capabilities
 - `static-linking`: Platform-specific static linking configuration (static_vcruntime on Windows, musl+mimalloc on Linux, crt-static on macOS) and release profile optimizations
 - `ci-build`: GitHub Actions workflow that builds 5 platform targets on version tag push and creates a GitHub Release with binary artifacts
-- `npm-distribution`: npm package structure with a main package (`@zhing2006/krew`) and 5 platform sub-packages using optionalDependencies pattern, plus JS shim and publish scripts
+- `npm-distribution`: npm package structure with a main package (`@zhing2026/krew`) and 5 platform sub-packages using optionalDependencies pattern, plus JS shim and publish scripts
 
 ### Modified Capabilities
 
