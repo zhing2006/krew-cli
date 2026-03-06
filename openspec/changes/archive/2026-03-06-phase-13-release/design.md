@@ -7,7 +7,7 @@ krew-cli is a Rust workspace with 6 crates. The CLI binary crate (`krew-cli`) al
 **Goals:**
 - Produce statically linked, optimized single-file binaries for all 5 targets
 - Automate cross-platform builds via GitHub Actions on tag push
-- Enable `npm install -g @zhing2006/krew` as the primary distribution channel
+- Enable `npm install -g @zhing2026/krew` as the primary distribution channel
 - Keep the publish step manual (human triggers npm publish)
 
 **Non-Goals:**
@@ -57,12 +57,12 @@ Set `RUSTFLAGS="-C target-feature=+crt-static"` in the CI build step for macOS t
 Use the platform sub-package pattern (as used by esbuild, biome, oxlint):
 
 ```
-@zhing2006/krew              → main package with JS shim + optionalDependencies
-@zhing2006/krew-win32-x64    → Windows x64 binary
-@zhing2006/krew-linux-x64    → Linux x64 binary
-@zhing2006/krew-linux-arm64  → Linux arm64 binary
-@zhing2006/krew-darwin-x64   → macOS x64 binary
-@zhing2006/krew-darwin-arm64 → macOS arm64 binary
+@zhing2026/krew              → main package with JS shim + optionalDependencies
+@zhing2026/krew-win32-x64    → Windows x64 binary
+@zhing2026/krew-linux-x64    → Linux x64 binary
+@zhing2026/krew-linux-arm64  → Linux arm64 binary
+@zhing2026/krew-darwin-x64   → macOS x64 binary
+@zhing2026/krew-darwin-arm64 → macOS arm64 binary
 ```
 
 **Rationale**: Superior to postinstall-download approach — works with `--ignore-scripts`, offline installs, and corporate proxies. Industry standard for Rust/Go CLI tools distributed via npm.
