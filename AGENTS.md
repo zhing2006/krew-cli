@@ -68,3 +68,11 @@ OpenAI agents have an `api_type` config field: `"responses"` (Responses API) or 
 - All communication with user is in Chinese (中文)
 - All comments in code and config files must be in English
 - Always use the `git` agent (Task tool with subagent_type "git") for all git operations (commit, push, etc.)
+
+## Versioning
+
+When bumping the version, **all** of the following must be updated in sync:
+
+1. **Cargo workspace** — `version` in root `Cargo.toml` `[workspace.package]` and each crate's `Cargo.toml`
+2. **npm packages** — `version` in all 6 `package.json` files under `npm/` (main `krew` + 5 platform sub-packages)
+3. **Git tag** — create a `v{VERSION}` tag on the release commit
