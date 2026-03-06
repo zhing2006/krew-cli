@@ -7,12 +7,40 @@ A CLI tool for multi-AI-agent collaborative conversations. Run multiple AI model
 - **Multi-Agent Sessions** — Chat with multiple AI models simultaneously in one terminal
 - **@ Addressing** — `@all` to broadcast, `@agent_name` to target a specific agent
 - **Shared Context** — All agents see the full conversation history, enabling cross-agent collaboration
-- **Per-Agent Sampling** — Configure temperature, top_p, max_tokens, etc. per agent; max_tokens defaults to model maximum
-- **Built-in Tools** — File read/write, shell execution, glob/grep search
-- **MCP Integration** — Extend agent capabilities via Model Context Protocol servers
-- **Session Persistence** — Save and resume conversations with `/resume` and `/new`
+- **Built-in Tools** — File read/write, shell execution, glob/grep search, URL fetch (HTML→Markdown)
+- **MCP Integration** — Extend agent capabilities via Model Context Protocol servers (stdio + HTTP)
+- **Session Persistence** — Save and resume conversations with `/resume` and `/clear`
 - **Token Tracking & Auto-Compact** — Real-time token usage display; automatic context compression when threshold is exceeded
-- **Streaming Output** — Real-time token-by-token rendering with per-agent color coding
+- **Streaming Output** — Real-time token-by-token rendering with per-agent color coding and status bar
+- **Thinking/Reasoning** — Display model thinking process (configurable effort: low/medium/high)
+- **Web Search** — Provider-native web search (OpenAI Responses, Anthropic, Gemini)
+- **Per-Agent Sampling** — Configure temperature, top_p, max_tokens, etc. per agent
+
+## Install
+
+### npm (recommended)
+
+```bash
+npm install -g @zhing2006/krew
+```
+
+### GitHub Releases
+
+Download the binary for your platform from [GitHub Releases](https://github.com/zhing2006/krew-cli/releases).
+
+| Platform | Binary |
+| -------- | ------ |
+| Windows x64 | `krew-win32-x64.exe` |
+| Linux x64 | `krew-linux-x64` |
+| Linux arm64 | `krew-linux-arm64` |
+| macOS x64 | `krew-darwin-x64` |
+| macOS arm64 | `krew-darwin-arm64` |
+
+### Build from source
+
+```bash
+cargo install --path crates/krew-cli
+```
 
 ## Supported Providers
 
@@ -45,6 +73,7 @@ api_type = "responses"
 color = "green"
 tools = true
 enable_web_search = false
+enable_thinking = false
 # sampling.temperature = 0.7
 # sampling.max_tokens = 32768
 
@@ -56,6 +85,7 @@ model = "claude-opus-4-6"
 color = "magenta"
 tools = true
 enable_web_search = false
+enable_thinking = false
 
 [providers.openai]
 api_key_env = "OPENAI_API_KEY"
@@ -106,21 +136,24 @@ you> Tell me more          # sends to the last respondent
 
 | Command | Description |
 | ------- | ----------- |
-| `/new` | Start a new session |
+| `/clear` | Clear screen and start new session (alias: `/new`) |
 | `/resume` | Resume a previous session |
 | `/agents` | List active agents and token usage |
-| `/clear` | Clear screen |
 | `/compact <agent>` | Compress context using the specified agent |
+| `/mcp` | List MCP servers and tools |
+| `/stats` | Show process statistics |
 | `/help` | Show help |
-| `/quit` | Exit |
+| `/exit` | Exit (alias: `/quit`) |
 
 ### Tool Approval Levels
 
-| Level | Read ops | Write ops | Shell / MCP |
-| ----- | -------- | --------- | ----------- |
-| `suggest` | Auto | Confirm | Confirm |
-| `auto-edit` | Auto | Auto | Confirm |
-| `full-auto` | Auto | Auto | Auto |
+| Level | Read ops | Write ops | Shell | fetch_url | MCP |
+| ----- | -------- | --------- | ----- | --------- | --- |
+| `suggest` | Auto | Confirm | Confirm* | Allowlist auto | Confirm |
+| `auto-edit` | Auto | Auto | Confirm* | Allowlist auto | Confirm |
+| `full-auto` | Auto | Auto | Auto | Auto | Auto |
+
+\* Shell commands matching `shell_allow_commands` prefixes are auto-approved.
 
 ## Architecture
 
@@ -130,11 +163,13 @@ Built in Rust with a modular workspace structure:
 krew-cli/
 ├── crates/
 │   ├── krew-cli/        # CLI entry + TUI (ratatui)
-│   ├── krew-core/       # Session, agent loop, routing
-│   ├── krew-llm/        # LLM client abstraction
-│   ├── krew-tools/      # Built-in tools + MCP
-│   ├── krew-storage/    # TOML session persistence
-│   └── krew-config/     # Config loading
+│   ├── krew-core/       # Session, agent loop, routing, compact
+│   ├── krew-llm/        # LLM client abstraction (4 providers)
+│   ├── krew-tools/      # Built-in tools (7) + MCP client
+│   ├── krew-storage/    # TOML session persistence + input history
+│   └── krew-config/     # Config loading + AGENTS.md instructions
+├── .github/workflows/   # CI/CD (5-platform release builds)
+├── npm/                 # npm distribution packages
 └── docs/
     ├── PDD.md           # Product design
     └── TDD.md           # Technical design

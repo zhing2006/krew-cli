@@ -1,6 +1,7 @@
 [settings]
 approval_mode = "suggest"
 reply_order = ["opus", "gpt", "gemini", "sonnet", "doubao"]
+compact_keep_rounds = 5
 
 [[agents]]
 name = "gemini"

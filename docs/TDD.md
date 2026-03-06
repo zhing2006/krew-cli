@@ -1,6 +1,6 @@
 # krew-cli — 技术设计文档 (TDD)
 
-> 版本: 0.1.0 | 日期: 2026-02-28
+> 版本: 0.1.0 | 日期: 2026-03-06
 > 参考: [PDD](./PDD.md) | 参考项目: [codex CLI](https://github.com/openai/codex)
 
 ---
@@ -72,15 +72,23 @@
 
 ### 2.2 静态链接
 
-产出单文件可执行程序，零外部依赖，三平台均静态链接：
+产出单文件可执行程序，零外部依赖，五平台均静态链接：
 
-| 平台 | 策略 | 关键配置 |
-| ---- | ---- | -------- |
-| **Windows** | `static_vcruntime` crate 静态链接 MSVC 运行时 | 在 krew-cli 的 Cargo.toml 中依赖 `static_vcruntime` |
-| **Linux** | 使用 musl target 生成全静态二进制 | `--target x86_64-unknown-linux-musl`；使用 `mimalloc` 替换 musl 默认分配器以避免性能问题 |
-| **macOS** | 静态链接 CRT | `RUSTFLAGS="-C target-feature=+crt-static"`；系统框架仍动态链接（Apple 限制） |
+| 平台 | Target Triple | 策略 | 关键配置 |
+| ---- | ------------- | ---- | -------- |
+| **Windows x64** | `x86_64-pc-windows-msvc` | `static_vcruntime` crate 静态链接 MSVC 运行时 | 在 krew-cli 的 Cargo.toml 中依赖 `static_vcruntime` |
+| **Linux x64** | `x86_64-unknown-linux-musl` | musl target 全静态二进制 | `mimalloc` 替换 musl 默认分配器 |
+| **Linux arm64** | `aarch64-unknown-linux-musl` | musl target 全静态二进制（cross 交叉编译） | `mimalloc` + `cross` 工具链 |
+| **macOS x64** | `x86_64-apple-darwin` | 静态链接 CRT | `RUSTFLAGS="-C target-feature=+crt-static"` |
+| **macOS arm64** | `aarch64-apple-darwin` | 静态链接 CRT | `RUSTFLAGS="-C target-feature=+crt-static"` |
+
+**Release 优化**：`[profile.release]` 启用 `lto = true`、`codegen-units = 1`、`strip = true`、`panic = "abort"`。
 
 **TLS 依赖**：reqwest 0.13 默认使用 rustls，无需额外配置。关闭 `default-features` 后通过 `rustls` feature 显式启用，避免 musl 下 OpenSSL 静态编译问题。
+
+**分发方式**：
+- **GitHub Release**：GitHub Actions 在 `v*` tag push 时自动构建五平台二进制并创建 Release
+- **npm**：`npm install -g @zhing2006/krew`，使用 optionalDependencies 平台子包模式（`@zhing2006/krew-{platform}`）
 
 ### 2.3 关键 Crate
 
@@ -90,7 +98,8 @@
 | ----- | ---- | ---- |
 | `clap` | CLI 参数解析 (derive) | 4 |
 | `tokio` | 异步运行时 | 1 |
-| `ratatui` | TUI 渲染（内含 crossterm 重新导出，无需单独依赖） | 0.30 |
+| `ratatui` | TUI 渲染 | 0.30 |
+| `crossterm` | 终端事件处理（event-stream、bracketed-paste） | 0.29 |
 | `reqwest` | HTTP 客户端（LLM API，默认 rustls） | 0.13 |
 | `eventsource-stream` | SSE 流式响应解析（从 reqwest bytes_stream 转换） | 0.2 |
 | `serde` | 序列化框架 | 1 |
@@ -104,7 +113,23 @@
 | `uuid` | Session ID 生成 | 1 |
 | `chrono` | 时间戳处理 | 0.4 |
 | `futures` | Stream trait 等异步原语 | 0.3 |
-| `static_vcruntime` | Windows MSVC 运行时静态链接（仅 Windows） | 2 |
+| `async-trait` | 异步 trait 支持 | 0.1 |
+| `pulldown-cmark` | Markdown 解析 | 0.13 |
+| `two-face` | syntect 语法/主题捆绑包 | 0.5 |
+| `similar` | 文本差异比较 | 2 |
+| `diffy` | Diff 生成与格式化 | 0.4 |
+| `unicode-width` | Unicode 字符宽度计算 | 0.2 |
+| `unicode-segmentation` | Unicode 字素分割 | 1 |
+| `textwrap` | 文本自动换行 | 0.16 |
+| `dunce` | 路径标准化（Windows UNC 路径处理） | 1 |
+| `walkdir` | 目录遍历 | 2 |
+| `globset` | Glob 模式匹配 | 0.4 |
+| `regex` | 正则表达式引擎 | 1 |
+| `http` | HTTP 类型定义 | 1 |
+| `rmcp` | MCP SDK（child-process + streamable-http） | 1 |
+| `htmd` | HTML 转 Markdown | 0.5 |
+| `tracing-appender` | 日志文件输出（按日滚动） | 0.2 |
+| `static_vcruntime` | Windows MSVC 运行时静态链接（仅 Windows） | 3 |
 | `mimalloc` | 全局分配器（musl 性能优化，仅 Linux） | 0.1 |
 
 ---
@@ -251,6 +276,10 @@ enum StreamEvent {
     },
     /// 思考/推理内容
     ThinkingDelta(String),
+    /// 服务端工具开始（如 Web Search）
+    ServerToolStart { name: String },
+    /// 服务端工具完成
+    ServerToolDone { name: String, query: Option<String> },
     /// 流结束，携带本次请求的 token 用量
     Done(Usage),
     /// 错误
@@ -325,46 +354,47 @@ struct Usage {
 | opus 自己之前的回复 | `assistant` | 直接发送 |
 | gpt 的回复 | **待定（需测试）** | 方案 A 或 B |
 
-**方案 A：其他 Agent 的回复作为 `user` role**
+**方案 A：其他 Agent 的回复作为 `user` role**（默认）
 ```
 { role: "user", content: "[gpt] GPT-5.2:\n我建议使用 VecDeque..." }
 ```
 优点：LLM 不会混淆自己和别人的发言。
-缺点：LLM 可能把其他 Agent 的专业回复当作"用户说的"。
 
 **方案 B：其他 Agent 的回复作为 `assistant` role**
 ```
 { role: "assistant", content: "[gpt] GPT-5.2:\n我建议使用 VecDeque..." }
 ```
 优点：LLM 知道这是 AI 级别的回复。
-缺点：LLM 可能以为是自己说的，产生混淆。
 
-> **决策：此问题需要实际测试后确定。** `convert_messages` 方法接收 `self_agent_name` 参数，根据配置选择方案 A 或 B。初始实现两种方案都支持，通过配置切换。
+> **决策：通过 `settings.other_agent_role` 配置项控制。** 默认使用方案 A（`user`），可切换为方案 B（`assistant`）。`convert_messages` 方法接收 `self_agent_name` 和 `other_agent_role` 参数。
 
 ```rust
-// Responses API 和 Chat Completions API 各自实现 convert_messages，
-// 但都接收相同的参数以区分 Agent 身份
-fn convert_messages(
-    messages: &[ChatMessage],
-    self_agent_name: &str,          // 当前 Agent 的 name
-    other_agent_role: OtherAgentRole, // User 或 Assistant
-) -> Vec<ProviderMessage> { ... }
-
 enum OtherAgentRole {
-    User,       // 方案 A
+    User,       // 方案 A（默认）
     Assistant,  // 方案 B
 }
 ```
 
 ### 3.3.4 错误处理与重试
 
-LLM API 调用的错误处理策略：
+LLM API 调用的错误处理策略，通过 `settings.retry` 可配置：
+
+```rust
+struct RetryConfig {
+    max_retries_rate_limit: u32,       // 429 重试次数，默认 3
+    max_retries_server_error: u32,     // 5xx 重试次数，默认 2
+    backoff_base_secs: f64,            // 退避基数（秒），默认 2.0
+    backoff_multiplier: f64,           // 退避倍数，默认 3.0
+    server_error_interval_secs: f64,   // 5xx 重试间隔（秒），默认 2.0
+    request_timeout_secs: u64,         // 请求超时（秒），默认 60
+}
+```
 
 | 错误类型 | 处理方式 |
 | -------- | -------- |
-| 429 Rate Limit | 指数退避重试（1s → 2s → 4s），最多 3 次 |
-| 5xx 服务端错误 | 重试 2 次，间隔 2s |
-| 网络超时 | 超时阈值 60s（流式首 token）/ 300s（流式总时长），超时后重试 1 次 |
+| 429 Rate Limit | 指数退避重试，最多 `max_retries_rate_limit` 次 |
+| 5xx 服务端错误 | 固定间隔重试 `max_retries_server_error` 次 |
+| 网络超时 | 超时阈值 `request_timeout_secs`，超时后重试 1 次 |
 | 网络断开 | 提示用户，等待恢复后可手动重试（输入相同消息） |
 | 401/403 认证错误 | 不重试，直接报错提示检查 API Key |
 | 流式中断 | 已接收的部分内容保留显示，提示用户该 Agent 回复不完整 |
@@ -455,24 +485,33 @@ struct ToolResult {
 | `shell` | 执行 Shell 命令 | Shell | 需确认 | 需确认 | 自动 |
 | `glob` | 文件名模式匹配 | 读操作 | 自动 | 自动 | 自动 |
 | `grep` | 文件内容搜索 | 读操作 | 自动 | 自动 | 自动 |
+| `fetch_url` | 抓取 URL 内容（HTML→Markdown） | 网络 | 白名单域名自动，其他需确认 | 同左 | 自动 |
 
 #### 3.4.3 MCP 集成
 
-```rust
-struct McpServer {
-    name: String,
-    process: Child,          // 子进程
-    transport: StdioTransport,  // stdin/stdout JSON-RPC
-}
+MCP 实现分为三个模块：
 
-impl McpServer {
-    async fn initialize(&mut self) -> Result<ServerCapabilities>;
-    async fn list_tools(&self) -> Result<Vec<ToolDefinition>>;
-    async fn call_tool(&self, name: &str, args: Value) -> Result<ToolResult>;
-}
+- `McpClient` — 底层通信，封装 rmcp SDK，支持 stdio 和 Streamable HTTP 两种传输
+- `McpManager` — 管理多个 MCP 服务器的生命周期，提供统一的工具发现和调用接口
+- `McpToolHandler` — 将 MCP 工具适配为内置 Tool trait，统一注册到工具系统
+
+**双传输支持**：
+
+```toml
+# Stdio 传输（子进程）
+[[mcp_servers]]
+name = "filesystem"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
+
+# HTTP 传输（Streamable HTTP）
+[[mcp_servers]]
+name = "remote-tools"
+url = "https://mcp.example.com/sse"
+headers = { Authorization = "Bearer $TOKEN" }
 ```
 
-MCP 服务器在会话启动时初始化，通过 stdio 传输 JSON-RPC 消息。发现的工具自动注册到工具系统中，与内置工具统一暴露给 Agent。
+MCP 服务器在会话启动时初始化，发现的工具自动注册到工具系统中，与内置工具统一暴露给 Agent。工具的审批级别由 MCP 服务器的 `trust` 配置和工具的 `annotations` 元数据共同决定。
 
 #### 3.4.4 工具审批流程
 
@@ -503,13 +542,15 @@ Agent 请求工具调用
 
 ```rust
 enum SlashCommand {
-    New,
-    Resume,
-    Agents,
-    Clear,
-    Compact(String),  // 参数: agent name
+    Clear,              // 清屏（同 /new）
+    Resume,             // 恢复历史会话
+    Agents,             // 列出 Agent 及 token 用量
+    Compact(String),    // 参数: agent name
+    Mcp,                // 列出 MCP 服务器及工具
+    Skills,             // 列出可用技能
+    Stats,              // 显示进程统计（内存、线程）
     Help,
-    Quit,
+    Exit,               // 退出（同 /quit）
 }
 
 impl SlashCommand {
@@ -706,6 +747,14 @@ struct Settings {
     approval_mode: ApprovalMode,    // suggest | auto-edit | full-auto
     reply_order: Vec<String>,       // @all 回答顺序
     auto_compact_threshold: Option<u32>,  // 会话自动压缩 token 阈值（默认 120000）
+    compact_keep_rounds: Option<usize>,   // 压缩时保留最近 N 轮对话（默认 10）
+    input_history_limit: Option<usize>,   // 输入历史上限（默认 1000）
+    paste_burst_detection: Option<bool>,  // 粘贴检测（Windows 回退方案）
+    worker_threads: Option<usize>,        // tokio 工作线程数（默认 4）
+    other_agent_role: Option<OtherAgentRole>,  // 其他 Agent 消息的 role（默认 User）
+    retry: Option<RetryConfig>,           // LLM 请求重试配置
+    shell_allow_commands: Option<Vec<String>>,  // 免审批 shell 命令前缀列表
+    fetch_allow_domains: Option<Vec<String>>,   // 免审批 fetch_url 域名白名单
 }
 
 #[derive(Deserialize)]
@@ -719,7 +768,15 @@ struct AgentConfig {
     system_prompt: Option<String>,
     tools: bool,
     enable_web_search: bool,    // 启用模型原生 Web 搜索
+    enable_thinking: bool,      // 启用思考/推理输出
+    thinking_effort: Option<ThinkingEffort>,  // 思考力度: low | medium | high
     sampling: Option<SamplingConfig>,  // 采样参数（均可选，未设置则使用模型默认值）
+}
+
+enum ThinkingEffort {
+    Low,
+    Medium,
+    High,
 }
 
 /// Agent 级采样参数配置。
@@ -743,19 +800,33 @@ enum ApiType {
 
 #[derive(Deserialize)]
 struct ProviderConfig {
-    api_key: Option<String>,        // 方式二：直接填写（不推荐）
-    api_key_env: Option<String>,    // 方式一：环境变量名（优先）
+    provider_type: ProviderType,        // openai | anthropic | google
+    api_key: Option<String>,            // 方式二：直接填写（不推荐）
+    api_key_env: Option<String>,        // 方式一：环境变量名（优先）
     base_url: Option<String>,
     azure_endpoint: Option<String>,     // Azure 模式: endpoint URL
     azure_api_version: Option<String>,  // Azure 模式: API 版本
+    vertex_project: Option<String>,     // Google Vertex AI 项目 ID
+    vertex_location: Option<String>,    // Google Vertex AI 区域（如 "us-central1"）
+}
+
+enum ProviderType {
+    OpenAI,
+    Anthropic,
+    Google,
 }
 
 #[derive(Deserialize)]
 struct McpServerConfig {
     name: String,
-    command: String,
-    args: Vec<String>,
-    env: Option<HashMap<String, String>>,  // 可选，默认空
+    // Stdio 传输
+    command: Option<String>,
+    args: Option<Vec<String>>,
+    env: Option<HashMap<String, String>>,
+    // HTTP 传输
+    url: Option<String>,                        // Streamable HTTP URL
+    headers: Option<HashMap<String, String>>,    // HTTP 请求头
+    // 通用
     trust: Option<McpTrust>,    // auto | confirm (默认 confirm)
 }
 
@@ -1006,79 +1077,148 @@ struct AgentRuntime {
 
 ```txt
 krew-cli/
-├── Cargo.toml               # Workspace root
+├── Cargo.toml               # Workspace root（含 [profile.release] 优化配置）
+├── AGENTS.md                # 项目级 Agent 指令
+├── CLAUDE.md                # Claude Code 项目指令
 ├── crates/
-│   ├── krew-cli/             # 主 CLI 入口
+│   ├── krew-cli/             # 主 CLI 入口 + TUI
 │   │   ├── Cargo.toml
 │   │   └── src/
-│   │       ├── main.rs       # 入口 + clap 解析
-│   │       ├── app.rs        # App 状态机 + 主事件循环
-│   │       └── render.rs     # TUI 渲染逻辑
+│   │       ├── main.rs             # 入口 + clap 解析 + mimalloc 全局分配器
+│   │       ├── completion.rs       # @ / 补全状态管理
+│   │       ├── textarea.rs         # 多行文本输入组件
+│   │       ├── app/                # App 状态机 + 事件循环
+│   │       │   ├── mod.rs
+│   │       │   ├── state.rs        # App 状态定义
+│   │       │   ├── input.rs        # 键盘事件处理 + ESC 取消
+│   │       │   ├── commands.rs     # Slash 命令处理
+│   │       │   ├── message.rs      # 消息发送流程
+│   │       │   ├── agent_display.rs # Agent 显示信息管理
+│   │       │   ├── persistence.rs  # 会话持久化集成
+│   │       │   ├── paste_burst.rs  # 粘贴检测
+│   │       │   └── approval/       # 工具审批 UI
+│   │       │       ├── mod.rs
+│   │       │       └── overlay.rs  # 审批 overlay 渲染
+│   │       ├── render/             # TUI 渲染
+│   │       │   ├── mod.rs
+│   │       │   ├── viewport.rs     # 视口管理 + 状态栏
+│   │       │   ├── messages.rs     # 消息渲染
+│   │       │   ├── markdown.rs     # Markdown 渲染
+│   │       │   ├── highlight.rs    # 语法高亮
+│   │       │   ├── diff_render.rs  # Diff 预览渲染
+│   │       │   ├── header.rs       # 启动 banner
+│   │       │   ├── popup.rs        # 补全弹窗渲染
+│   │       │   ├── color.rs        # 颜色工具
+│   │       │   └── terminal_palette.rs  # 终端调色板
+│   │       ├── custom_terminal/    # 自定义终端（行内视口）
+│   │       │   ├── mod.rs
+│   │       │   ├── terminal.rs
+│   │       │   ├── frame.rs
+│   │       │   └── ansi.rs
+│   │       ├── frame_scheduler/    # 帧率调度
+│   │       │   ├── mod.rs
+│   │       │   ├── scheduler.rs
+│   │       │   └── rate_limiter.rs
+│   │       └── streaming/          # 流式输出管线
+│   │           ├── mod.rs
+│   │           ├── markdown_stream.rs  # Markdown 流式渲染
+│   │           ├── chunking.rs         # Token 分块
+│   │           └── commit_tick.rs      # 提交节拍
 │   │
 │   ├── krew-core/            # 核心逻辑
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       ├── session.rs    # Session 管理
-│   │       ├── agent.rs      # Agent 运行时 + Agent Loop
-│   │       ├── router.rs     # @ 寻址解析与消息路由
-│   │       ├── message.rs    # 消息数据模型
-│   │       └── command.rs    # Slash 命令定义与执行
+│   │       ├── router.rs           # @ 寻址解析与消息路由
+│   │       ├── command.rs          # Slash 命令定义与执行
+│   │       ├── compact.rs          # /compact 实现
+│   │       ├── event.rs            # 事件类型定义
+│   │       ├── persistence.rs      # 会话持久化逻辑
+│   │       ├── process_stats.rs    # 进程统计（内存、线程）
+│   │       └── agent/              # Agent 运行时 + Agent Loop
+│   │           ├── mod.rs
+│   │           ├── agent_loop.rs   # Agent Loop 主循环
+│   │           ├── approval.rs     # 工具审批逻辑
+│   │           ├── init.rs         # Agent 初始化
+│   │           ├── prepare.rs      # 消息准备与转换
+│   │           └── prune.rs        # 消息裁剪
 │   │
 │   ├── krew-llm/             # LLM Client 抽象
 │   │   ├── Cargo.toml
 │   │   └── src/
-│   │       ├── lib.rs        # LlmClient trait
-│   │       ├── openai_responses.rs    # OpenAI Responses API
-│   │       ├── openai_chat.rs        # OpenAI Chat Completions API
-│   │       ├── openai_compatible.rs  # OpenAI 兼容接口（豆包等，复用 openai 实现）
-│   │       ├── anthropic.rs          # Anthropic 实现
-│   │       ├── google.rs             # Google Gemini 实现
-│   │       └── types.rs              # 统一类型定义
+│   │       ├── lib.rs              # LlmClient trait
+│   │       ├── types.rs            # 统一类型定义（StreamEvent, Usage 等）
+│   │       ├── common.rs           # Provider 通用工具函数
+│   │       ├── openai_responses.rs # OpenAI Responses API
+│   │       ├── openai_chat.rs      # OpenAI Chat Completions API（含 Compatible）
+│   │       ├── anthropic.rs        # Anthropic 实现
+│   │       └── google.rs           # Google Gemini 实现
 │   │
 │   ├── krew-tools/           # 工具系统
 │   │   ├── Cargo.toml
 │   │   └── src/
-│   │       ├── lib.rs        # Tool trait + 注册
-│   │       ├── builtin/      # 内置工具
+│   │       ├── lib.rs              # Tool trait + 注册
+│   │       ├── builtin/            # 内置工具
 │   │       │   ├── mod.rs
 │   │       │   ├── read_file.rs
 │   │       │   ├── write_file.rs
 │   │       │   ├── edit_file.rs
 │   │       │   ├── shell.rs
+│   │       │   ├── shell_parse.rs  # Shell 参数解析
 │   │       │   ├── glob.rs
-│   │       │   └── grep.rs
-│   │       └── mcp.rs        # MCP 客户端
+│   │       │   ├── grep.rs
+│   │       │   └── fetch_url.rs    # URL 抓取（HTML→Markdown）
+│   │       └── mcp/                # MCP 客户端
+│   │           ├── mod.rs
+│   │           ├── client.rs       # MCP 通信层
+│   │           ├── manager.rs      # 多服务器管理
+│   │           └── handler.rs      # MCP→Tool trait 适配
 │   │
 │   ├── krew-storage/         # 持久化
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       └── session_file.rs # TOML 会话文件读写
+│   │       ├── session_file.rs     # TOML 会话文件读写
+│   │       └── history_file.rs     # 输入历史持久化
 │   │
 │   └── krew-config/          # 配置管理
 │       ├── Cargo.toml
 │       └── src/
 │           ├── lib.rs
-│           └── defaults.rs   # 内置默认配置
+│           ├── defaults.rs         # 内置默认配置
+│           └── instructions.rs     # AGENTS.md 加载
 │
-├── docs/
-│   ├── PDD.md
-│   └── TDD.md
+├── .github/
+│   └── workflows/
+│       └── release.yml       # GitHub Actions 五平台构建 + Release
 │
-└── config.example.toml       # 示例配置文件
+├── npm/                      # npm 分发包
+│   ├── krew/                 # 主包 @zhing2006/krew
+│   │   ├── package.json
+│   │   └── bin/krew          # JS shim
+│   └── krew-{platform}/     # 5 个平台子包
+│       └── package.json
+│
+├── scripts/
+│   ├── prepare-npm.sh        # 下载 Release 二进制到 npm 目录
+│   └── npm-publish.sh        # 发布 npm 包
+│
+└── docs/
+    ├── PDD.md
+    ├── TDD.md
+    └── dev_plan.md           # 开发计划与 Phase 进度
 ```
 
 ### 6.1 Crate 职责划分
 
 | Crate | 职责 | 依赖 |
 | ----- | ---- | ---- |
-| `krew-cli` | CLI 入口、TUI 渲染、用户交互 | krew-core, krew-config |
-| `krew-core` | 会话管理、Agent Loop、消息路由、Slash 命令 | krew-llm, krew-tools, krew-storage, krew-config |
-| `krew-llm` | LLM API 抽象、各 Provider 实现 | reqwest, serde |
-| `krew-tools` | 工具 trait、内置工具、MCP 客户端 | tokio, serde |
-| `krew-storage` | TOML 文件会话持久化 | toml, serde |
-| `krew-config` | TOML 配置加载与合并 | toml, serde |
+| `krew-cli` | CLI 入口、TUI 渲染、用户交互、审批 overlay、流式管线 | krew-core, krew-config, krew-llm, krew-tools, krew-storage |
+| `krew-core` | 会话管理、Agent Loop、消息路由、Slash 命令、Compact | krew-llm, krew-tools, krew-storage, krew-config |
+| `krew-llm` | LLM API 抽象、各 Provider 实现 | reqwest, serde, eventsource-stream |
+| `krew-tools` | 工具 trait、内置工具（含 fetch_url）、MCP 客户端 | tokio, serde, rmcp, htmd, reqwest |
+| `krew-storage` | TOML 文件会话持久化、输入历史 | toml, serde |
+| `krew-config` | TOML 配置加载、AGENTS.md 指令加载 | toml, serde |
 
 ### 6.2 依赖关系图
 
@@ -1104,43 +1244,15 @@ krew-cli
 
 ### 7.1 Cargo.toml (workspace)
 
-```toml
-[workspace]
-resolver = "2"
-members = [
-    "crates/krew-cli",
-    "crates/krew-core",
-    "crates/krew-llm",
-    "crates/krew-tools",
-    "crates/krew-storage",
-    "crates/krew-config",
-]
-
-# 版本号在开发启动时锁定为最新稳定版，以下为参考值
-# 原则: default-features = false 最小化依赖，避免 dup crates
-[workspace.dependencies]
-tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net", "io-util", "time", "fs", "process", "signal"] }
-serde = { version = "1", default-features = false, features = ["derive"] }
-serde_json = { version = "1", default-features = false }
-anyhow = { version = "1", default-features = false }
-thiserror = { version = "2", default-features = false }
-tracing = { version = "0.1", default-features = false }
-tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
-chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
-uuid = { version = "1", default-features = false, features = ["v4"] }
-toml = { version = "0.9", default-features = false, features = ["parse", "display"] }
-reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
-eventsource-stream = { version = "0.2", default-features = false }
-futures = { version = "0.3", default-features = false }
-```
+完整的 workspace 依赖列表见项目根目录 `Cargo.toml` 的 `[workspace.dependencies]` 段。原则：`default-features = false` 最小化依赖，通过 workspace 统一管理避免 dup crates。
 
 ### 7.2 各 Crate 特定依赖
 
-**krew-cli**: `clap` (derive), `ratatui` (crossterm), `syntect`, `static_vcruntime` (Windows), `mimalloc` (Linux musl)
-**krew-llm**: `reqwest`, `eventsource-stream`, `futures`
-**krew-tools**: `tokio`, `globset`, `grep-regex`
-**krew-storage**: `toml`, `serde`
-**krew-config**: `toml`
+**krew-cli**: `clap` (derive), `ratatui` (crossterm), `crossterm` (event-stream, bracketed-paste), `syntect`, `two-face`, `pulldown-cmark`, `similar`, `diffy`, `unicode-width`, `unicode-segmentation`, `textwrap`, `static_vcruntime` (Windows), `mimalloc` (Linux musl)
+**krew-llm**: `reqwest`, `eventsource-stream`, `futures`, `async-trait`, `http`
+**krew-tools**: `tokio`, `globset`, `regex`, `walkdir`, `dunce`, `rmcp`, `htmd`, `reqwest`
+**krew-storage**: `toml`, `serde`, `chrono`
+**krew-config**: `toml`, `serde`
 
 ---
 

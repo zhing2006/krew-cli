@@ -1,0 +1,9 @@
+{
+  "name": "@zhing2006/krew-win32-x64",
+  "version": "0.1.0",
+  "description": "krew binary for Windows x64",
+  "os": ["win32"],
+  "cpu": ["x64"],
+  "files": ["krew.exe"],
+  "license": "MIT"
+}
