@@ -88,7 +88,7 @@
 
 **分发方式**：
 - **GitHub Release**：GitHub Actions 在 `v*` tag push 时自动构建五平台二进制并创建 Release
-- **npm**：`npm install -g @zhing2006/krew`，使用 optionalDependencies 平台子包模式（`@zhing2006/krew-{platform}`）
+- **npm**：`npm install -g @zhing2026/krew`，使用 optionalDependencies 平台子包模式（`@zhing2026/krew-{platform}`）
 
 ### 2.3 关键 Crate
 
@@ -1193,7 +1193,7 @@ krew-cli/
 │       └── release.yml       # GitHub Actions 五平台构建 + Release
 │
 ├── npm/                      # npm 分发包
-│   ├── krew/                 # 主包 @zhing2006/krew
+│   ├── krew/                 # 主包 @zhing2026/krew
 │   │   ├── package.json
 │   │   └── bin/krew          # JS shim
 │   └── krew-{platform}/     # 5 个平台子包

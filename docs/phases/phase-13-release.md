@@ -10,14 +10,14 @@
 - **macOS x64/arm64**：`RUSTFLAGS="-C target-feature=+crt-static"`
 - **CI/CD**：GitHub Actions 五平台构建 + Release 发布（tag 触发）
 - **二进制优化**：strip、LTO、codegen-units=1、panic=abort
-- **npm 分发**：`@zhing2006/krew` 主包 + 5 个平台子包（optionalDependencies 模式）
+- **npm 分发**：`@zhing2026/krew` 主包 + 5 个平台子包（optionalDependencies 模式）
 
 ## 验收标准
 
 - 五平台各产出一个单文件可执行程序
 - Windows 上无需安装 VC 运行时
 - Linux 上无动态库依赖（`ldd` 显示 `not a dynamic executable`）
-- `npm install -g @zhing2006/krew` 可安装并运行
+- `npm install -g @zhing2026/krew` 可安装并运行
 
 ## 参考
 

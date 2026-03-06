@@ -21,7 +21,7 @@ A CLI tool for multi-AI-agent collaborative conversations. Run multiple AI model
 ### npm (recommended)
 
 ```bash
-npm install -g @zhing2006/krew
+npm install -g @zhing2026/krew
 ```
 
 ### GitHub Releases

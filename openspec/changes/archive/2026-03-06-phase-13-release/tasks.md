@@ -15,7 +15,7 @@
 
 ## 3. npm Package Structure
 
-- [x] 3.1 Create `npm/krew/package.json` for main package `@zhing2006/krew` with `optionalDependencies` and `bin` entry
+- [x] 3.1 Create `npm/krew/package.json` for main package `@zhing2026/krew` with `optionalDependencies` and `bin` entry
 - [x] 3.2 Create `npm/krew/bin/krew` JS shim that resolves platform binary and exec's it
 - [x] 3.3 Create `npm/krew-win32-x64/package.json` with `os: ["win32"]`, `cpu: ["x64"]`
 - [x] 3.4 Create `npm/krew-linux-x64/package.json` with `os: ["linux"]`, `cpu: ["x64"]`
