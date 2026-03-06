@@ -36,3 +36,6 @@ diffy = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 static_vcruntime = "3"
+
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc = { version = "0.1", default-features = false }

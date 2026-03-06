@@ -50,3 +50,9 @@ krew-llm = { path = "crates/krew-llm" }
 krew-tools = { path = "crates/krew-tools" }
 krew-storage = { path = "crates/krew-storage" }
 krew-core = { path = "crates/krew-core" }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
