@@ -1,0 +1,9 @@
+{
+  "name": "@zhing2006/krew-darwin-x64",
+  "version": "0.1.0",
+  "description": "krew binary for macOS x64",
+  "os": ["darwin"],
+  "cpu": ["x64"],
+  "files": ["krew"],
+  "license": "MIT"
+}

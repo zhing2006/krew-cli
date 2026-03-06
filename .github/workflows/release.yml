@@ -1,0 +1,128 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: win32-x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: krew.exe
+            asset: krew-win32-x64.exe
+
+          - name: linux-x64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            binary: krew
+            asset: krew-linux-x64
+
+          - name: linux-arm64
+            runner: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            binary: krew
+            asset: krew-linux-arm64
+
+          - name: darwin-x64
+            runner: macos-latest
+            target: x86_64-apple-darwin
+            binary: krew
+            asset: krew-darwin-x64
+
+          - name: darwin-arm64
+            runner: macos-latest
+            target: aarch64-apple-darwin
+            binary: krew
+            asset: krew-darwin-arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Linux musl toolchain
+      - name: Install musl-tools (Linux x64)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Install cross (Linux arm64)
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      # Build
+      - name: Build (cross)
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Build (macOS)
+        if: startsWith(matrix.target, 'x86_64-apple') || startsWith(matrix.target, 'aarch64-apple')
+        run: cargo build --release --target ${{ matrix.target }}
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static"
+
+      - name: Build (Windows / Linux x64)
+        if: matrix.target == 'x86_64-pc-windows-msvc' || matrix.target == 'x86_64-unknown-linux-musl'
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # Rename and upload
+      - name: Prepare artifact (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cp target/${{ matrix.target }}/release/${{ matrix.binary }} ${{ matrix.asset }}
+          chmod +x ${{ matrix.asset }}
+
+      - name: Prepare artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: cp target/${{ matrix.target }}/release/${{ matrix.binary }} ${{ matrix.asset }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          # Collect all binaries from artifact subdirectories
+          files=()
+          for dir in artifacts/*/; do
+            for file in "$dir"*; do
+              [ -f "$file" ] && files+=("$file")
+            done
+          done
+          gh release create "$tag" "${files[@]}" \
+            --title "$tag" \
+            --generate-notes
