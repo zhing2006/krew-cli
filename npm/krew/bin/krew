@@ -1,0 +1,47 @@
+#!/usr/bin/env node
+
+const { execFileSync } = require("child_process");
+const path = require("path");
+
+const PLATFORMS = {
+  "win32-x64": { pkg: "@zhing2006/krew-win32-x64", bin: "krew.exe" },
+  "linux-x64": { pkg: "@zhing2006/krew-linux-x64", bin: "krew" },
+  "linux-arm64": { pkg: "@zhing2006/krew-linux-arm64", bin: "krew" },
+  "darwin-x64": { pkg: "@zhing2006/krew-darwin-x64", bin: "krew" },
+  "darwin-arm64": { pkg: "@zhing2006/krew-darwin-arm64", bin: "krew" },
+};
+
+const platformKey = `${process.platform}-${process.arch}`;
+const info = PLATFORMS[platformKey];
+
+if (!info) {
+  console.error(
+    `Error: Unsupported platform ${process.platform}-${process.arch}.\n` +
+      `krew currently supports: ${Object.keys(PLATFORMS).join(", ")}`
+  );
+  process.exit(1);
+}
+
+let binaryPath;
+try {
+  binaryPath = path.join(
+    path.dirname(require.resolve(`${info.pkg}/package.json`)),
+    info.bin
+  );
+} catch {
+  console.error(
+    `Error: Could not find the binary for ${platformKey}.\n` +
+      `The platform package ${info.pkg} does not appear to be installed.\n` +
+      `Try reinstalling: npm install -g @zhing2006/krew`
+  );
+  process.exit(1);
+}
+
+try {
+  execFileSync(binaryPath, process.argv.slice(2), { stdio: "inherit" });
+} catch (e) {
+  if (e.status !== null) {
+    process.exit(e.status);
+  }
+  throw e;
+}

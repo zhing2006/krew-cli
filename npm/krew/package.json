@@ -1,0 +1,27 @@
+{
+  "name": "@zhing2006/krew",
+  "version": "0.1.0",
+  "description": "Multi-AI-Agent collaborative CLI tool",
+  "bin": {
+    "krew": "bin/krew"
+  },
+  "optionalDependencies": {
+    "@zhing2006/krew-win32-x64": "0.1.0",
+    "@zhing2006/krew-linux-x64": "0.1.0",
+    "@zhing2006/krew-linux-arm64": "0.1.0",
+    "@zhing2006/krew-darwin-x64": "0.1.0",
+    "@zhing2006/krew-darwin-arm64": "0.1.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zhing2006/krew-cli"
+  },
+  "keywords": [
+    "cli",
+    "ai",
+    "agent",
+    "llm",
+    "multi-agent"
+  ]
+}
