@@ -38,11 +38,6 @@ pub fn init_agents(config: &Config, cwd: Option<PathBuf>) -> InitAgentsResult {
     let shared_approval_cache = ApprovalCache::new();
 
     for agent_config in &config.agents {
-        if agent_config.provider == "builtin" {
-            // Skip builtin echo agents — they don't need an LLM client.
-            continue;
-        }
-
         let provider_config = match config.providers.get(&agent_config.provider) {
             Some(p) => p,
             None => {

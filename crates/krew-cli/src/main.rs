@@ -183,6 +183,13 @@ fn load_config(cwd: &Path, cli: &Cli) -> anyhow::Result<Config> {
 
     config.validate().map_err(|e| anyhow::anyhow!("{e}"))?;
 
+    if config.agents.is_empty() {
+        anyhow::bail!(
+            "No agents configured. Create a config file at .krew/settings.toml to get started.\n\
+             See README.md for configuration examples."
+        );
+    }
+
     tracing::info!(
         agents = config.agents.len(),
         approval_mode = %config.settings.approval_mode,
