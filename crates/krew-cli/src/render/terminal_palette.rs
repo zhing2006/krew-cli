@@ -65,19 +65,10 @@ pub fn indexed_color(index: u8) -> Color {
 
 /// Query the terminal's default background color.
 ///
-/// On Unix, uses crossterm's escape-sequence query (works in raw mode).
-/// On Windows/test, returns None (defaults to dark theme).
+/// Currently returns None on all platforms (defaults to dark theme).
+/// Official crossterm does not expose an OSC color query API; the Codex
+/// project uses a custom fork for this. We may revisit once upstream
+/// crossterm gains native support.
 pub fn default_bg() -> Option<(u8, u8, u8)> {
-    #[cfg(all(unix, not(test)))]
-    {
-        use crossterm::style::{Color as CrosstermColor, query_background_color};
-        match query_background_color() {
-            Ok(Some(CrosstermColor::Rgb { r, g, b })) => Some((r, g, b)),
-            _ => None,
-        }
-    }
-    #[cfg(not(all(unix, not(test))))]
-    {
-        None
-    }
+    None
 }
