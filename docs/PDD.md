@@ -319,7 +319,7 @@ headers = { Authorization = "Bearer $TOKEN" }
 approval_mode = "suggest"              # 工具审批策略: suggest | auto-edit | full-auto
 reply_order = ["gpt", "opus", "sonnet", "gemini", "doubao"] # @all 时的回答顺序
 auto_compact_threshold = 120000        # 会话自动压缩 token 阈值（0 = 禁用）
-compact_keep_rounds = 10               # 压缩时保留最近 N 轮对话
+compact_keep_rounds = 3                # 压缩时保留最近 N 轮对话
 # other_agent_role = "user"            # 其他 Agent 消息的 role: user | assistant
 # worker_threads = 4                   # tokio 工作线程数
 # shell_allow_commands = ["ls", "cargo", "git status"]  # 免审批 shell 命令前缀

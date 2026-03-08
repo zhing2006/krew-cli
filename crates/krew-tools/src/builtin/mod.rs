@@ -1,5 +1,6 @@
-//! Built-in tools: read_file, write_file, edit_file, shell, glob, grep, fetch_url.
+//! Built-in tools: read_file, write_file, edit_file, shell, glob, grep, fetch_url, activate_skill.
 
+pub mod activate_skill;
 mod edit_file;
 pub mod fetch_url;
 mod glob;
@@ -9,10 +10,12 @@ mod shell;
 pub mod shell_parse;
 mod write_file;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::ToolRegistry;
 
+pub use activate_skill::{ActivateSkillTool, SkillInfo};
 pub use edit_file::EditFileTool;
 pub use fetch_url::FetchUrlTool;
 pub use glob::GlobTool;
@@ -43,7 +46,8 @@ pub fn create_readonly_registry(cwd: PathBuf) -> ToolRegistry {
 /// Create a tool registry with all built-in tools (read + write + shell + fetch).
 ///
 /// The `cwd` path is used as the workspace boundary for path validation.
-pub fn create_full_registry(cwd: PathBuf) -> ToolRegistry {
+/// When `skills` is non-empty, an `activate_skill` tool is also registered.
+pub fn create_full_registry(cwd: PathBuf, skills: HashMap<String, SkillInfo>) -> ToolRegistry {
     let mut registry = ToolRegistry::empty();
 
     // Readonly tools.
@@ -70,6 +74,12 @@ pub fn create_full_registry(cwd: PathBuf) -> ToolRegistry {
     // Fetch URL tool.
     let fetch_tool = FetchUrlTool::new();
     registry.register(fetch_tool.spec(), Box::new(fetch_tool));
+
+    // Activate skill tool (only when skills are available).
+    if !skills.is_empty() {
+        let skill_tool = ActivateSkillTool::new(skills);
+        registry.register(skill_tool.spec(), Box::new(skill_tool));
+    }
 
     registry
 }

@@ -43,6 +43,7 @@ regex = { version = "1", default-features = false, features = ["std"] }
 http = { version = "1", default-features = false }
 rmcp = { version = "1", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 htmd = { version = "0.5", default-features = false }
+serde_yaml = { version = "0.9", default-features = false }
 
 # Internal workspace crates
 krew-config = { path = "crates/krew-config" }

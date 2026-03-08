@@ -8,8 +8,10 @@ use krew_llm::{
     OpenAiResponsesClient,
 };
 use krew_tools::ToolRegistry;
+use krew_tools::builtin::SkillInfo;
 
 use crate::event::ApprovalCache;
+use crate::skill::{self, SkillRecord};
 
 use super::AgentRuntime;
 
@@ -19,6 +21,8 @@ pub struct InitAgentsResult {
     pub agents: HashMap<String, AgentRuntime>,
     /// Warning messages for agents that could not be initialized.
     pub warnings: Vec<String>,
+    /// Discovered Agent Skills.
+    pub skills: Vec<SkillRecord>,
 }
 
 /// Build `AgentRuntime` instances from configuration.
@@ -36,6 +40,44 @@ pub fn init_agents(config: &Config, cwd: Option<PathBuf>) -> InitAgentsResult {
     let mut agents = HashMap::new();
     let mut warnings = Vec::new();
     let shared_approval_cache = ApprovalCache::new();
+
+    // Discover Agent Skills if enabled.
+    let skills = if config.skills.enabled {
+        if let Some(ref cwd_path) = cwd {
+            let extra: Vec<PathBuf> = config
+                .skills
+                .extra_paths
+                .iter()
+                .map(PathBuf::from)
+                .collect();
+            skill::discover_skills(cwd_path, &extra)
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
+    // Build skill catalog for system prompt injection.
+    let skill_catalog = if skills.is_empty() {
+        None
+    } else {
+        Some(skill::build_skill_catalog(&skills))
+    };
+
+    // Build SkillInfo map for the activate_skill tool.
+    let skill_infos: HashMap<String, SkillInfo> = skills
+        .iter()
+        .map(|s| {
+            (
+                s.name.clone(),
+                SkillInfo {
+                    location: s.location.clone(),
+                    base_dir: s.base_dir.clone(),
+                },
+            )
+        })
+        .collect();
 
     for agent_config in &config.agents {
         let provider_config = match config.providers.get(&agent_config.provider) {
@@ -111,7 +153,10 @@ pub fn init_agents(config: &Config, cwd: Option<PathBuf>) -> InitAgentsResult {
         // Create tool registry for this agent.
         let tools = if agent_config.tools {
             if let Some(ref cwd) = cwd {
-                Arc::new(krew_tools::builtin::create_full_registry(cwd.clone()))
+                Arc::new(krew_tools::builtin::create_full_registry(
+                    cwd.clone(),
+                    skill_infos.clone(),
+                ))
             } else {
                 Arc::new(ToolRegistry::empty())
             }
@@ -129,10 +174,15 @@ pub fn init_agents(config: &Config, cwd: Option<PathBuf>) -> InitAgentsResult {
             approval_cache: shared_approval_cache.clone(),
             shell_allow_commands: config.settings.shell_allow_commands.clone(),
             fetch_allow_domains: config.settings.fetch_allow_domains.clone(),
+            skill_catalog: skill_catalog.clone(),
         };
 
         agents.insert(agent_config.name.clone(), runtime);
     }
 
-    InitAgentsResult { agents, warnings }
+    InitAgentsResult {
+        agents,
+        warnings,
+        skills,
+    }
 }

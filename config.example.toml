@@ -97,6 +97,12 @@ type = "openai"                            # OpenAI-compatible service
 api_key_env = "DOUBAO_API_KEY"
 base_url = "https://ark.cn-beijing.volces.com/api/v3"
 
+# Agent Skills configuration
+# Skills are discovered from .krew/skills/ and .agents/skills/ directories.
+# [skills]
+# enabled = true                           # enable/disable skills feature (default: true)
+# extra_paths = ["/path/to/shared/skills"] # additional skill scan paths
+
 # MCP servers
 [[mcp_servers]]
 name = "context7"
