@@ -1,7 +1,7 @@
 [settings]
 approval_mode = "suggest"
 reply_order = ["opus", "gpt", "gemini", "sonnet", "doubao"]
-compact_keep_rounds = 5
+compact_keep_rounds = 3
 
 [[agents]]
 name = "gemini"
@@ -26,7 +26,7 @@ color = "blue"
 name = "gpt"
 display_name = "GPT"
 provider = "openai"
-model = "gpt-5.2"
+model = "gpt-5.4"
 api_type = "responses"
 enable_web_search = true
 enable_thinking = true
