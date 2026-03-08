@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::{
     ApprovalMode, Config, DEFAULT_COMPACT_KEEP_ROUNDS, DEFAULT_INPUT_HISTORY_LIMIT,
     DEFAULT_SHELL_ALLOW_COMMANDS, DEFAULT_WORKER_THREADS, OtherAgentRole, RetryConfig, Settings,
+    SkillsConfig,
 };
 
 /// Default auto-compact threshold in tokens.
@@ -30,6 +31,7 @@ impl Default for Config {
             agents: Vec::new(),
             providers: HashMap::new(),
             mcp_servers: Vec::new(),
+            skills: SkillsConfig::default(),
         }
     }
 }
