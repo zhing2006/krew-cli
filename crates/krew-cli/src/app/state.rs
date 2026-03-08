@@ -12,6 +12,7 @@ use tokio::sync::{Notify, mpsc};
 use krew_config::Config;
 use krew_core::agent::{AgentRuntime, init_agents};
 use krew_core::event::AgentEvent;
+use krew_core::skill::SkillRecord;
 use krew_llm::{ChatMessage, ChatRole};
 
 use krew_tools::mcp::McpManager;
@@ -124,6 +125,8 @@ pub struct App {
     text_after_server_tool: bool,
     /// MCP server lifecycle manager (dropped on App shutdown).
     pub(crate) mcp_manager: Option<McpManager>,
+    /// Discovered Agent Skills.
+    pub(crate) skills: Vec<SkillRecord>,
     /// Pending compact agent name (set by /compact, processed in event loop).
     pub(crate) pending_compact_agent: Option<String>,
     /// Whether auto-compact should trigger before the next user message.
@@ -144,6 +147,7 @@ impl App {
         // Initialize agent runtimes via krew-core.
         let init_result = init_agents(&config, Some(cwd.clone()));
         let agents = init_result.agents;
+        let skills = init_result.skills;
         for w in &init_result.warnings {
             tracing::warn!("{}", w);
         }
@@ -207,6 +211,7 @@ impl App {
             server_tool_started: false,
             text_after_server_tool: false,
             mcp_manager: None,
+            skills,
             pending_compact_agent: None,
             needs_auto_compact: false,
         })

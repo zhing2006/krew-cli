@@ -85,9 +85,11 @@ fn messages_to_text(messages: &[&ChatMessage]) -> String {
         text.push_str(&prefix);
         text.push('\n');
         // Truncate very long messages to avoid blowing up the compression prompt.
+        // Use floor_char_boundary to avoid panicking on multi-byte UTF-8 chars.
         const MAX_MSG_CHARS: usize = 2000;
         if msg.content.len() > MAX_MSG_CHARS {
-            text.push_str(&msg.content[..MAX_MSG_CHARS]);
+            let boundary = msg.content.floor_char_boundary(MAX_MSG_CHARS);
+            text.push_str(&msg.content[..boundary]);
             text.push_str("... (truncated)");
         } else {
             text.push_str(&msg.content);
@@ -127,10 +129,6 @@ pub async fn compact_session(
         .iter()
         .flat_map(|r| r.iter())
         .collect();
-    let kept_messages: Vec<ChatMessage> = rounds[split_point..]
-        .iter()
-        .flat_map(|r| r.iter().cloned())
-        .collect();
 
     // Create backup before modifying anything.
     let backup_path = create_backup(session_dir, session_id, current_session_file)?;
@@ -157,16 +155,9 @@ pub async fn compact_session(
 
     let original_count = messages.len();
 
-    // Build new message list: summary as user message + kept messages.
-    let mut new_messages = Vec::with_capacity(1 + kept_messages.len());
-    new_messages.push(ChatMessage::text(
-        ChatRole::User,
-        format!("[Session History Summary]\n{summary}"),
-        None,
-    ));
-    new_messages.extend(kept_messages);
-
-    let new_count = new_messages.len();
+    // Compute accurate new_count using the same function that builds
+    // the final message list (includes preserved skill messages).
+    let new_count = build_compacted_messages(messages, keep_rounds, &summary).len();
 
     Ok(Some(CompactResult {
         summary: summary.clone(),
@@ -200,9 +191,55 @@ async fn consume_stream_to_text(
     Ok((text, usage))
 }
 
+/// Skill content marker used in `<skill_content>` tags by activate_skill tool.
+const SKILL_CONTENT_TAG: &str = "<skill_content";
+
+/// Check whether a message is an activate_skill tool call.
+fn is_skill_tool_call(msg: &ChatMessage) -> bool {
+    msg.role == ChatRole::Assistant
+        && msg
+            .tool_calls
+            .as_ref()
+            .is_some_and(|calls| calls.iter().any(|tc| tc.name == "activate_skill"))
+}
+
+/// Check whether a message is a skill activation tool result.
+fn is_skill_tool_result(msg: &ChatMessage) -> bool {
+    msg.role == ChatRole::Tool && msg.content.contains(SKILL_CONTENT_TAG)
+}
+
+/// Extract skill activation message blocks from a slice of messages.
+///
+/// Returns cloned messages that form complete skill activation pairs
+/// (assistant tool_call + tool result). These are preserved across compaction
+/// so the model retains activated skill instructions.
+fn extract_skill_messages(messages: &[ChatMessage]) -> Vec<ChatMessage> {
+    let mut protected = Vec::new();
+    let mut i = 0;
+
+    while i < messages.len() {
+        if is_skill_tool_call(&messages[i]) {
+            // Collect this assistant message and all following tool results
+            // that are skill content (handles single and multi-tool-call cases).
+            protected.push(messages[i].clone());
+            let mut j = i + 1;
+            while j < messages.len() && is_skill_tool_result(&messages[j]) {
+                protected.push(messages[j].clone());
+                j += 1;
+            }
+        }
+        i += 1;
+    }
+
+    protected
+}
+
 /// Build the new message list after compaction.
 ///
 /// Returns the messages that should replace the current session messages.
+/// Skill activation messages from the compressed region are preserved and
+/// inserted between the summary and the kept rounds to maintain valid
+/// message alternation (User → Assistant/Tool... → User...).
 pub fn build_compacted_messages(
     messages: &[ChatMessage],
     keep_rounds: usize,
@@ -211,24 +248,103 @@ pub fn build_compacted_messages(
     let rounds = split_into_rounds(messages);
     let split_point = rounds.len().saturating_sub(keep_rounds);
 
+    // Extract skill activation messages from the compressed portion.
+    let compressed_messages: Vec<&ChatMessage> = rounds[..split_point]
+        .iter()
+        .flat_map(|r| r.iter())
+        .collect();
+    let skill_messages =
+        extract_skill_messages(&compressed_messages.into_iter().cloned().collect::<Vec<_>>());
+
     let kept_messages: Vec<ChatMessage> = rounds[split_point..]
         .iter()
         .flat_map(|r| r.iter().cloned())
         .collect();
 
-    let mut new_messages = Vec::with_capacity(1 + kept_messages.len());
+    // Also check kept messages for skills (avoid duplicates).
+    let kept_skill_names: std::collections::HashSet<String> = kept_messages
+        .iter()
+        .filter(|m| is_skill_tool_result(m))
+        .filter_map(|m| {
+            // Extract skill name from <skill_content name="...">
+            m.content.find("name=\"").and_then(|start| {
+                let rest = &m.content[start + 6..];
+                rest.find('"').map(|end| rest[..end].to_string())
+            })
+        })
+        .collect();
+
+    // Filter out skill messages already present in kept rounds.
+    // Must filter as complete blocks (assistant tool_call + following tool results)
+    // to avoid orphaned tool_call messages without matching results.
+    let unique_skill_messages: Vec<ChatMessage> = if kept_skill_names.is_empty() {
+        skill_messages
+    } else {
+        filter_duplicate_skill_blocks(skill_messages, &kept_skill_names)
+    };
+
+    let mut new_messages =
+        Vec::with_capacity(1 + unique_skill_messages.len() + kept_messages.len());
     new_messages.push(ChatMessage::text(
         ChatRole::User,
         format!("[Session History Summary]\n{summary}"),
         None,
     ));
+    // Insert protected skill messages: User(summary) → Assistant(tool_call) → Tool(result) → ...
+    new_messages.extend(unique_skill_messages);
     new_messages.extend(kept_messages);
     new_messages
+}
+
+/// Filter skill message blocks, removing blocks whose skill is already in kept rounds.
+///
+/// Processes messages as complete blocks: each block starts with an assistant
+/// tool_call message followed by zero or more tool result messages. If the
+/// tool_call's skill name is in `duplicates`, the entire block is dropped.
+fn filter_duplicate_skill_blocks(
+    skill_messages: Vec<ChatMessage>,
+    duplicates: &std::collections::HashSet<String>,
+) -> Vec<ChatMessage> {
+    let mut filtered = Vec::new();
+    let mut i = 0;
+
+    while i < skill_messages.len() {
+        if is_skill_tool_call(&skill_messages[i]) {
+            // Extract skill name from tool call arguments.
+            let skill_name = skill_messages[i]
+                .tool_calls
+                .as_ref()
+                .and_then(|calls| calls.iter().find(|tc| tc.name == "activate_skill"))
+                .and_then(|tc| {
+                    serde_json::from_str::<serde_json::Value>(&tc.arguments)
+                        .ok()
+                        .and_then(|v| v.get("name")?.as_str().map(String::from))
+                });
+
+            let is_dup = skill_name.as_ref().is_some_and(|n| duplicates.contains(n));
+
+            // Collect the block: tool_call + following tool results.
+            let block_start = i;
+            i += 1;
+            while i < skill_messages.len() && is_skill_tool_result(&skill_messages[i]) {
+                i += 1;
+            }
+
+            if !is_dup {
+                filtered.extend_from_slice(&skill_messages[block_start..i]);
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    filtered
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use krew_llm::ToolCallInfo;
 
     fn user_msg(content: &str) -> ChatMessage {
         ChatMessage::text(ChatRole::User, content, None)
@@ -305,5 +421,216 @@ mod tests {
         let result = build_compacted_messages(&messages, 5, "summary");
         // Only 1 round, keep_rounds=5 → all kept + summary
         assert_eq!(result.len(), 3); // summary + original 2
+    }
+
+    fn skill_tool_call_msg(skill_name: &str, agent: &str) -> ChatMessage {
+        ChatMessage {
+            role: ChatRole::Assistant,
+            content: String::new(),
+            name: Some(agent.to_string()),
+            tool_calls: Some(vec![ToolCallInfo {
+                id: format!("call_{skill_name}"),
+                name: "activate_skill".to_string(),
+                arguments: format!("{{\"name\":\"{skill_name}\"}}"),
+                thought_signature: None,
+            }]),
+            tool_call_id: None,
+            server_tool_uses: Vec::new(),
+        }
+    }
+
+    fn skill_tool_result_msg(skill_name: &str) -> ChatMessage {
+        ChatMessage {
+            role: ChatRole::Tool,
+            content: format!(
+                "<skill_content name=\"{skill_name}\">\n# Skill instructions\nDo something.\n</skill_content>"
+            ),
+            name: Some("activate_skill".to_string()),
+            tool_calls: None,
+            tool_call_id: Some(format!("call_{skill_name}")),
+            server_tool_uses: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_build_compacted_preserves_skill_messages() {
+        let messages = vec![
+            // Round 1: user asks, agent activates skill
+            user_msg("review my code"),
+            skill_tool_call_msg("code-review", "gpt"),
+            skill_tool_result_msg("code-review"),
+            assistant_msg("I'll review using the skill instructions.", "gpt"),
+            // Round 2
+            user_msg("how about this file?"),
+            assistant_msg("looks good", "gpt"),
+            // Round 3 (will be kept)
+            user_msg("thanks"),
+            assistant_msg("you're welcome", "gpt"),
+        ];
+
+        // keep_rounds=1 → rounds 1 and 2 get compressed, round 3 kept
+        let result = build_compacted_messages(&messages, 1, "Reviewed code with skill");
+
+        // Should be: summary + skill_tool_call + skill_result + kept round 3
+        assert_eq!(result.len(), 5);
+        assert!(result[0].content.contains("[Session History Summary]"));
+        // Skill messages preserved.
+        assert!(
+            result[1]
+                .tool_calls
+                .as_ref()
+                .is_some_and(|tc| tc[0].name == "activate_skill")
+        );
+        assert!(result[2].content.contains("<skill_content"));
+        // Kept messages follow.
+        assert_eq!(result[3].content, "thanks");
+        assert_eq!(result[4].content, "you're welcome");
+    }
+
+    #[test]
+    fn test_build_compacted_no_duplicate_skills() {
+        let messages = vec![
+            // Round 1: activate skill
+            user_msg("review"),
+            skill_tool_call_msg("review", "gpt"),
+            skill_tool_result_msg("review"),
+            assistant_msg("reviewed", "gpt"),
+            // Round 2: activate same skill again (kept round)
+            user_msg("review again"),
+            skill_tool_call_msg("review", "gpt"),
+            skill_tool_result_msg("review"),
+            assistant_msg("reviewed again", "gpt"),
+        ];
+
+        // keep_rounds=1 → round 1 compressed, round 2 kept
+        let result = build_compacted_messages(&messages, 1, "Earlier review");
+
+        // Skill already in kept round, so compressed skill should NOT be duplicated.
+        let skill_result_count = result.iter().filter(|m| is_skill_tool_result(m)).count();
+        assert_eq!(skill_result_count, 1); // Only the one in kept round
+    }
+
+    #[test]
+    fn test_build_compacted_no_orphaned_tool_calls() {
+        // Verify that when a duplicate skill is filtered, BOTH the assistant
+        // tool_call AND the tool result are removed (no orphaned tool_call).
+        let messages = vec![
+            // Round 1: activate skill (will be compressed)
+            user_msg("review"),
+            skill_tool_call_msg("review", "gpt"),
+            skill_tool_result_msg("review"),
+            assistant_msg("reviewed", "gpt"),
+            // Round 2: same skill again (kept round)
+            user_msg("review again"),
+            skill_tool_call_msg("review", "gpt"),
+            skill_tool_result_msg("review"),
+            assistant_msg("reviewed again", "gpt"),
+        ];
+
+        let result = build_compacted_messages(&messages, 1, "Earlier review");
+
+        // The compressed round's skill_tool_call should also be removed.
+        let tool_call_count = result.iter().filter(|m| is_skill_tool_call(m)).count();
+        assert_eq!(tool_call_count, 1); // Only the one in kept round
+
+        // Verify no orphaned assistant messages with tool_calls exist
+        // before the kept round starts.
+        // Structure should be: summary(User) → kept_round(User, Assistant(tc), Tool, Assistant)
+        assert_eq!(result[0].role, ChatRole::User); // summary
+        assert_eq!(result[1].role, ChatRole::User); // kept round start
+    }
+
+    /// Helper: assistant message with multiple activate_skill tool calls.
+    fn multi_skill_tool_call_msg(names: &[&str], agent: &str) -> ChatMessage {
+        ChatMessage {
+            role: ChatRole::Assistant,
+            content: String::new(),
+            name: Some(agent.to_string()),
+            tool_calls: Some(
+                names
+                    .iter()
+                    .map(|n| ToolCallInfo {
+                        id: format!("call_{n}"),
+                        name: "activate_skill".to_string(),
+                        arguments: format!("{{\"name\":\"{n}\"}}"),
+                        thought_signature: None,
+                    })
+                    .collect(),
+            ),
+            tool_call_id: None,
+            server_tool_uses: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_build_compacted_multi_skill_same_message() {
+        // Edge case: model activates two skills in a single assistant message.
+        // Current behavior: the block is kept/dropped based on the FIRST
+        // activate_skill call's name. This test documents the behavior.
+        let messages = vec![
+            // Round 1: activate two skills in one message (compressed)
+            user_msg("review and search"),
+            multi_skill_tool_call_msg(&["review", "search"], "gpt"),
+            skill_tool_result_msg("review"),
+            skill_tool_result_msg("search"),
+            assistant_msg("done both", "gpt"),
+            // Round 2 (kept): has "review" only
+            user_msg("review again"),
+            skill_tool_call_msg("review", "gpt"),
+            skill_tool_result_msg("review"),
+            assistant_msg("reviewed", "gpt"),
+        ];
+
+        let result = build_compacted_messages(&messages, 1, "Earlier work");
+
+        // The compressed block has first skill name "review" which IS in kept,
+        // so the entire block (including "search" result) gets dropped.
+        // This is a known limitation — documented here for awareness.
+        let search_count = result
+            .iter()
+            .filter(|m| m.content.contains("name=\"search\""))
+            .count();
+        assert_eq!(
+            search_count, 0,
+            "multi-skill block dropped as a unit when first skill is duplicate"
+        );
+    }
+
+    #[test]
+    fn test_build_compacted_multi_skill_no_duplicate() {
+        // When the multi-skill block's first name is NOT in kept rounds,
+        // the entire block is preserved.
+        let messages = vec![
+            user_msg("review and search"),
+            multi_skill_tool_call_msg(&["review", "search"], "gpt"),
+            skill_tool_result_msg("review"),
+            skill_tool_result_msg("search"),
+            assistant_msg("done both", "gpt"),
+            // Kept round: no skill activation
+            user_msg("thanks"),
+            assistant_msg("welcome", "gpt"),
+        ];
+
+        let result = build_compacted_messages(&messages, 1, "Earlier work");
+
+        // No duplicates, so the entire multi-skill block is preserved.
+        let skill_result_count = result.iter().filter(|m| is_skill_tool_result(m)).count();
+        assert_eq!(skill_result_count, 2); // both review and search preserved
+    }
+
+    #[test]
+    fn test_build_compacted_no_skills() {
+        // Verify normal compaction still works when no skills are involved.
+        let messages = vec![
+            user_msg("hello"),
+            assistant_msg("hi", "gpt"),
+            user_msg("bye"),
+            assistant_msg("goodbye", "gpt"),
+        ];
+
+        let result = build_compacted_messages(&messages, 1, "Greeted each other");
+        assert_eq!(result.len(), 3); // summary + 1 kept round (2 msgs)
+        assert!(result[0].content.contains("[Session History Summary]"));
+        assert_eq!(result[1].content, "bye");
     }
 }

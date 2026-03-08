@@ -8,3 +8,4 @@ pub mod event;
 pub mod persistence;
 pub mod process_stats;
 pub mod router;
+pub mod skill;

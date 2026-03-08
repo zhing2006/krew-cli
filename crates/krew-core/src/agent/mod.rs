@@ -41,6 +41,8 @@ pub struct AgentRuntime {
     pub shell_allow_commands: Vec<String>,
     /// Domains that skip approval for the fetch_url tool.
     pub fetch_allow_domains: Vec<String>,
+    /// Pre-built skill catalog XML for system prompt injection.
+    pub skill_catalog: Option<String>,
 }
 
 impl AgentRuntime {
@@ -85,7 +87,11 @@ impl AgentRuntime {
             Some(prompt) if !prompt.is_empty() => format!("{identity}\n\n{prompt}"),
             _ => identity,
         };
-        let system_prompt = build_system_prompt(project_instructions, Some(&agent_prompt));
+        let system_prompt = build_system_prompt(
+            project_instructions,
+            self.skill_catalog.as_deref(),
+            Some(&agent_prompt),
+        );
         let mut full_messages = Vec::with_capacity(messages.len() + 1);
         if let Some(prompt) = system_prompt {
             full_messages.push(ChatMessage::text(ChatRole::System, prompt, None));
@@ -148,23 +154,37 @@ impl AgentRuntime {
     }
 }
 
-/// Build the final system prompt by merging project instructions with the
-/// agent's configured system_prompt.
+/// Build the final system prompt by merging project instructions, skill
+/// catalog, and the agent's configured system_prompt.
 ///
-/// When project instructions are present, they are wrapped in
-/// `<project-instructions>` tags and prepended before the agent's own prompt.
+/// Assembly order:
+/// 1. `<project-instructions>` (if present)
+/// 2. Skill catalog XML (if present)
+/// 3. Agent system prompt
 pub fn build_system_prompt(
     project_instructions: Option<&str>,
+    skill_catalog: Option<&str>,
     agent_system_prompt: Option<&str>,
 ) -> Option<String> {
-    match (project_instructions, agent_system_prompt) {
-        (Some(instructions), Some(prompt)) if !prompt.is_empty() => Some(format!(
-            "<project-instructions>\n{instructions}\n</project-instructions>\n\n{prompt}"
-        )),
-        (Some(instructions), _) => Some(format!(
+    let mut parts: Vec<String> = Vec::new();
+
+    if let Some(instructions) = project_instructions {
+        parts.push(format!(
             "<project-instructions>\n{instructions}\n</project-instructions>"
-        )),
-        (None, Some(prompt)) if !prompt.is_empty() => Some(prompt.to_string()),
-        _ => None,
+        ));
+    }
+
+    if let Some(catalog) = skill_catalog.filter(|c| !c.is_empty()) {
+        parts.push(catalog.to_string());
+    }
+
+    if let Some(prompt) = agent_system_prompt.filter(|p| !p.is_empty()) {
+        parts.push(prompt.to_string());
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n"))
     }
 }
