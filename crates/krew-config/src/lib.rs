@@ -44,6 +44,9 @@ pub struct Config {
     /// MCP server definitions.
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
+    /// Agent Skills configuration.
+    #[serde(default)]
+    pub skills: SkillsConfig,
 }
 
 /// Default input history limit.
@@ -137,7 +140,7 @@ impl Default for RetryConfig {
 }
 
 /// Default number of conversation rounds to keep during compaction.
-pub const DEFAULT_COMPACT_KEEP_ROUNDS: usize = 10;
+pub const DEFAULT_COMPACT_KEEP_ROUNDS: usize = 3;
 
 fn default_compact_keep_rounds() -> usize {
     DEFAULT_COMPACT_KEEP_ROUNDS
@@ -328,6 +331,26 @@ impl McpServerConfig {
     /// Returns true if this server uses HTTP transport.
     pub fn is_http(&self) -> bool {
         self.url.is_some()
+    }
+}
+
+/// Agent Skills configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SkillsConfig {
+    /// Whether the skills feature is enabled.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Additional skill scan paths beyond the defaults.
+    #[serde(default)]
+    pub extra_paths: Vec<String>,
+}
+
+impl Default for SkillsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            extra_paths: Vec::new(),
+        }
     }
 }
 

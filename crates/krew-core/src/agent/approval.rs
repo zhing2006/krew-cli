@@ -146,7 +146,10 @@ mod tests {
     use std::path::PathBuf;
 
     fn test_registry() -> ToolRegistry {
-        krew_tools::builtin::create_full_registry(PathBuf::from("/tmp"))
+        krew_tools::builtin::create_full_registry(
+            PathBuf::from("/tmp"),
+            std::collections::HashMap::new(),
+        )
     }
 
     /// Helper to check approval result.

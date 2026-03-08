@@ -587,7 +587,7 @@ Agents in session:
 
 **流程：**
 ```txt
-1. 取 session.messages 中除最后 N 条外的所有消息作为"待压缩区"（N 可配，默认保留最后 10 条）
+1. 取 session.messages 中除最后 N 条外的所有消息作为"待压缩区"（N 可配，默认保留最后 3 轮）
 2. 构建压缩请求: system="请将以下对话历史压缩为简洁摘要" + 待压缩区消息
 3. 调用指定 Agent 的 LLM 生成摘要文本
 4. 替换 session.messages:
@@ -747,7 +747,7 @@ struct Settings {
     approval_mode: ApprovalMode,    // suggest | auto-edit | full-auto
     reply_order: Vec<String>,       // @all 回答顺序
     auto_compact_threshold: Option<u32>,  // 会话自动压缩 token 阈值（默认 120000）
-    compact_keep_rounds: Option<usize>,   // 压缩时保留最近 N 轮对话（默认 10）
+    compact_keep_rounds: Option<usize>,   // 压缩时保留最近 N 轮对话（默认 3）
     input_history_limit: Option<usize>,   // 输入历史上限（默认 1000）
     paste_burst_detection: Option<bool>,  // 粘贴检测（Windows 回退方案）
     worker_threads: Option<usize>,        // tokio 工作线程数（默认 4）

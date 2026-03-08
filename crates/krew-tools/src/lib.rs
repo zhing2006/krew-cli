@@ -71,6 +71,13 @@ pub trait ToolHandler: Send + Sync {
     fn requires_approval(&self) -> bool;
     /// Execute the tool with the given arguments.
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult, ToolError>;
+    /// Reset session-scoped state (e.g. skill activation tracking).
+    /// Default implementation does nothing.
+    fn reset_session_state(&self) {}
+    /// Mark a skill as already activated in this session.
+    /// Used to rebuild state after session resume.
+    /// Default implementation does nothing.
+    fn mark_skill_activated(&self, _name: &str) {}
 }
 
 /// Registry that pairs tool specs (for LLM) with handlers (for execution).
@@ -112,6 +119,25 @@ impl ToolRegistry {
         self.handlers
             .get(name)
             .is_some_and(|h| h.requires_approval())
+    }
+
+    /// Reset session-scoped state on all registered tools.
+    pub fn reset_session_state(&self) {
+        for handler in self.handlers.values() {
+            handler.reset_session_state();
+        }
+    }
+
+    /// Rebuild session-scoped state after loading a session.
+    ///
+    /// Resets all state first, then marks the given skill names as activated.
+    pub fn restore_skill_state(&self, activated_skills: &[String]) {
+        self.reset_session_state();
+        for name in activated_skills {
+            for handler in self.handlers.values() {
+                handler.mark_skill_activated(name);
+            }
+        }
     }
 
     /// Dispatch a tool call to the registered handler.

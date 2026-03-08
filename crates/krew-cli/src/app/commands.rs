@@ -4,6 +4,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use krew_core::command::SlashCommand;
+use krew_llm::ChatRole;
 
 use crate::completion::{ActivePopup, CompletionItem, CompletionState};
 use crate::custom_terminal;
@@ -53,7 +54,7 @@ impl App {
                 self.execute_compact(agent_arg, terminal)?;
             }
             SlashCommand::Skills => {
-                self.show_info(terminal, &format!("{} — not yet implemented", cmd.name()))?;
+                self.execute_skills(terminal)?;
             }
         }
         Ok(())
@@ -241,6 +242,44 @@ impl App {
         render::insert_lines(terminal, lines)
     }
 
+    /// Execute /skills: display discovered Agent Skills.
+    fn execute_skills(&self, terminal: &mut custom_terminal::Terminal) -> anyhow::Result<()> {
+        if !self.config.skills.enabled {
+            return self.show_info(terminal, "Skills feature is disabled");
+        }
+
+        if self.skills.is_empty() {
+            return self.show_info(terminal, "No skills available");
+        }
+
+        let mut lines: Vec<Line<'static>> = vec![Line::from(Span::styled(
+            format!("Skills ({}):", self.skills.len()),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ))];
+
+        for skill in &self.skills {
+            let location = skill.location.to_string_lossy().replace('\\', "/");
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    format!("[{}]", skill.name),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(format!("  {}", skill.description)),
+            ]));
+            lines.push(Line::from(Span::styled(
+                format!("    {location}"),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+
+        render::insert_lines(terminal, lines)
+    }
+
     /// Execute /new (also /clear): save current session, start a new one.
     fn execute_new(&mut self, terminal: &mut custom_terminal::Terminal) -> anyhow::Result<()> {
         // Save current session if it has messages.
@@ -252,6 +291,11 @@ impl App {
         self.messages.clear();
         self.agent_token_usage.clear();
         self.last_respondent = None;
+
+        // Reset session-scoped tool state (e.g. skill activation tracking).
+        for agent in self.agents.values() {
+            agent.tools.reset_session_state();
+        }
 
         // Generate new session ID.
         self.session_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
@@ -318,6 +362,26 @@ impl App {
         self.messages = restored.messages;
         self.agent_token_usage = restored.token_usage;
         self.last_respondent = restored.last_respondent;
+
+        // Sync session-scoped tool state (e.g. skill activation tracking)
+        // with the restored messages to avoid stale state from previous session
+        // or missing state for skills already activated in the restored session.
+        let activated_skills: Vec<String> = self
+            .messages
+            .iter()
+            .filter(|m| m.role == ChatRole::Tool && m.content.contains("<skill_content"))
+            .filter_map(|m| {
+                m.content.find("name=\"").and_then(|start| {
+                    let rest = &m.content[start + 6..];
+                    rest.find('"').map(|end| rest[..end].to_string())
+                })
+            })
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        for agent in self.agents.values() {
+            agent.tools.restore_skill_state(&activated_skills);
+        }
 
         // Clear screen and show header with restored session ID.
         terminal.clear()?;
