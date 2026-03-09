@@ -202,52 +202,68 @@ for agent_name in &config.settings.reply_order {
 
 ```rust
 enum Addressee {
-    All,                     // @all
-    Single(String),          // @gpt, @opus 等
-    LastRespondent,          // 无前缀: 发给上一个回答者
+    All,                     // @all (anywhere in input)
+    Single(String),          // @name (single known agent)
+    Multiple(Vec<String>),   // @gpt @opus (multiple known agents)
+    LastRespondent,          // no recognized @ token
 }
 
-/// 解析用户输入，返回寻址目标和消息正文。
-/// 空输入或无效格式返回 Err。
-fn parse_input(input: &str) -> Result<(Addressee, String)> {
+/// Parse user input into an addressee and message body.
+///
+/// `@name` tokens are recognized anywhere in the input (not just prefix),
+/// but only if `name` matches a known agent or `"all"`. Unrecognized
+/// `@tokens` (including bare `@`) are treated as plain text.
+///
+/// The message body is always the **full original input** — `@name` tokens
+/// are not stripped, preserving context for the LLM.
+fn parse_input(input: &str, known_agents: &[String]) -> Result<(Addressee, String)> {
     let input = input.trim();
     if input.is_empty() {
-        return Err(anyhow!("输入不能为空"));
+        return Err(anyhow!("empty input"));
     }
 
-    if input == "@all" || input.starts_with("@all ") {
-        // "@all" 或 "@all 消息"（不匹配 @allxxx）
-        let message = input.strip_prefix("@all").unwrap().trim_start().to_string();
-        Ok((Addressee::All, message))
-    } else if let Some(at_rest) = input.strip_prefix('@') {
-        // "@name 消息" 或 "@name"
-        let (name, message) = match at_rest.split_once(' ') {
-            Some((n, m)) => (n.to_string(), m.to_string()),
-            None => (at_rest.to_string(), String::new()), // @name 无正文: 正文为空
-        };
-        if name.is_empty() {
-            return Err(anyhow!("@ 后需指定 Agent 名称"));
+    // Scan all whitespace-delimited words for @name tokens.
+    let mut matched: Vec<String> = Vec::new();
+    for word in input.split_whitespace() {
+        if let Some(name) = word.strip_prefix('@') {
+            if (name == "all" || known_agents.contains(&name.to_string()))
+                && !matched.contains(&name.to_string())
+            {
+                matched.push(name.to_string());
+            }
         }
-        Ok((Addressee::Single(name), message))
+    }
+
+    let message = input.to_string(); // full original input, not stripped
+
+    if matched.is_empty() {
+        Ok((Addressee::LastRespondent, message))
+    } else if matched.iter().any(|n| n == "all") {
+        Ok((Addressee::All, message))  // @all takes priority
+    } else if matched.len() == 1 {
+        Ok((Addressee::Single(matched[0].clone()), message))
     } else {
-        Ok((Addressee::LastRespondent, input.to_string()))
+        Ok((Addressee::Multiple(matched), message))
     }
 }
 ```
 
 **边界情况处理：**
-- `@all`（无正文）→ `Addressee::All` + 空消息，发送空消息给所有 Agent
-- `@opus`（无正文）→ `Addressee::Single("opus")` + 空消息
-- `@`（无名称）→ 报错
+- `hey @gpt what do you think` → `Addressee::Single("gpt")` + 原始完整输入（`@name` 可出现在任意位置）
+- `@gpt @opus 你们觉得呢` → `Addressee::Multiple(["gpt", "opus"])` + 原始完整输入
+- `@all @opus 混合` → `Addressee::All`（`@all` 优先级最高）
+- `@unknown 你好` → `Addressee::LastRespondent`（未知 agent 名被忽略）
+- `@`（裸 @）→ 当作普通文本，`Addressee::LastRespondent`
 - 空输入 → 报错
 
 #### 3.2.2 路由规则
 
 | 寻址 | 接收 LLM 请求的 Agent | 消息可见性 |
 | ---- | -------------------- | --------- |
-| `@all` | 所有 Agent | 全部可见 |
+| `@all` | 所有 Agent（按 reply_order 串行） | 全部可见 |
 | `@gpt` | 仅 gpt | 全部可见（上下文共享） |
-| 无前缀 | 上一个回答者（无则提示指定） | 全部可见 |
+| `@gpt @opus` | gpt 和 opus（按 @ 出现顺序串行） | 全部可见 |
+| 无识别的 @ | 上一个回答者（无则提示指定） | 全部可见 |
 
 ### 3.3 LLM Client 抽象层
 

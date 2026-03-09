@@ -111,6 +111,9 @@ mod tests {
             tool_calls: Some(tools),
             tool_call_id: None,
             server_tool_uses: Vec::new(),
+            addressee: None,
+            created_at: chrono::Utc::now(),
+            usage: None,
         }
     }
 
@@ -122,6 +125,9 @@ mod tests {
             tool_calls: None,
             tool_call_id: Some(call_id.to_string()),
             server_tool_uses: Vec::new(),
+            addressee: None,
+            created_at: chrono::Utc::now(),
+            usage: None,
         }
     }
 

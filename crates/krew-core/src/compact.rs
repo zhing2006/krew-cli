@@ -362,6 +362,9 @@ mod tests {
             tool_calls: None,
             tool_call_id: Some("call_1".to_string()),
             server_tool_uses: Vec::new(),
+            addressee: None,
+            created_at: chrono::Utc::now(),
+            usage: None,
         }
     }
 
@@ -436,6 +439,9 @@ mod tests {
             }]),
             tool_call_id: None,
             server_tool_uses: Vec::new(),
+            addressee: None,
+            created_at: chrono::Utc::now(),
+            usage: None,
         }
     }
 
@@ -449,6 +455,9 @@ mod tests {
             tool_calls: None,
             tool_call_id: Some(format!("call_{skill_name}")),
             server_tool_uses: Vec::new(),
+            addressee: None,
+            created_at: chrono::Utc::now(),
+            usage: None,
         }
     }
 
@@ -559,6 +568,9 @@ mod tests {
             ),
             tool_call_id: None,
             server_tool_uses: Vec::new(),
+            addressee: None,
+            created_at: chrono::Utc::now(),
+            usage: None,
         }
     }
 
