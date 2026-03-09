@@ -258,14 +258,6 @@ headers = { Authorization = "Bearer $TOKEN" }
 
 每次 Agent 回复完成后，系统自动记录本次对话消耗的 token 数量（输入/输出），并累加到会话总计。用户可通过 `/agents` 命令查看各 Agent 的 token 用量统计。
 
-每条 Agent 回复后，在输出末尾显示本次用量：
-
-```txt
-[opus] Claude Opus:
-  基于分析，我的建议是...
-                                          ── tokens: 2,847 in / 1,203 out
-```
-
 #### 4.5.3 自动压缩
 
 当会话上下文的 token 数超过配置的阈值时（默认 120K tokens），系统在下一次对话开始前自动执行 `/compact`，压缩历史消息为摘要，释放上下文空间。
@@ -382,11 +374,9 @@ tools = true
 enable_web_search = false
 
 # Provider SDK 配置
-[providers.openai]                      # OpenAI / Azure OpenAI
+[providers.openai]
 api_key_env = "OPENAI_API_KEY"
 base_url = "https://api.openai.com/v1"
-# azure_endpoint = "https://xxx.openai.azure.com"  # Azure 模式
-# azure_api_version = "2025-01-01"                  # Azure API 版本
 
 [providers.anthropic]
 api_key_env = "ANTHROPIC_API_KEY"
