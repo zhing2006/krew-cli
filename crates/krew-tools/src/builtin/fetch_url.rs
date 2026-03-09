@@ -76,6 +76,16 @@ fn normalize_url(url: &str) -> Result<String, ToolError> {
     Ok(url)
 }
 
+/// Extract the host from a raw URL argument (handles missing scheme).
+///
+/// Normalizes the URL first (adds `https://` if no scheme), then extracts
+/// the host in lowercase. Used by both the tool itself and the approval
+/// system for per-host session caching.
+pub fn extract_url_host(url: &str) -> Option<String> {
+    let normalized = normalize_url(url).ok()?;
+    extract_host(&normalized)
+}
+
 /// Extract the host from a URL string.
 fn extract_host(url: &str) -> Option<String> {
     let after_scheme = url

@@ -1,6 +1,6 @@
 //! Write/create file tool.
 
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -62,20 +62,40 @@ impl ToolHandler for WriteFileTool {
         let args: WriteFileArgs =
             serde_json::from_value(args).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
 
-        // For new files, we cannot canonicalize a path that doesn't exist yet.
-        // We resolve the parent directory, validate it is within workspace,
-        // then append the filename.
-        let target = if std::path::Path::new(&args.file_path).is_absolute() {
+        // Canonicalize workspace root first — this path must already exist.
+        let cwd_canonical = dunce::canonicalize(&self.cwd).map_err(|e| {
+            ToolError::Execution(format!(
+                "failed to resolve workspace path '{}': {e}",
+                self.cwd.display()
+            ))
+        })?;
+
+        // Build target path. For relative paths, join to the canonical cwd so
+        // the prefix matches exactly for the boundary check below.
+        let target = if Path::new(&args.file_path).is_absolute() {
             PathBuf::from(&args.file_path)
         } else {
-            self.cwd.join(&args.file_path)
+            cwd_canonical.join(&args.file_path)
         };
 
-        let parent = target
+        // Normalize target path purely (resolve `.` and `..` without touching
+        // the filesystem) so boundary checks work before any side effects.
+        let normalized = normalize_path(&target);
+
+        // Validate the normalized target is within the workspace boundary
+        // BEFORE creating any directories or files.
+        if !normalized.starts_with(&cwd_canonical) {
+            return Err(ToolError::Execution(format!(
+                "path '{}' is outside the workspace boundary",
+                target.display()
+            )));
+        }
+
+        // Boundary check passed — safe to create parent directories now.
+        let parent = normalized
             .parent()
             .ok_or_else(|| ToolError::Execution("invalid file path: no parent".to_string()))?;
 
-        // Create parent directories if needed.
         tokio::fs::create_dir_all(parent).await.map_err(|e| {
             ToolError::Execution(format!(
                 "failed to create parent directories for '{}': {e}",
@@ -83,39 +103,13 @@ impl ToolHandler for WriteFileTool {
             ))
         })?;
 
-        // Validate the parent is within workspace boundary.
-        let parent_canonical = dunce::canonicalize(parent).map_err(|e| {
-            ToolError::Execution(format!(
-                "failed to resolve path '{}': {e}",
-                parent.display()
-            ))
-        })?;
-        let cwd_canonical = dunce::canonicalize(&self.cwd).map_err(|e| {
-            ToolError::Execution(format!(
-                "failed to resolve workspace path '{}': {e}",
-                self.cwd.display()
-            ))
-        })?;
-        if !parent_canonical.starts_with(&cwd_canonical) {
-            return Err(ToolError::Execution(format!(
-                "path '{}' is outside the workspace boundary",
-                target.display()
-            )));
-        }
-
-        // Build final resolved path (parent is canonical, append filename).
-        let file_name = target
-            .file_name()
-            .ok_or_else(|| ToolError::Execution("invalid file path: no filename".to_string()))?;
-        let resolved = parent_canonical.join(file_name);
-
         // Write content.
-        tokio::fs::write(&resolved, &args.content)
+        tokio::fs::write(&normalized, &args.content)
             .await
             .map_err(|e| {
                 ToolError::Execution(format!(
                     "failed to write file '{}': {e}",
-                    resolved.display()
+                    normalized.display()
                 ))
             })?;
 
@@ -129,5 +123,67 @@ impl ToolHandler for WriteFileTool {
             ),
             is_error: false,
         })
+    }
+}
+
+/// Normalize a path by resolving `.` and `..` components purely at the path
+/// level, without touching the filesystem. This allows boundary checks to
+/// work even when parent directories do not yet exist.
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut components = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                components.pop();
+            }
+            Component::CurDir => {}
+            c => {
+                components.push(c);
+            }
+        }
+    }
+    components.iter().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn rejects_path_outside_workspace() {
+        let tmp = std::env::temp_dir().join("krew_write_test");
+        let _ = tokio::fs::create_dir_all(&tmp).await;
+        let tool = WriteFileTool::new(tmp.clone());
+
+        let args = serde_json::json!({
+            "file_path": "../../../outside/evil.txt",
+            "content": "bad"
+        });
+        let ctx = ToolContext::default();
+        let result = tool.execute(args, &ctx).await;
+        assert!(result.is_err());
+
+        // Verify no directories were created outside workspace.
+        let outside = tmp.join("../../../outside");
+        assert!(!outside.exists());
+
+        let _ = tokio::fs::remove_dir_all(&tmp).await;
+    }
+
+    #[tokio::test]
+    async fn allows_path_inside_workspace() {
+        let tmp = std::env::temp_dir().join("krew_write_test_ok");
+        let _ = tokio::fs::create_dir_all(&tmp).await;
+        let tool = WriteFileTool::new(tmp.clone());
+
+        let args = serde_json::json!({
+            "file_path": "sub/dir/test.txt",
+            "content": "hello"
+        });
+        let ctx = ToolContext::default();
+        let result = tool.execute(args, &ctx).await;
+        assert!(result.is_ok());
+
+        let _ = tokio::fs::remove_dir_all(&tmp).await;
     }
 }

@@ -1,6 +1,4 @@
 //! OpenAI Responses API (`POST /v1/responses`) implementation.
-//!
-//! Supports both standard OpenAI and Azure mode (when `azure_endpoint` is set).
 
 use crate::common::{self, AuthMode, RequestConfig, RoleContent, merge_consecutive_same_role};
 use crate::{
