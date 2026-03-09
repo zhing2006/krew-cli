@@ -300,6 +300,14 @@ fn compute_session_scope(tool_name: &str, arguments: &str) -> String {
         prefixes.dedup();
         return prefixes.join(", ");
     }
+    // fetch_url: show the host so the user knows what they are approving.
+    if tool_name == "fetch_url"
+        && let Ok(args) = serde_json::from_str::<serde_json::Value>(arguments)
+        && let Some(url_str) = args.get("url").and_then(|u| u.as_str())
+        && let Some(host) = krew_tools::builtin::fetch_url::extract_url_host(url_str)
+    {
+        return host;
+    }
     tool_name.to_string()
 }
 

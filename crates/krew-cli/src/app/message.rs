@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 
 use krew_core::command::SlashCommand;
 use krew_core::router::{self, Addressee};
-use krew_llm::{ChatMessage, ChatRole};
+use krew_llm::ChatMessage;
 
 use crate::custom_terminal;
 use crate::render;
@@ -74,9 +74,15 @@ impl App {
         // Insert user message with colored routing dots: > ●●● message
         self.insert_user_message(terminal, &target_names, trimmed)?;
 
-        // Add user message to conversation history.
+        // Add user message to conversation history with addressee info.
+        let addressee_str = match &addressee {
+            Addressee::All => Some("all".to_string()),
+            Addressee::Single(name) => Some(name.clone()),
+            Addressee::Multiple(names) => Some(names.join(",")),
+            Addressee::LastRespondent => resolved_last.clone(),
+        };
         self.messages
-            .push(ChatMessage::text(ChatRole::User, body, None));
+            .push(ChatMessage::user_with_addressee(body, addressee_str));
 
         // Persist session after user message.
         self.save_session();
@@ -88,6 +94,28 @@ impl App {
             &available,
             resolved_last.as_deref(),
         );
+
+        // Check for unavailable agents in the dispatch queue.
+        let unavailable: Vec<String> = self
+            .pending_agents
+            .iter()
+            .filter(|name| !self.agents.contains_key(name.as_str()))
+            .cloned()
+            .collect();
+        if !unavailable.is_empty() {
+            // Remove unavailable agents from the queue.
+            self.pending_agents
+                .retain(|name| self.agents.contains_key(name.as_str()));
+            let names = unavailable.join(", ");
+            self.show_error(
+                terminal,
+                &format!("Agent 不可用（可能 API Key 缺失）: {names}"),
+            )?;
+            if self.pending_agents.is_empty() {
+                self.clear_textarea();
+                return Ok(());
+            }
+        }
 
         // Start the first agent in the queue.
         self.start_next_agent(terminal)?;

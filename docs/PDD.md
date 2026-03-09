@@ -148,7 +148,10 @@ you> @opus 帮我看看 src/main.rs 有什么问题
 | ---- | ---- |
 | `@all <message>` | 向所有 Agent 广播，按配置顺序依次回答 |
 | `@<agent_name> <message>` | 仅指定 Agent 回答，其他 Agent 静默但可见该消息 |
-| `<message>`（无 @ 前缀） | 发给上一个回答的 Agent（延续对话）；若无上一个回答者则提示用户指定 |
+| `@<name1> @<name2> <message>` | 指定多个 Agent 依次回答（按 `@` 出现顺序） |
+| `<message>`（无 `@` 前缀） | 发给上一个回答的 Agent（延续对话）；若无上一个回答者则提示用户指定 |
+
+> **注：** `@name` 可出现在消息的任意位置（不限于行首），消息正文保留完整原文不做剥离。
 
 #### 4.1.2 @all 回答顺序
 
@@ -375,17 +378,21 @@ enable_web_search = false
 
 # Provider SDK 配置
 [providers.openai]
+type = "openai"
 api_key_env = "OPENAI_API_KEY"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 
 [providers.anthropic]
+type = "anthropic"
 api_key_env = "ANTHROPIC_API_KEY"
 base_url = "https://api.anthropic.com"
 
 [providers.google]
+type = "google"
 api_key_env = "GOOGLE_API_KEY"
 
-[providers.openai-compatible]           # 第三方 OpenAI 兼容服务
+[providers.openai-compatible]           # 第三方 OpenAI 兼容服务（type 仍为 "openai"）
+type = "openai"
 api_key_env = "DOUBAO_API_KEY"
 base_url = "https://ark.cn-beijing.volces.com/api/v3"
 

@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use krew_llm::{ChatMessage, ChatRole, ToolCallInfo};
 use krew_storage::session_file::{
     MessageEntry, SessionFile, SessionMeta, ToolCallEntry, UsageEntry,
@@ -24,6 +24,8 @@ pub struct SessionSnapshot<'a> {
     pub messages: &'a [ChatMessage],
     /// Accumulated token usage per agent: name -> (prompt, completion).
     pub token_usage: &'a HashMap<String, (u32, u32)>,
+    /// Session creation timestamp (preserved across saves).
+    pub created_at: DateTime<Utc>,
 }
 
 /// Build a `SessionFile` from runtime session state.
@@ -46,13 +48,23 @@ pub fn build_session_file(snapshot: &SessionSnapshot) -> SessionFile {
             };
 
             let usage = if msg.role == ChatRole::Assistant {
-                msg.name.as_ref().and_then(|name| {
-                    snapshot.token_usage.get(name).map(|(p, c)| UsageEntry {
-                        prompt_tokens: *p,
-                        completion_tokens: *c,
-                        total_tokens: *p + *c,
+                // Prefer per-message usage; fall back to aggregated total for backward compat.
+                msg.usage
+                    .as_ref()
+                    .map(|u| UsageEntry {
+                        prompt_tokens: u.prompt_tokens,
+                        completion_tokens: u.completion_tokens,
+                        total_tokens: u.total_tokens,
                     })
-                })
+                    .or_else(|| {
+                        msg.name.as_ref().and_then(|name| {
+                            snapshot.token_usage.get(name).map(|(p, c)| UsageEntry {
+                                prompt_tokens: *p,
+                                completion_tokens: *c,
+                                total_tokens: *p + *c,
+                            })
+                        })
+                    })
             } else {
                 None
             };
@@ -60,7 +72,7 @@ pub fn build_session_file(snapshot: &SessionSnapshot) -> SessionFile {
             MessageEntry {
                 role: role.to_string(),
                 agent_name: msg.name.clone(),
-                addressee: None,
+                addressee: msg.addressee.clone(),
                 content: msg.content.clone(),
                 usage,
                 tool_calls: msg.tool_calls.as_ref().map(|tcs| {
@@ -82,7 +94,7 @@ pub fn build_session_file(snapshot: &SessionSnapshot) -> SessionFile {
                         query: s.query.clone(),
                     })
                     .collect(),
-                created_at: Utc::now(),
+                created_at: msg.created_at,
             }
         })
         .collect();
@@ -93,7 +105,7 @@ pub fn build_session_file(snapshot: &SessionSnapshot) -> SessionFile {
             cwd: snapshot.cwd.display().to_string(),
             agents: snapshot.agent_names.clone(),
             total_tokens_used: total_tokens,
-            created_at: Utc::now(),
+            created_at: snapshot.created_at,
             updated_at: Utc::now(),
         },
         messages,
@@ -112,6 +124,8 @@ pub struct RestoredSession {
     pub last_respondent: Option<String>,
     /// The raw session file data (for TUI to replay display).
     pub session_file: SessionFile,
+    /// Original session creation timestamp.
+    pub session_created_at: DateTime<Utc>,
 }
 
 /// Load a session from disk and convert it to runtime types.
@@ -163,6 +177,13 @@ pub fn load_session_from_disk(session_path: &Path) -> anyhow::Result<RestoredSes
                     query: s.query.clone(),
                 })
                 .collect(),
+            addressee: msg.addressee.clone(),
+            created_at: msg.created_at,
+            usage: msg.usage.as_ref().map(|u| krew_llm::Usage {
+                prompt_tokens: u.prompt_tokens,
+                completion_tokens: u.completion_tokens,
+                total_tokens: u.total_tokens,
+            }),
         });
     }
 
@@ -178,11 +199,14 @@ pub fn load_session_from_disk(session_path: &Path) -> anyhow::Result<RestoredSes
         }
     }
 
+    let session_created_at = session_file.session.created_at;
+
     Ok(RestoredSession {
         session_id: session_file.session.id.clone(),
         messages,
         token_usage,
         last_respondent,
+        session_created_at,
         session_file,
     })
 }
