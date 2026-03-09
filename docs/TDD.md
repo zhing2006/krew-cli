@@ -314,8 +314,6 @@ struct Usage {
   - 请求格式: `{ model, messages: [...], tools: [...], stream: true }`
   - 响应事件: 标准 SSE `data: {"choices":[{"delta":...}]}`
 
-- **Azure 模式**: 当 `azure_endpoint` 有值时启用，替换 base_url，添加 `api-version` 查询参数和 `api-key` header。Azure 同样支持 Responses 和 Chat 两种 API，按 `api_type` 选择
-
 **Anthropic Client**
 
 - API: `POST /v1/messages` (stream=true)
@@ -804,8 +802,6 @@ struct ProviderConfig {
     api_key: Option<String>,            // 方式二：直接填写（不推荐）
     api_key_env: Option<String>,        // 方式一：环境变量名（优先）
     base_url: Option<String>,
-    azure_endpoint: Option<String>,     // Azure 模式: endpoint URL
-    azure_api_version: Option<String>,  // Azure 模式: API 版本
     vertex_project: Option<String>,     // Google Vertex AI 项目 ID
     vertex_location: Option<String>,    // Google Vertex AI 区域（如 "us-central1"）
 }
