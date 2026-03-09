@@ -13,6 +13,7 @@ pub use openai_chat::OpenAiChatClient;
 pub use openai_responses::OpenAiResponsesClient;
 pub use types::*;
 
+use chrono::{DateTime, Utc};
 use futures::Stream;
 use krew_config::{RetryConfig, SamplingConfig, ThinkingEffort};
 use std::pin::Pin;
@@ -93,6 +94,12 @@ pub struct ChatMessage {
     /// Server-side tool uses (e.g. web_search) recorded for display/persistence.
     /// These are provider-executed tools, not dispatched by our tool system.
     pub server_tool_uses: Vec<ServerToolUseInfo>,
+    /// Target addressee for user messages ("all", agent name, or None).
+    pub addressee: Option<String>,
+    /// Timestamp when this message was created.
+    pub created_at: DateTime<Utc>,
+    /// Per-message token usage (assistant messages only).
+    pub usage: Option<Usage>,
 }
 
 /// Information about a server-side tool use (e.g. web_search, google_search).
@@ -127,6 +134,24 @@ impl ChatMessage {
             tool_calls: None,
             tool_call_id: None,
             server_tool_uses: Vec::new(),
+            addressee: None,
+            created_at: Utc::now(),
+            usage: None,
+        }
+    }
+
+    /// Create a user message with addressee information for persistence.
+    pub fn user_with_addressee(content: impl Into<String>, addressee: Option<String>) -> Self {
+        Self {
+            role: ChatRole::User,
+            content: content.into(),
+            name: None,
+            tool_calls: None,
+            tool_call_id: None,
+            server_tool_uses: Vec::new(),
+            addressee,
+            created_at: Utc::now(),
+            usage: None,
         }
     }
 }

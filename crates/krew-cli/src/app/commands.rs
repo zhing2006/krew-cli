@@ -362,6 +362,7 @@ impl App {
         self.messages = restored.messages;
         self.agent_token_usage = restored.token_usage;
         self.last_respondent = restored.last_respondent;
+        self.session_created_at = restored.session_created_at;
 
         // Sync session-scoped tool state (e.g. skill activation tracking)
         // with the restored messages to avoid stale state from previous session

@@ -217,6 +217,9 @@ pub(super) fn prune_stale_tool_calls(messages: Vec<ChatMessage>) -> Vec<ChatMess
                 tool_calls: Some(filtered),
                 tool_call_id: msg.tool_call_id,
                 server_tool_uses: msg.server_tool_uses,
+                addressee: msg.addressee,
+                created_at: msg.created_at,
+                usage: msg.usage,
             });
             continue;
         }
@@ -274,6 +277,9 @@ mod tests {
             tool_calls: Some(tools),
             tool_call_id: None,
             server_tool_uses: Vec::new(),
+            addressee: None,
+            created_at: chrono::Utc::now(),
+            usage: None,
         }
     }
 
@@ -285,6 +291,9 @@ mod tests {
             tool_calls: None,
             tool_call_id: Some(call_id.to_string()),
             server_tool_uses: Vec::new(),
+            addressee: None,
+            created_at: chrono::Utc::now(),
+            usage: None,
         }
     }
 

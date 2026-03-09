@@ -49,8 +49,12 @@ pub(super) async fn check_tool_approval(
         {
             return ToolApproval::Auto;
         }
-        if cache.is_approved(tool_name).await {
-            return ToolApproval::Auto;
+        // Per-host session cache for fetch_url.
+        if let Some(host) = extract_fetch_host(arguments) {
+            let cache_key = format!("fetch_url:{host}");
+            if cache.is_approved(&cache_key).await {
+                return ToolApproval::Auto;
+            }
         }
         return ToolApproval::NeedsApproval {
             allow_session_approval: true,
@@ -130,7 +134,17 @@ pub(super) async fn cache_session_approval(
         }
         return;
     }
-    // Non-shell tools or shell parse failure: cache by tool name.
+    // fetch_url: cache by host so different hosts still require approval.
+    if tool_name == "fetch_url" {
+        if let Some(host) = extract_fetch_host(arguments) {
+            let key = format!("fetch_url:{host}");
+            cache.approve_for_session(key).await;
+        } else {
+            cache.approve_for_session(tool_name.to_string()).await;
+        }
+        return;
+    }
+    // Non-shell, non-fetch tools or shell parse failure: cache by tool name.
     cache.approve_for_session(tool_name.to_string()).await;
 }
 
@@ -138,6 +152,17 @@ pub(super) async fn cache_session_approval(
 fn extract_shell_command(arguments: &str) -> Option<String> {
     let args: serde_json::Value = serde_json::from_str(arguments).ok()?;
     args.get("command")?.as_str().map(|s| s.to_string())
+}
+
+/// Extract the host from a fetch_url tool call's JSON arguments.
+///
+/// Delegates to `fetch_url::extract_url_host` which handles URL
+/// normalization (missing scheme, http→https upgrade) consistently
+/// with the tool's own logic.
+fn extract_fetch_host(arguments: &str) -> Option<String> {
+    let args: serde_json::Value = serde_json::from_str(arguments).ok()?;
+    let url_str = args.get("url")?.as_str()?;
+    krew_tools::builtin::fetch_url::extract_url_host(url_str)
 }
 
 #[cfg(test)]
@@ -551,6 +576,58 @@ mod tests {
             .await,
             ToolApproval::Auto
         ));
+    }
+
+    #[tokio::test]
+    async fn fetch_url_session_cache_by_host() {
+        let registry = test_registry();
+        let cache = ApprovalCache::new();
+        let allow_cmds = vec![];
+
+        // Initially needs approval.
+        let args = r#"{"url":"https://docs.rs/htmd/latest"}"#;
+        let result = check_tool_approval(
+            "fetch_url",
+            args,
+            &registry,
+            ApprovalMode::Suggest,
+            &cache,
+            &allow_cmds,
+            &[],
+        )
+        .await;
+        assert!(matches!(result, ToolApproval::NeedsApproval { .. }));
+
+        // Cache approval for this URL.
+        cache_session_approval("fetch_url", args, &cache).await;
+
+        // Same host auto-approved.
+        let args2 = r#"{"url":"https://docs.rs/serde/latest"}"#;
+        let result = check_tool_approval(
+            "fetch_url",
+            args2,
+            &registry,
+            ApprovalMode::Suggest,
+            &cache,
+            &allow_cmds,
+            &[],
+        )
+        .await;
+        assert!(matches!(result, ToolApproval::Auto));
+
+        // Different host still needs approval.
+        let args3 = r#"{"url":"https://evil.com/page"}"#;
+        let result = check_tool_approval(
+            "fetch_url",
+            args3,
+            &registry,
+            ApprovalMode::Suggest,
+            &cache,
+            &allow_cmds,
+            &[],
+        )
+        .await;
+        assert!(matches!(result, ToolApproval::NeedsApproval { .. }));
     }
 
     #[tokio::test]

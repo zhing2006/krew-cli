@@ -9,6 +9,7 @@ use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::StreamExt;
 use tokio::sync::{Notify, mpsc};
 
+use chrono::{DateTime, Utc};
 use krew_config::Config;
 use krew_core::agent::{AgentRuntime, init_agents};
 use krew_core::event::AgentEvent;
@@ -117,6 +118,8 @@ pub struct App {
     pub(crate) pending_resume_id: Option<String>,
     /// Active tool approval overlay (Some while awaiting user decision).
     pub(crate) approval_overlay: Option<ApprovalOverlay>,
+    /// Timestamp when this session was first created (preserved across saves/resumes).
+    pub(crate) session_created_at: DateTime<Utc>,
     /// Whether we are inside a streaming shell output section.
     shell_output_started: bool,
     /// Whether a ServerToolStart event was received (for pairing with ServerToolDone).
@@ -214,6 +217,7 @@ impl App {
             skills,
             pending_compact_agent: None,
             needs_auto_compact: false,
+            session_created_at: Utc::now(),
         })
     }
 
@@ -407,6 +411,7 @@ impl App {
             agent_names,
             messages: &self.messages,
             token_usage: &self.agent_token_usage,
+            created_at: self.session_created_at,
         };
         let current_session_file = krew_core::persistence::build_session_file(&snapshot);
 
@@ -766,6 +771,11 @@ impl App {
                     let mut final_msg =
                         ChatMessage::text(ChatRole::Assistant, final_text, Some(agent_name));
                     final_msg.server_tool_uses = server_tool_uses;
+                    final_msg.usage = Some(krew_llm::Usage {
+                        prompt_tokens: usage.prompt_tokens,
+                        completion_tokens: usage.completion_tokens,
+                        total_tokens: usage.total_tokens,
+                    });
                     self.messages.push(final_msg);
 
                     // Persist session after agent response.
@@ -832,6 +842,9 @@ impl App {
                             Some(agent_name),
                         ));
                     }
+
+                    // Persist session after error to avoid data loss.
+                    self.save_session();
                 }
 
                 // Clear agent status indicator.

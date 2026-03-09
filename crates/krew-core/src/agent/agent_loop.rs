@@ -124,6 +124,9 @@ pub(super) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
             ),
             tool_call_id: None,
             server_tool_uses: Vec::new(),
+            addressee: None,
+            created_at: chrono::Utc::now(),
+            usage: None,
         };
         tool_round_messages.push(assistant_msg.clone());
         messages.push(assistant_msg);
@@ -328,6 +331,9 @@ pub(super) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
                 tool_calls: None,
                 tool_call_id: Some(id),
                 server_tool_uses: Vec::new(),
+                addressee: None,
+                created_at: chrono::Utc::now(),
+                usage: None,
             };
             tool_round_messages.push(tool_msg.clone());
             messages.push(tool_msg);

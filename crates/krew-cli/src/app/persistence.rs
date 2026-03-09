@@ -23,6 +23,7 @@ impl App {
             agent_names,
             messages: &self.messages,
             token_usage: &self.agent_token_usage,
+            created_at: self.session_created_at,
         };
 
         let session_file = build_session_file(&snapshot);
