@@ -8,7 +8,6 @@
 - **Google Gemini Client**：`generateContent` (stream=true)，处理 parts 格式、function calling 格式
 - **OpenAI Responses Client**：`POST /v1/responses` (stream=true)，处理 response 事件格式
 - **OpenAI-Compatible Client**：复用 OpenAI Chat 实现，替换 base_url 和认证
-- **Azure 模式**：OpenAI Client 检测 `azure_endpoint`，切换 URL 和认证方式
 - **消息格式转换**：各 Provider 的 `convert_messages()` 实现，正确处理 Agent 身份（self vs other）
 
 ## 验收标准

@@ -14,7 +14,6 @@
   - 暂不支持工具调用（跳过 ToolCall 事件）
 - **流式渲染**：Agent 回复逐 token 实时渲染到 TUI 输出区
 - **Markdown 渲染**：基于 `syntect` 的代码块语法高亮，列表/粗体/斜体等基础 Markdown 格式
-- **Token 用量显示**：每条回复末尾显示 `── tokens: X in / Y out`
 - **Agent 标识**：回复带颜色标签 `[gpt] GPT-5.2:`
 
 ## 验收标准
@@ -28,7 +27,7 @@ you> @gpt 用 Rust 写一个 hello world
   fn main() {
       println!("Hello, world!");
   }
-  ```                              ── tokens: 156 in / 89 out
+  ```
 ```
 
 ## 参考
@@ -37,7 +36,6 @@ you> @gpt 用 Rust 写一个 hello world
 | ---- | ---- | ---- |
 | PDD | L74-84 | US-1 多模型对比问答（对话示例） |
 | PDD | L166-178 | §4.2 消息渲染格式（Agent 标签 + 颜色 + 缩进） |
-| PDD | L247-253 | §4.5.2 Token 用量显示格式 |
 | PDD | L487-488 | §5.4 流式输出 |
 | TDD | L228-269 | §3.3.1 LlmClient trait、StreamEvent、Usage |
 | TDD | L283-288 | §3.3.2 OpenAI Chat Completions API 细节 |
