@@ -130,10 +130,14 @@ pub struct App {
     pub(crate) mcp_manager: Option<McpManager>,
     /// Discovered Agent Skills.
     pub(crate) skills: Vec<SkillRecord>,
+    /// Custom slash command registry loaded from `.krew/commands/`.
+    pub(crate) custom_commands: krew_core::custom_command::CustomCommandRegistry,
     /// Pending compact agent name (set by /compact, processed in event loop).
     pub(crate) pending_compact_agent: Option<String>,
     /// Whether auto-compact should trigger before the next user message.
     pub(crate) needs_auto_compact: bool,
+    /// Pending custom command text (after arg substitution, before bash preprocessing).
+    pub(crate) pending_custom_command: Option<String>,
 }
 
 impl App {
@@ -164,6 +168,15 @@ impl App {
         // Ensure sessions directory exists.
         if let Err(e) = std::fs::create_dir_all(&session_dir) {
             tracing::warn!(error = %e, "Failed to create sessions directory");
+        }
+
+        // Discover custom commands from .krew/commands/.
+        let custom_commands = krew_core::custom_command::discovery::discover_commands(&cwd);
+        if !custom_commands.is_empty() {
+            tracing::info!(
+                count = custom_commands.list().len(),
+                "Loaded custom commands"
+            );
         }
 
         // Load input history from file.
@@ -215,8 +228,10 @@ impl App {
             text_after_server_tool: false,
             mcp_manager: None,
             skills,
+            custom_commands,
             pending_compact_agent: None,
             needs_auto_compact: false,
+            pending_custom_command: None,
             session_created_at: Utc::now(),
         })
     }
@@ -258,6 +273,13 @@ impl App {
         commit_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
+            // Process pending custom command (bash preprocessing is async).
+            if let Some(text) = self.pending_custom_command.take() {
+                let expanded = krew_core::custom_command::preprocessor::preprocess(&text).await;
+                self.send_expanded_text(&expanded, terminal)?;
+                self.request_redraw();
+            }
+
             // Process pending compact (must run outside select! to borrow self mutably).
             if let Some(agent_name) = self.pending_compact_agent.take() {
                 self.run_compact(&agent_name, terminal).await?;
