@@ -76,6 +76,34 @@ impl App {
             ]));
         }
 
+        // Append custom commands (excluding those shadowed by built-in commands).
+        let custom_cmds: Vec<_> = self
+            .custom_commands
+            .list()
+            .into_iter()
+            .filter(|cmd| SlashCommand::from_input(&format!("/{}", cmd.name)).is_none())
+            .collect();
+        if !custom_cmds.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "Custom commands:",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for cmd in custom_cmds {
+                let name = format!("/{}", cmd.name);
+                let desc = if cmd.description.is_empty() {
+                    cmd.name.clone()
+                } else {
+                    cmd.description.clone()
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(format!("  {name:<12}"), Style::default().fg(Color::Cyan)),
+                    Span::styled(desc, Style::default().fg(Color::DarkGray)),
+                ]));
+            }
+        }
+
         render::insert_lines(terminal, lines)
     }
 

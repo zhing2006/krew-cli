@@ -321,8 +321,17 @@ impl App {
                         if let Some(item) = state.selected_item() {
                             let cmd_input = item.value.clone();
                             self.popup = ActivePopup::None;
-                            self.clear_textarea();
-                            self.execute_slash_command(&cmd_input, terminal)?;
+                            // Try built-in first, then custom command.
+                            if SlashCommand::from_input(&cmd_input).is_some() {
+                                self.clear_textarea();
+                                self.execute_slash_command(&cmd_input, terminal)?;
+                            } else if let Some(without_slash) = cmd_input.strip_prefix('/')
+                                && let Some(cmd) = self.custom_commands.lookup(without_slash)
+                            {
+                                let expanded = cmd.substitute_args("");
+                                self.pending_custom_command = Some(expanded);
+                                self.clear_textarea();
+                            }
                             return Ok(true);
                         }
                     }
@@ -505,15 +514,34 @@ impl App {
         Some(token.to_string())
     }
 
-    /// Build completion items for slash commands.
+    /// Build completion items for slash commands (built-in + custom).
     fn slash_command_items(&self) -> Vec<CompletionItem> {
-        SlashCommand::all_help()
+        let mut items: Vec<CompletionItem> = SlashCommand::all_help()
             .iter()
             .map(|&(name, desc)| CompletionItem {
                 value: name.to_string(),
                 description: desc.to_string(),
             })
-            .collect()
+            .collect();
+
+        // Append custom commands (excluding those shadowed by built-in commands).
+        for cmd in self
+            .custom_commands
+            .list()
+            .into_iter()
+            .filter(|c| SlashCommand::from_input(&format!("/{}", c.name)).is_none())
+        {
+            items.push(CompletionItem {
+                value: format!("/{}", cmd.name),
+                description: if cmd.description.is_empty() {
+                    cmd.name.clone()
+                } else {
+                    cmd.description.clone()
+                },
+            });
+        }
+
+        items
     }
 
     /// Build completion items for agent names (including "all").

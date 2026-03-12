@@ -31,11 +31,28 @@ impl App {
         // Push to input history.
         self.history_push(trimmed.to_string());
 
-        // Try slash command first — only if it matches a known command.
-        // Unknown `/...` falls through and is treated as plain text.
+        // Try built-in slash command first.
         if trimmed.starts_with('/') && SlashCommand::from_input(trimmed).is_some() {
             self.clear_textarea();
             return self.execute_slash_command(trimmed, terminal);
+        }
+
+        // Try custom command — `/name args` where name is in the custom registry.
+        // If input starts with `/` but matches neither built-in nor custom, show error.
+        if let Some(without_slash) = trimmed.strip_prefix('/') {
+            let (cmd_part, args) = match without_slash.split_once(' ') {
+                Some((c, a)) => (c, a.trim()),
+                None => (without_slash, ""),
+            };
+            if let Some(cmd) = self.custom_commands.lookup(cmd_part) {
+                let expanded = cmd.substitute_args(args);
+                self.pending_custom_command = Some(expanded);
+                self.clear_textarea();
+                return Ok(());
+            }
+            // Unknown `/` command — show error instead of treating as plain text.
+            self.clear_textarea();
+            return self.show_error(terminal, &format!("Unknown command: /{cmd_part}"));
         }
 
         // Parse @ addressee (only known agents are recognized as addressees).
@@ -121,6 +138,88 @@ impl App {
         self.start_next_agent(terminal)?;
 
         self.clear_textarea();
+        Ok(())
+    }
+
+    /// Send pre-expanded custom command text as a user message.
+    ///
+    /// Called from the event loop after async bash preprocessing completes.
+    /// Follows the same routing logic as `send_message` but with already-resolved text.
+    pub(crate) fn send_expanded_text(
+        &mut self,
+        text: &str,
+        terminal: &mut custom_terminal::Terminal,
+    ) -> anyhow::Result<()> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Ok(());
+        }
+
+        let agent_names: Vec<String> = self.config.agents.iter().map(|a| a.name.clone()).collect();
+        let (addressee, body) = match router::parse_input(trimmed, &agent_names) {
+            Ok(result) => result,
+            Err(e) => {
+                return self.show_error(terminal, &e.to_string());
+            }
+        };
+
+        let resolved_last = match &addressee {
+            Addressee::LastRespondent => self.last_respondent.clone(),
+            _ => None,
+        };
+
+        if matches!(&addressee, Addressee::LastRespondent) && resolved_last.is_none() {
+            return self.show_error(terminal, "还没有 Agent 回复过，请使用 @name 指定目标 Agent");
+        }
+
+        let available: std::collections::HashSet<String> = self.agents.keys().cloned().collect();
+        let target_names = router::resolve_target_names(
+            &addressee,
+            &self.config.settings.reply_order,
+            &available,
+            resolved_last.as_deref(),
+        );
+
+        self.insert_user_message(terminal, &target_names, trimmed)?;
+
+        let addressee_str = match &addressee {
+            Addressee::All => Some("all".to_string()),
+            Addressee::Single(name) => Some(name.clone()),
+            Addressee::Multiple(names) => Some(names.join(",")),
+            Addressee::LastRespondent => resolved_last.clone(),
+        };
+        self.messages
+            .push(ChatMessage::user_with_addressee(body, addressee_str));
+
+        self.save_session();
+
+        self.pending_agents = router::resolve_dispatch_queue(
+            &addressee,
+            &self.config.settings.reply_order,
+            &available,
+            resolved_last.as_deref(),
+        );
+
+        let unavailable: Vec<String> = self
+            .pending_agents
+            .iter()
+            .filter(|name| !self.agents.contains_key(name.as_str()))
+            .cloned()
+            .collect();
+        if !unavailable.is_empty() {
+            self.pending_agents
+                .retain(|name| self.agents.contains_key(name.as_str()));
+            let names = unavailable.join(", ");
+            self.show_error(
+                terminal,
+                &format!("Agent 不可用（可能 API Key 缺失）: {names}"),
+            )?;
+            if self.pending_agents.is_empty() {
+                return Ok(());
+            }
+        }
+
+        self.start_next_agent(terminal)?;
         Ok(())
     }
 
