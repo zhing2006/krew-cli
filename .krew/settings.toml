@@ -52,7 +52,7 @@ color = "yellow"
 [providers.litellm]
 type = "openai"
 api_key_env = "OPENAI_API_KEY"
-base_url = "http://litellm.tsd.xindong.com:4000"
+base_url = "https://litellm.tsd.xindong.com"
 
 [providers.openai]
 type = "openai"
@@ -62,7 +62,7 @@ base_url = "https://xdts-dev-auto6.openai.azure.com/openai"
 [providers.anthropic]
 type = "anthropic"
 api_key_env = "OPENAI_API_KEY"
-base_url = "http://litellm.tsd.xindong.com:4000"
+base_url = "https://litellm.tsd.xindong.com"
 
 [providers.google]
 type = "google"
