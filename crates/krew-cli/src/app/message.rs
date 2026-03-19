@@ -45,7 +45,7 @@ impl App {
                 None => (without_slash, ""),
             };
             if let Some(cmd) = self.custom_commands.lookup(cmd_part) {
-                let expanded = cmd.substitute_args(args);
+                let expanded = cmd.expand(args);
                 self.pending_custom_command = Some(expanded);
                 self.clear_textarea();
                 return Ok(());

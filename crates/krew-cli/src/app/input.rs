@@ -328,7 +328,7 @@ impl App {
                             } else if let Some(without_slash) = cmd_input.strip_prefix('/')
                                 && let Some(cmd) = self.custom_commands.lookup(without_slash)
                             {
-                                let expanded = cmd.substitute_args("");
+                                let expanded = cmd.expand("");
                                 self.pending_custom_command = Some(expanded);
                                 self.clear_textarea();
                             }
