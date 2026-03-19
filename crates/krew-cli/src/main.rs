@@ -224,6 +224,78 @@ fn main() -> anyhow::Result<()> {
     runtime.block_on(async_main(config, cwd, cli.resume))
 }
 
+/// RAII guard that restores terminal state on drop.
+///
+/// Ensures raw mode, bracketed paste, and keyboard enhancements are disabled
+/// regardless of how the scope exits (early `?` return, panic, or normal flow).
+struct TerminalGuard;
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        restore_terminal();
+    }
+}
+
+/// Resolve `--resume` argument to a concrete session ID.
+///
+/// Returns `Some(id)` on success, or pushes a warning and returns `None`.
+fn resolve_resume_session(
+    resume_arg: Option<String>,
+    session_dir: &Path,
+    warnings: &mut Vec<String>,
+) -> Option<String> {
+    match resume_arg {
+        Some(id) => {
+            match krew_storage::session_file::list_sessions(session_dir) {
+                Ok(summaries) => {
+                    // Prefer exact match, then fall back to unique prefix match.
+                    if let Some(s) = summaries.iter().find(|s| s.id == id) {
+                        return Some(s.id.clone());
+                    }
+                    let matches: Vec<_> =
+                        summaries.iter().filter(|s| s.id.starts_with(&id)).collect();
+                    match matches.len() {
+                        1 => Some(matches[0].id.clone()),
+                        0 => {
+                            warnings.push(format!("Session not found: {id}, starting new session"));
+                            None
+                        }
+                        _ => {
+                            let ids: Vec<_> = matches.iter().map(|s| &s.id).collect();
+                            warnings.push(format!(
+                                "Ambiguous session prefix '{id}', candidates: {}. Starting new session",
+                                ids.iter()
+                                    .map(|s| s.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ));
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    warnings.push(format!("Failed to list sessions: {e}"));
+                    None
+                }
+            }
+        }
+        None => {
+            // --resume (no ID): load most recent session.
+            match krew_storage::session_file::list_sessions(session_dir) {
+                Ok(summaries) if !summaries.is_empty() => Some(summaries[0].id.clone()),
+                Ok(_) => {
+                    warnings.push("No saved sessions found, starting new session".to_string());
+                    None
+                }
+                Err(e) => {
+                    warnings.push(format!("Failed to list sessions: {e}"));
+                    None
+                }
+            }
+        }
+    }
+}
+
 async fn async_main(
     config: Config,
     cwd: PathBuf,
@@ -236,8 +308,9 @@ async fn async_main(
         default_hook(info);
     }));
 
-    // Set up TUI terminal.
+    // Set up TUI terminal. The guard ensures cleanup on any exit path.
     let mut terminal = setup_terminal()?;
+    let _terminal_guard = TerminalGuard;
 
     // Run the application.
     let mut app = app::App::new(cwd, config)?;
@@ -253,42 +326,11 @@ async fn async_main(
 
     // Handle --resume CLI argument: resolve session ID now, replay in run().
     if let Some(resume_arg) = resume {
-        let session_dir = app.session_dir.clone();
-        match resume_arg {
-            Some(id) => {
-                // --resume <id>: find session by prefix match.
-                match krew_storage::session_file::list_sessions(&session_dir) {
-                    Ok(summaries) => {
-                        if let Some(summary) = summaries.iter().find(|s| s.id.starts_with(&id)) {
-                            app.pending_resume_id = Some(summary.id.clone());
-                        } else {
-                            app.startup_warnings
-                                .push(format!("Session not found: {id}, starting new session"));
-                        }
-                    }
-                    Err(e) => {
-                        app.startup_warnings
-                            .push(format!("Failed to list sessions: {e}"));
-                    }
-                }
-            }
-            None => {
-                // --resume (no ID): load most recent session.
-                match krew_storage::session_file::list_sessions(&session_dir) {
-                    Ok(summaries) if !summaries.is_empty() => {
-                        app.pending_resume_id = Some(summaries[0].id.clone());
-                    }
-                    Ok(_) => {
-                        app.startup_warnings
-                            .push("No saved sessions found, starting new session".to_string());
-                    }
-                    Err(e) => {
-                        app.startup_warnings
-                            .push(format!("Failed to list sessions: {e}"));
-                    }
-                }
-            }
-        }
+        app.pending_resume_id = resolve_resume_session(
+            resume_arg,
+            &app.session_dir,
+            &mut app.startup_warnings,
+        );
     }
 
     let result = app.run(&mut terminal).await;
@@ -299,8 +341,6 @@ async fn async_main(
     let newlines = "\r\n".repeat(viewport_h as usize);
     execute!(stdout(), crossterm::style::Print(newlines))?;
 
-    // Restore terminal.
-    restore_terminal();
-
+    // _terminal_guard drops here, calling restore_terminal().
     result
 }
