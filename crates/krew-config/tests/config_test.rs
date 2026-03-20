@@ -84,7 +84,10 @@ api_key_env = "KEY"
     let mut f = NamedTempFile::new().unwrap();
     f.write_all(toml.as_bytes()).unwrap();
     let result = Config::load(f.path());
-    assert!(result.is_err(), "missing [[agents]] should fail at parse time");
+    assert!(
+        result.is_err(),
+        "missing [[agents]] should fail at parse time"
+    );
 }
 
 #[test]
@@ -101,7 +104,10 @@ color = "red"
     let mut f = NamedTempFile::new().unwrap();
     f.write_all(toml.as_bytes()).unwrap();
     let result = Config::load(f.path());
-    assert!(result.is_err(), "missing [settings] should fail at parse time");
+    assert!(
+        result.is_err(),
+        "missing [settings] should fail at parse time"
+    );
 }
 
 // ── Config::default() ───────────────────────────────────────────────────

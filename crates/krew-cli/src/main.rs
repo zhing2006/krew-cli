@@ -6,6 +6,7 @@ mod app;
 mod completion;
 mod custom_terminal;
 mod frame_scheduler;
+mod prompt_mode;
 mod render;
 mod streaming;
 mod textarea;
@@ -41,6 +42,14 @@ struct Cli {
     /// Resume a session (optionally by ID).
     #[arg(long, value_name = "ID")]
     resume: Option<Option<String>>,
+
+    /// Run a single prompt non-interactively and exit.
+    #[arg(short, long, value_name = "PROMPT")]
+    prompt: Option<String>,
+
+    /// Output format for prompt mode (text, json).
+    #[arg(long, value_name = "FORMAT", default_value = "text")]
+    format: String,
 
     /// Enable verbose output.
     #[arg(short, long)]
@@ -214,29 +223,92 @@ fn load_config(cwd: &Path, cli: &Cli) -> anyhow::Result<Config> {
     Ok(config)
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() {
+    let code = run();
+    std::process::exit(code);
+}
+
+fn run() -> i32 {
     let cli = Cli::parse();
-    let cwd = std::env::current_dir()?;
+
+    // Validate: -p and --resume are mutually exclusive.
+    if cli.prompt.is_some() && cli.resume.is_some() {
+        eprintln!("Error: -p/--prompt and --resume cannot be used together");
+        return 2;
+    }
+
+    // Validate: --format only accepts "text" or "json".
+    let output_format = match cli.format.as_str() {
+        "text" => prompt_mode::OutputFormat::Text,
+        "json" => prompt_mode::OutputFormat::Json,
+        other => {
+            eprintln!("Error: invalid --format value \"{other}\", expected \"text\" or \"json\"");
+            return 2;
+        }
+    };
+
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(e) => {
+            eprintln!("Error: failed to get current directory: {e}");
+            return 1;
+        }
+    };
 
     // Initialize logging — _guard must live until program exit.
-    let _guard = init_logging(&cwd, cli.verbose)?;
+    let _guard = match init_logging(&cwd, cli.verbose) {
+        Ok(guard) => guard,
+        Err(e) => {
+            eprintln!("Error: failed to initialize logging: {e}");
+            return 1;
+        }
+    };
     tracing::info!("krew starting");
 
     // Load configuration (before terminal setup so errors print normally).
-    let config = load_config(&cwd, &cli)?;
+    let config = match load_config(&cwd, &cli) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return if cli.prompt.is_some() { 2 } else { 1 };
+        }
+    };
 
     // Build tokio runtime with configurable worker thread count.
-    let runtime = tokio::runtime::Builder::new_multi_thread()
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(config.settings.worker_threads)
         .enable_all()
-        .build()?;
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("Error: failed to create runtime: {e}");
+            return 1;
+        }
+    };
 
     tracing::info!(
         worker_threads = config.settings.worker_threads,
         "Tokio runtime created"
     );
 
-    runtime.block_on(async_main(config, cwd, cli.resume))
+    // Branch: prompt mode (-p) or TUI mode.
+    if let Some(prompt) = cli.prompt {
+        runtime.block_on(prompt_mode::run_prompt_mode(
+            config,
+            cwd,
+            prompt,
+            output_format,
+        ))
+    } else {
+        match runtime.block_on(async_main(config, cwd, cli.resume)) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("Error: {e}");
+                1
+            }
+        }
+    }
 }
 
 /// RAII guard that restores terminal state on drop.
