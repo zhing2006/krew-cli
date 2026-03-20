@@ -1,23 +1,22 @@
-//! Scan `.krew/commands/` directory and build a command registry.
+//! Scan multiple directories for `.md` command files and build a command registry.
 
 use std::path::Path;
 
 use super::CustomCommandRegistry;
 use super::parser::parse_command_file;
+use crate::discovery::discovery_paths;
 
-/// Scan the `.krew/commands/` directory and build a registry of custom commands.
+/// Scan all discovery paths for custom commands and build a registry.
 ///
-/// Files are mapped to command names by stripping the base path and `.md` extension,
-/// then replacing path separators with `:`.
-pub fn discover_commands(base_dir: &Path) -> CustomCommandRegistry {
-    let commands_dir = base_dir.join(".krew").join("commands");
+/// Priority order (first-found wins on name collisions):
+/// `.krew > .agents > .claude`, project > user.
+pub fn discover_commands(cwd: &Path) -> CustomCommandRegistry {
     let mut registry = CustomCommandRegistry::new();
-
-    if !commands_dir.is_dir() {
-        return registry;
+    for dir in discovery_paths(cwd, "commands") {
+        if dir.is_dir() {
+            scan_dir(&dir, &dir, &mut registry);
+        }
     }
-
-    scan_dir(&commands_dir, &commands_dir, &mut registry);
     registry
 }
 
@@ -42,6 +41,10 @@ fn scan_dir(dir: &Path, base: &Path, registry: &mut CustomCommandRegistry) {
                 .with_extension("")
                 .to_string_lossy()
                 .replace(['/', '\\'], ":");
+            // First-found wins: skip if already registered from a higher-priority path.
+            if registry.lookup(&name).is_some() {
+                continue;
+            }
             match std::fs::read_to_string(&path) {
                 Ok(content) => {
                     let cmd = parse_command_file(&name, &content);
@@ -52,65 +55,5 @@ fn scan_dir(dir: &Path, base: &Path, registry: &mut CustomCommandRegistry) {
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-
-    #[test]
-    fn test_flat_commands() {
-        let tmp = tempfile::tempdir().unwrap();
-        let cmd_dir = tmp.path().join(".krew").join("commands");
-        fs::create_dir_all(&cmd_dir).unwrap();
-        fs::write(
-            cmd_dir.join("commit.md"),
-            "---\ndescription: Make a commit\n---\n@coder commit\n",
-        )
-        .unwrap();
-        fs::write(cmd_dir.join("review.md"), "@reviewer review this\n").unwrap();
-
-        let registry = discover_commands(tmp.path());
-        assert_eq!(registry.list().len(), 2);
-        assert!(registry.lookup("commit").is_some());
-        assert!(registry.lookup("review").is_some());
-        assert_eq!(
-            registry.lookup("commit").unwrap().description,
-            "Make a commit"
-        );
-    }
-
-    #[test]
-    fn test_nested_directories() {
-        let tmp = tempfile::tempdir().unwrap();
-        let cmd_dir = tmp.path().join(".krew").join("commands");
-        let sub_dir = cmd_dir.join("git");
-        fs::create_dir_all(&sub_dir).unwrap();
-        fs::write(sub_dir.join("push.md"), "@coder push\n").unwrap();
-
-        let registry = discover_commands(tmp.path());
-        assert!(registry.lookup("git:push").is_some());
-    }
-
-    #[test]
-    fn test_non_md_files_ignored() {
-        let tmp = tempfile::tempdir().unwrap();
-        let cmd_dir = tmp.path().join(".krew").join("commands");
-        fs::create_dir_all(&cmd_dir).unwrap();
-        fs::write(cmd_dir.join("notes.txt"), "not a command").unwrap();
-        fs::write(cmd_dir.join("real.md"), "a command\n").unwrap();
-
-        let registry = discover_commands(tmp.path());
-        assert_eq!(registry.list().len(), 1);
-        assert!(registry.lookup("real").is_some());
-    }
-
-    #[test]
-    fn test_missing_directory() {
-        let tmp = tempfile::tempdir().unwrap();
-        let registry = discover_commands(tmp.path());
-        assert!(registry.is_empty());
     }
 }

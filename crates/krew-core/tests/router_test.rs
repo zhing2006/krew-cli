@@ -444,8 +444,7 @@ fn immediate_at_full_chain_scenario() {
 fn immediate_at_target_before_cursor_moved() {
     // Target is before cursor — remove and re-insert at adjusted position.
     // Queue: [x, a, b], cursor=3. Move "x" to cursor position.
-    let mut q: VecDeque<String> =
-        VecDeque::from(vec!["x".into(), "a".into(), "b".into()]);
+    let mut q: VecDeque<String> = VecDeque::from(vec!["x".into(), "a".into(), "b".into()]);
     let mut cursor: usize = 3;
     apply_immediate_routing_at(&mut q, "x", &mut cursor);
     // "x" was at 0 (before cursor=3), removed → cursor adjusts to 2, insert at 2.
@@ -466,12 +465,7 @@ fn immediate_at_with_existing_non_a2a_items() {
     // a2a items go before original dispatch items.
     assert_eq!(
         q,
-        VecDeque::from(vec![
-            "a".to_string(),
-            "b".into(),
-            "d".into(),
-            "e".into()
-        ])
+        VecDeque::from(vec!["a".to_string(), "b".into(), "d".into(), "e".into()])
     );
     assert_eq!(cursor, 2);
 }

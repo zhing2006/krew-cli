@@ -19,7 +19,7 @@ use crossterm::event::{
     PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use krew_config::Config;
+use krew_config::{Config, RawConfig, UserConfig};
 use ratatui::crossterm::execute;
 
 /// krew CLI argument definitions.
@@ -157,30 +157,45 @@ fn restore_terminal() {
 
 /// Load configuration from file, falling back to defaults.
 ///
+/// Flow: UserConfig::load() → RawConfig::load() → merge → resolve →
+///       apply_cli_overrides → validate.
+///
 /// When `--config` is explicitly provided, the file MUST exist (error if not).
 /// When using the default path, a missing file silently falls back to defaults.
 fn load_config(cwd: &Path, cli: &Cli) -> anyhow::Result<Config> {
+    // 1. Load user-level config (~/.krew/settings.toml).
+    let user_config = UserConfig::load();
+
+    // 2. Load project-level config as RawConfig (preserving field presence).
     let explicit = cli.config.is_some();
     let config_path = match &cli.config {
         Some(p) => PathBuf::from(p),
         None => cwd.join(krew_config::CONFIG_FILENAME),
     };
 
-    let mut config = if config_path.exists() {
+    let mut raw = if config_path.exists() {
         tracing::info!(path = %config_path.display(), "Loading config");
-        Config::load(&config_path)
+        RawConfig::load(&config_path)
             .map_err(|e| anyhow::anyhow!("Failed to load {}: {e}", config_path.display()))?
     } else if explicit {
         anyhow::bail!("Config file not found: {}", config_path.display());
     } else {
         tracing::info!("Config file not found, using defaults");
-        Config::default()
+        RawConfig::default()
     };
 
+    // 3. Merge user config into project config.
+    raw.merge_user(&user_config);
+
+    // 4. Resolve defaults → final Config.
+    let mut config = raw.resolve();
+
+    // 5. Apply CLI overrides.
     config
         .apply_cli_overrides(cli.agents.as_deref(), cli.approval_mode.as_deref())
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
+    // 6. Validate (after CLI overrides so --agents can filter out bad agents).
     config.validate().map_err(|e| anyhow::anyhow!("{e}"))?;
 
     if config.agents.is_empty() {
