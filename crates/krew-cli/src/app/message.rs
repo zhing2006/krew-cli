@@ -57,6 +57,7 @@ impl App {
 
         // Reset AI-to-AI round counter on new user message.
         self.ai_conversation_rounds = 0;
+        self.a2a_insert_cursor = 0;
 
         // Parse @ addressee (only known agents are recognized as addressees).
         let agent_names: Vec<String> = self.config.agents.iter().map(|a| a.name.clone()).collect();
@@ -77,7 +78,7 @@ impl App {
 
         // Task 3.5: Block if LastRespondent has no value.
         if matches!(&addressee, Addressee::LastRespondent) && resolved_last.is_none() {
-            self.show_error(terminal, "还没有 Agent 回复过，请使用 @name 指定目标 Agent")?;
+            self.show_error(terminal, "No agent has replied yet — use @name to specify a target agent")?;
             self.clear_textarea();
             return Ok(());
         }
@@ -129,7 +130,7 @@ impl App {
             let names = unavailable.join(", ");
             self.show_error(
                 terminal,
-                &format!("Agent 不可用（可能 API Key 缺失）: {names}"),
+                &format!("Agent unavailable (possibly missing API key): {names}"),
             )?;
             if self.pending_agents.is_empty() {
                 self.clear_textarea();
@@ -160,6 +161,7 @@ impl App {
 
         // Reset AI-to-AI round counter on new user message.
         self.ai_conversation_rounds = 0;
+        self.a2a_insert_cursor = 0;
 
         let agent_names: Vec<String> = self.config.agents.iter().map(|a| a.name.clone()).collect();
         let (addressee, body) = match router::parse_input(trimmed, &agent_names) {
@@ -175,7 +177,7 @@ impl App {
         };
 
         if matches!(&addressee, Addressee::LastRespondent) && resolved_last.is_none() {
-            return self.show_error(terminal, "还没有 Agent 回复过，请使用 @name 指定目标 Agent");
+            return self.show_error(terminal, "No agent has replied yet — use @name to specify a target agent");
         }
 
         let available: std::collections::HashSet<String> = self.agents.keys().cloned().collect();
@@ -218,7 +220,7 @@ impl App {
             let names = unavailable.join(", ");
             self.show_error(
                 terminal,
-                &format!("Agent 不可用（可能 API Key 缺失）: {names}"),
+                &format!("Agent unavailable (possibly missing API key): {names}"),
             )?;
             if self.pending_agents.is_empty() {
                 return Ok(());
@@ -235,6 +237,8 @@ impl App {
         _terminal: &mut custom_terminal::Terminal,
     ) -> anyhow::Result<bool> {
         while let Some(name) = self.pending_agents.pop_front() {
+            // Adjust a2a insertion cursor when popping from the front.
+            self.a2a_insert_cursor = self.a2a_insert_cursor.saturating_sub(1);
             if let Some(agent) = self.agents.get(&name) {
                 // Build peer agent list for AI-to-AI prompt injection.
                 let peers = if self.config.settings.agent_to_agent_max_rounds > 0 {
