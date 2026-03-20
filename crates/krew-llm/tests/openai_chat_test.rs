@@ -12,6 +12,7 @@ fn convert_messages_basic_roles() {
     let result = convert_messages(&messages, "gpt", &OtherAgentRole::User);
     assert_eq!(result[0]["role"], "system");
     assert_eq!(result[1]["role"], "user");
+    assert_eq!(result[1]["content"], "[user] Hello"); // user messages get [user] prefix
     assert_eq!(result[2]["role"], "assistant"); // own message
     // Own message content should not be prefixed.
     assert_eq!(result[2]["content"], "Hi there!");
@@ -46,10 +47,10 @@ fn convert_messages_other_agent_as_assistant() {
 }
 
 #[test]
-fn convert_messages_user_no_prefix() {
+fn convert_messages_user_has_prefix() {
     let messages = vec![ChatMessage::text(ChatRole::User, "Hello", None)];
 
     let result = convert_messages(&messages, "gpt", &OtherAgentRole::User);
     assert_eq!(result[0]["role"], "user");
-    assert_eq!(result[0]["content"], "Hello");
+    assert_eq!(result[0]["content"], "[user] Hello");
 }

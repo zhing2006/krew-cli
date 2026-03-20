@@ -14,6 +14,8 @@ pub(super) fn prepare_messages_for_agent(
     messages: Vec<ChatMessage>,
     self_name: &str,
 ) -> Vec<ChatMessage> {
+    // Apply whisper filtering: replace messages not visible to self_name with placeholders.
+    let messages = apply_whisper_filter(messages, self_name);
     let messages = prune_stale_tool_calls(messages);
     let mut result = Vec::new();
     // Accumulates text for an other-agent's tool call block being folded.
@@ -68,6 +70,81 @@ pub(super) fn prepare_messages_for_agent(
     result
 }
 
+/// Apply whisper filtering: for messages with `whisper_targets` that don't
+/// include `self_name`, replace with a placeholder. Tool call chains from
+/// whispered assistant messages are collapsed into a single placeholder.
+fn apply_whisper_filter(messages: Vec<ChatMessage>, self_name: &str) -> Vec<ChatMessage> {
+    let mut result = Vec::new();
+    let mut skip_tool_results = false; // When true, we're inside a whispered tool chain.
+
+    for msg in messages {
+        let targets = msg.whisper_targets.as_ref();
+
+        // Check if this message is a whisper not visible to self_name.
+        let is_hidden_whisper = targets.is_some_and(|t| !t.iter().any(|n| n == self_name));
+
+        if skip_tool_results {
+            if msg.role == ChatRole::Tool {
+                continue; // Skip tool results belonging to a hidden whispered tool chain.
+            }
+            skip_tool_results = false;
+            // Fall through to process this non-tool message normally.
+        }
+
+        if !is_hidden_whisper {
+            result.push(msg);
+            continue;
+        }
+
+        // Hidden whisper: create placeholder.
+        match msg.role {
+            ChatRole::User => {
+                let target_list = targets.unwrap().join(", ");
+                result.push(ChatMessage {
+                    role: ChatRole::User,
+                    content: format!("[Whisper to {target_list}]"),
+                    name: msg.name,
+                    tool_calls: None,
+                    tool_call_id: None,
+                    server_tool_uses: Vec::new(),
+                    addressee: msg.addressee,
+                    whisper_targets: None,
+                    created_at: msg.created_at,
+                    usage: None,
+                });
+            }
+            ChatRole::Assistant => {
+                // If this assistant message has tool_calls, skip subsequent tool results too.
+                if msg.tool_calls.is_some() {
+                    skip_tool_results = true;
+                }
+                result.push(ChatMessage {
+                    role: ChatRole::Assistant,
+                    content: "[Whisper]".to_string(),
+                    name: msg.name,
+                    tool_calls: None,
+                    tool_call_id: None,
+                    server_tool_uses: Vec::new(),
+                    addressee: None,
+                    whisper_targets: None,
+                    created_at: msg.created_at,
+                    usage: None,
+                });
+            }
+            ChatRole::Tool => {
+                // Standalone tool result with whisper_targets (shouldn't happen normally,
+                // but handle it by skipping since it belongs to a whispered chain).
+                continue;
+            }
+            ChatRole::System => {
+                result.push(msg); // System messages are never filtered.
+            }
+        }
+    }
+
+    result
+}
+
 /// Format a tool call as a plain text string: `tool_name("arg1", key="arg2")`
 fn format_tool_call_text(name: &str, arguments: &str) -> String {
     let args: serde_json::Value = serde_json::from_str(arguments).unwrap_or_default();
@@ -112,6 +189,7 @@ mod tests {
             tool_call_id: None,
             server_tool_uses: Vec::new(),
             addressee: None,
+            whisper_targets: None,
             created_at: chrono::Utc::now(),
             usage: None,
         }
@@ -126,6 +204,7 @@ mod tests {
             tool_call_id: Some(call_id.to_string()),
             server_tool_uses: Vec::new(),
             addressee: None,
+            whisper_targets: None,
             created_at: chrono::Utc::now(),
             usage: None,
         }
@@ -236,6 +315,150 @@ mod tests {
         assert!(folded.content.contains("[Used tool: grep"));
         assert!(folded.content.contains("[Result from glob: found 3 files]"));
         assert!(folded.content.contains("[Result from grep: 2 matches]"));
+    }
+
+    // ── Whisper filtering tests ───────────────────────────────────────
+
+    fn user_msg(content: &str) -> ChatMessage {
+        ChatMessage::text(ChatRole::User, content, None)
+    }
+
+    fn user_whisper(content: &str, targets: Vec<&str>) -> ChatMessage {
+        ChatMessage::text(ChatRole::User, content, None)
+            .with_whisper_targets(Some(targets.into_iter().map(String::from).collect()))
+    }
+
+    fn assistant_whisper(name: &str, content: &str, targets: Vec<&str>) -> ChatMessage {
+        ChatMessage::text(ChatRole::Assistant, content, Some(name.to_string()))
+            .with_whisper_targets(Some(targets.into_iter().map(String::from).collect()))
+    }
+
+    fn assistant_whisper_with_tools(
+        name: &str,
+        tools: Vec<ToolCallInfo>,
+        targets: Vec<&str>,
+    ) -> ChatMessage {
+        ChatMessage {
+            role: ChatRole::Assistant,
+            content: String::new(),
+            name: Some(name.to_string()),
+            tool_calls: Some(tools),
+            tool_call_id: None,
+            server_tool_uses: Vec::new(),
+            addressee: None,
+            whisper_targets: Some(targets.into_iter().map(String::from).collect()),
+            created_at: chrono::Utc::now(),
+            usage: None,
+        }
+    }
+
+    fn tool_whisper(
+        tool_name: &str,
+        content: &str,
+        call_id: &str,
+        targets: Vec<&str>,
+    ) -> ChatMessage {
+        ChatMessage {
+            role: ChatRole::Tool,
+            content: content.to_string(),
+            name: Some(tool_name.to_string()),
+            tool_calls: None,
+            tool_call_id: Some(call_id.to_string()),
+            server_tool_uses: Vec::new(),
+            addressee: None,
+            whisper_targets: Some(targets.into_iter().map(String::from).collect()),
+            created_at: chrono::Utc::now(),
+            usage: None,
+        }
+    }
+
+    #[test]
+    fn whisper_group_member_sees_content() {
+        let messages = vec![
+            user_whisper("secret", vec!["agent_a", "agent_b"]),
+            assistant_whisper("agent_a", "got it", vec!["agent_a", "agent_b"]),
+        ];
+        let result = prepare_messages_for_agent(messages, "agent_a");
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].content, "secret");
+        assert_eq!(result[1].content, "got it");
+    }
+
+    #[test]
+    fn whisper_non_member_sees_placeholder() {
+        let messages = vec![
+            user_whisper("secret", vec!["agent_a"]),
+            assistant_whisper("agent_a", "reply", vec!["agent_a"]),
+        ];
+        let result = prepare_messages_for_agent(messages, "agent_b");
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].content, "[Whisper to agent_a]");
+        assert_eq!(result[0].role, ChatRole::User);
+        assert_eq!(result[1].content, "[Whisper]");
+        assert_eq!(result[1].role, ChatRole::Assistant);
+        assert_eq!(result[1].name.as_deref(), Some("agent_a"));
+        // Placeholder should not carry whisper_targets.
+        assert!(result[0].whisper_targets.is_none());
+        assert!(result[1].whisper_targets.is_none());
+    }
+
+    #[test]
+    fn whisper_tool_chain_collapsed_for_non_member() {
+        let messages = vec![
+            user_whisper("check file", vec!["agent_a"]),
+            assistant_whisper_with_tools(
+                "agent_a",
+                vec![tc("1", "read_file", r#"{"path":"secret.rs"}"#)],
+                vec!["agent_a"],
+            ),
+            tool_whisper("read_file", "secret content", "1", vec!["agent_a"]),
+            assistant_whisper("agent_a", "done", vec!["agent_a"]),
+        ];
+        let result = prepare_messages_for_agent(messages, "agent_b");
+        // user placeholder + assistant placeholder (tool chain collapsed) + assistant placeholder
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].content, "[Whisper to agent_a]");
+        assert_eq!(result[1].content, "[Whisper]");
+        assert_eq!(result[2].content, "[Whisper]");
+        // No tool messages visible.
+        assert!(result.iter().all(|m| m.role != ChatRole::Tool));
+    }
+
+    #[test]
+    fn whisper_tool_chain_visible_for_member() {
+        let messages = vec![
+            user_whisper("check file", vec!["agent_a"]),
+            assistant_whisper_with_tools(
+                "agent_a",
+                vec![tc("1", "read_file", r#"{"path":"secret.rs"}"#)],
+                vec!["agent_a"],
+            ),
+            tool_whisper("read_file", "secret content", "1", vec!["agent_a"]),
+            assistant_whisper("agent_a", "done", vec!["agent_a"]),
+        ];
+        let result = prepare_messages_for_agent(messages, "agent_a");
+        // All messages visible: user + assistant(tool_calls) + tool + assistant
+        assert_eq!(result.len(), 4);
+        assert!(result[1].tool_calls.is_some());
+        assert_eq!(result[2].role, ChatRole::Tool);
+    }
+
+    #[test]
+    fn mixed_whisper_and_normal_messages() {
+        let messages = vec![
+            user_msg("hello everyone"),
+            assistant_msg("agent_a", "hi"),
+            user_whisper("secret to a", vec!["agent_a"]),
+            assistant_whisper("agent_a", "secret reply", vec!["agent_a"]),
+            user_msg("back to normal"),
+        ];
+        let result = prepare_messages_for_agent(messages, "agent_b");
+        assert_eq!(result.len(), 5);
+        assert_eq!(result[0].content, "hello everyone");
+        assert_eq!(result[1].content, "hi");
+        assert_eq!(result[2].content, "[Whisper to agent_a]");
+        assert_eq!(result[3].content, "[Whisper]");
+        assert_eq!(result[4].content, "back to normal");
     }
 
     #[test]

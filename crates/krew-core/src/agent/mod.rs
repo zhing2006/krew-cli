@@ -63,6 +63,7 @@ impl AgentRuntime {
         project_instructions: Option<&str>,
         max_tool_rounds: Option<u32>,
         peer_agents: Option<&[PeerAgent]>,
+        whisper_targets: Option<Vec<String>>,
     ) -> mpsc::UnboundedReceiver<AgentEvent> {
         let (tx, rx) = mpsc::unbounded_channel();
 
@@ -74,7 +75,7 @@ impl AgentRuntime {
         });
 
         // Build agent identity + optional custom system prompt.
-        let other_agent_hint = "Their messages are prefixed with [agent_name] in the content.";
+        let other_agent_hint = "Their messages are prefixed with [agent_name] in the content. User messages are prefixed with [user].";
         let now = chrono::Local::now()
             .format("%Y-%m-%d %H:%M (%A)")
             .to_string();
@@ -103,6 +104,45 @@ impl AgentRuntime {
                  Other agents: {}.",
                 peer_list.join(", ")
             )
+        } else {
+            identity
+        };
+
+        // Append whisper context layers if in whisper mode.
+        let identity = if let Some(ref targets) = whisper_targets {
+            let self_name = &self.config.name;
+            let other_members: Vec<&String> = targets.iter().filter(|t| *t != self_name).collect();
+
+            // Layer 1: Privacy context (always injected when whisper).
+            let privacy = if other_members.is_empty() {
+                "You are in a private whisper conversation with the user. Other agents cannot see this conversation.".to_string()
+            } else {
+                let member_list: Vec<String> =
+                    other_members.iter().map(|n| format!("@{n}")).collect();
+                format!(
+                    "You are in a private whisper conversation with the user and {}. \
+                     Agents outside this group cannot see the conversation content.",
+                    member_list.join(", ")
+                )
+            };
+
+            // Layer 2: @mention collaboration (only when A2A enabled and multi-member group).
+            let a2a_hint =
+                if !other_members.is_empty() && peer_agents.is_some_and(|p| !p.is_empty()) {
+                    format!(
+                        "\nIn this whisper group, you may only @mention group members: {}. \
+                     Mentions of agents outside the group will be ignored.",
+                        other_members
+                            .iter()
+                            .map(|n| format!("@{n}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                } else {
+                    String::new()
+                };
+
+            format!("{identity}\n{privacy}{a2a_hint}")
         } else {
             identity
         };
@@ -170,6 +210,7 @@ impl AgentRuntime {
                 approval_cache: &approval_cache,
                 shell_allow_commands: &shell_allow_commands,
                 fetch_allow_domains: &fetch_allow_domains,
+                whisper_targets,
             };
             run_agent_loop(&ctx, &mut full_messages).await;
         });

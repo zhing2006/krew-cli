@@ -10,24 +10,29 @@ use crate::render::diff_render;
 use super::App;
 
 impl App {
-    /// Insert the agent header label: `[name] DisplayName:`
+    /// Insert the agent header label: `[name] DisplayName:` (with optional lock icon for whisper).
     pub(crate) fn insert_agent_header(
         &self,
         terminal: &mut custom_terminal::Terminal,
         agent_name: &str,
         display_name: &str,
         color_name: &str,
+        is_whisper: bool,
     ) -> anyhow::Result<()> {
         let color = render::parse_color(color_name);
         let colored = Style::default().fg(color).add_modifier(Modifier::BOLD);
         let plain = Style::default().add_modifier(Modifier::BOLD);
 
-        let line = Line::from(vec![
-            Span::styled(format!("[{agent_name}] "), colored),
-            Span::styled(format!("{display_name}:"), plain),
-        ]);
+        let mut spans = vec![Span::styled(format!("[{agent_name}] "), colored)];
+        if is_whisper {
+            spans.push(Span::styled(
+                "\u{1F512} ".to_string(), // 🔒
+                Style::default().add_modifier(Modifier::BOLD),
+            ));
+        }
+        spans.push(Span::styled(format!("{display_name}:"), plain));
 
-        render::insert_lines(terminal, vec![line])
+        render::insert_lines(terminal, vec![Line::from(spans)])
     }
 
     /// Insert content lines with 2-space indentation and trailing blank.

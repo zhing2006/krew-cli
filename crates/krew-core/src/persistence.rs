@@ -94,6 +94,7 @@ pub fn build_session_file(snapshot: &SessionSnapshot) -> SessionFile {
                         query: s.query.clone(),
                     })
                     .collect(),
+                whisper_targets: msg.whisper_targets.clone(),
                 created_at: msg.created_at,
             }
         })
@@ -178,6 +179,7 @@ pub fn load_session_from_disk(session_path: &Path) -> anyhow::Result<RestoredSes
                 })
                 .collect(),
             addressee: msg.addressee.clone(),
+            whisper_targets: msg.whisper_targets.clone(),
             created_at: msg.created_at,
             usage: msg.usage.as_ref().map(|u| krew_llm::Usage {
                 prompt_tokens: u.prompt_tokens,

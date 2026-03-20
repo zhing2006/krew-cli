@@ -13,45 +13,70 @@ pub enum Addressee {
     LastRespondent,
 }
 
-/// Parse user input into an addressee and message body.
+/// Parse user input into an addressee, message body, and whisper flag.
 ///
-/// `@name` tokens are recognized anywhere in the input, but only if `name`
-/// matches a known agent or `"all"`. Unrecognized `@tokens` (including
-/// bare `@`) are treated as plain text.
+/// `@name` and `#name` tokens are recognized anywhere in the input, but only
+/// if `name` matches a known agent or `"all"`. Unrecognized tokens (including
+/// bare `@`/`#`) are treated as plain text.
 ///
-/// The message body is always the **full original input** — `@name` tokens
-/// are not stripped. This preserves context for the LLM.
-pub fn parse_input(input: &str, known_agents: &[String]) -> anyhow::Result<(Addressee, String)> {
+/// `#name` indicates a whisper (private message). `#all` is rejected as an
+/// error. Mixing `@` and `#` addressing in the same input is rejected.
+///
+/// The message body is always the **full original input** — `@name`/`#name`
+/// tokens are not stripped. This preserves context for the LLM.
+pub fn parse_input(
+    input: &str,
+    known_agents: &[String],
+) -> anyhow::Result<(Addressee, String, bool)> {
     let input = input.trim();
     if input.is_empty() {
         anyhow::bail!("empty input");
     }
 
-    // Scan for @name tokens matching known agents (or "all").
-    let mut matched: Vec<String> = Vec::new();
+    // Scan for @name and #name tokens matching known agents (or "all").
+    let mut at_matched: Vec<String> = Vec::new();
+    let mut hash_matched: Vec<String> = Vec::new();
     for word in input.split_whitespace() {
         if let Some(name) = word.strip_prefix('@')
             && (name == "all" || known_agents.iter().any(|a| a == name))
-            && !matched.contains(&name.to_string())
+            && !at_matched.contains(&name.to_string())
         {
-            matched.push(name.to_string());
+            at_matched.push(name.to_string());
+        } else if let Some(name) = word.strip_prefix('#')
+            && (name == "all" || known_agents.iter().any(|a| a == name))
+            && !hash_matched.contains(&name.to_string())
+        {
+            hash_matched.push(name.to_string());
         }
     }
 
+    // Reject mixing @ and # addressing.
+    if !at_matched.is_empty() && !hash_matched.is_empty() {
+        anyhow::bail!("不能同时使用 @ 和 # 寻址");
+    }
+
+    // Reject #all.
+    if hash_matched.iter().any(|n| n == "all") {
+        anyhow::bail!("#all 没有意义——对所有 agent 密语等同于普通消息，请直接发送或使用 @all");
+    }
+
     let message = input.to_string();
+    let is_whisper = !hash_matched.is_empty();
+    let matched = if is_whisper { hash_matched } else { at_matched };
 
     if matched.is_empty() {
-        Ok((Addressee::LastRespondent, message))
+        Ok((Addressee::LastRespondent, message, false))
     } else if matched.iter().any(|n| n == "all") {
         // @all takes priority — even if mixed with specific names.
-        Ok((Addressee::All, message))
+        Ok((Addressee::All, message, false))
     } else if matched.len() == 1 {
         Ok((
             Addressee::Single(matched.into_iter().next().unwrap()),
             message,
+            is_whisper,
         ))
     } else {
-        Ok((Addressee::Multiple(matched), message))
+        Ok((Addressee::Multiple(matched), message, is_whisper))
     }
 }
 
