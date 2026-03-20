@@ -19,6 +19,8 @@ pub enum ActivePopup {
     SlashCommand(CompletionState),
     /// Agent name completion (triggered by `@` token at cursor).
     AgentName(CompletionState),
+    /// Whisper target completion (triggered by `#` token at cursor).
+    WhisperName(CompletionState),
     /// Session picker (triggered by `/resume`).
     SessionPicker(CompletionState),
 }
@@ -126,6 +128,7 @@ impl ActivePopup {
             ActivePopup::None => 0,
             ActivePopup::SlashCommand(state)
             | ActivePopup::AgentName(state)
+            | ActivePopup::WhisperName(state)
             | ActivePopup::SessionPicker(state) => {
                 if state.is_empty() {
                     0
@@ -143,6 +146,7 @@ impl ActivePopup {
             ActivePopup::None => false,
             ActivePopup::SlashCommand(s)
             | ActivePopup::AgentName(s)
+            | ActivePopup::WhisperName(s)
             | ActivePopup::SessionPicker(s) => !s.is_empty(),
         }
     }
@@ -153,6 +157,7 @@ impl ActivePopup {
             ActivePopup::None => return vec![],
             ActivePopup::SlashCommand(s)
             | ActivePopup::AgentName(s)
+            | ActivePopup::WhisperName(s)
             | ActivePopup::SessionPicker(s) => s,
         };
 

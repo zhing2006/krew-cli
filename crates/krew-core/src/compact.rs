@@ -125,9 +125,11 @@ pub async fn compact_session(
 
     // Split: compress older rounds, keep recent ones.
     let split_point = rounds.len() - keep_rounds;
+    // Exclude whisper messages from compression input (privacy preservation).
     let compress_messages: Vec<&ChatMessage> = rounds[..split_point]
         .iter()
         .flat_map(|r| r.iter())
+        .filter(|m| m.whisper_targets.is_none())
         .collect();
 
     // Create backup before modifying anything.
@@ -234,12 +236,23 @@ fn extract_skill_messages(messages: &[ChatMessage]) -> Vec<ChatMessage> {
     protected
 }
 
+/// Extract whisper messages from a slice of messages.
+///
+/// Returns cloned messages that have `whisper_targets` set. These are
+/// preserved across compaction so whisper privacy is maintained.
+fn extract_whisper_messages(messages: &[ChatMessage]) -> Vec<ChatMessage> {
+    messages
+        .iter()
+        .filter(|m| m.whisper_targets.is_some())
+        .cloned()
+        .collect()
+}
+
 /// Build the new message list after compaction.
 ///
 /// Returns the messages that should replace the current session messages.
-/// Skill activation messages from the compressed region are preserved and
-/// inserted between the summary and the kept rounds to maintain valid
-/// message alternation (User → Assistant/Tool... → User...).
+/// Skill activation messages and whisper messages from the compressed region
+/// are preserved and inserted between the summary and the kept rounds.
 pub fn build_compacted_messages(
     messages: &[ChatMessage],
     keep_rounds: usize,
@@ -248,13 +261,17 @@ pub fn build_compacted_messages(
     let rounds = split_into_rounds(messages);
     let split_point = rounds.len().saturating_sub(keep_rounds);
 
-    // Extract skill activation messages from the compressed portion.
-    let compressed_messages: Vec<&ChatMessage> = rounds[..split_point]
+    // Collect compressed portion as owned messages.
+    let compressed_owned: Vec<ChatMessage> = rounds[..split_point]
         .iter()
-        .flat_map(|r| r.iter())
+        .flat_map(|r| r.iter().cloned())
         .collect();
-    let skill_messages =
-        extract_skill_messages(&compressed_messages.into_iter().cloned().collect::<Vec<_>>());
+
+    // Extract skill activation messages from the compressed portion.
+    let skill_messages = extract_skill_messages(&compressed_owned);
+
+    // Extract whisper messages from the compressed portion.
+    let whisper_messages = extract_whisper_messages(&compressed_owned);
 
     let kept_messages: Vec<ChatMessage> = rounds[split_point..]
         .iter()
@@ -283,8 +300,9 @@ pub fn build_compacted_messages(
         filter_duplicate_skill_blocks(skill_messages, &kept_skill_names)
     };
 
-    let mut new_messages =
-        Vec::with_capacity(1 + unique_skill_messages.len() + kept_messages.len());
+    let mut new_messages = Vec::with_capacity(
+        1 + unique_skill_messages.len() + whisper_messages.len() + kept_messages.len(),
+    );
     new_messages.push(ChatMessage::text(
         ChatRole::User,
         format!("[Session History Summary]\n{summary}"),
@@ -292,6 +310,8 @@ pub fn build_compacted_messages(
     ));
     // Insert protected skill messages: User(summary) → Assistant(tool_call) → Tool(result) → ...
     new_messages.extend(unique_skill_messages);
+    // Insert preserved whisper messages after skill messages.
+    new_messages.extend(whisper_messages);
     new_messages.extend(kept_messages);
     new_messages
 }
@@ -363,6 +383,7 @@ mod tests {
             tool_call_id: Some("call_1".to_string()),
             server_tool_uses: Vec::new(),
             addressee: None,
+            whisper_targets: None,
             created_at: chrono::Utc::now(),
             usage: None,
         }
@@ -440,6 +461,7 @@ mod tests {
             tool_call_id: None,
             server_tool_uses: Vec::new(),
             addressee: None,
+            whisper_targets: None,
             created_at: chrono::Utc::now(),
             usage: None,
         }
@@ -456,6 +478,7 @@ mod tests {
             tool_call_id: Some(format!("call_{skill_name}")),
             server_tool_uses: Vec::new(),
             addressee: None,
+            whisper_targets: None,
             created_at: chrono::Utc::now(),
             usage: None,
         }
@@ -569,6 +592,7 @@ mod tests {
             tool_call_id: None,
             server_tool_uses: Vec::new(),
             addressee: None,
+            whisper_targets: None,
             created_at: chrono::Utc::now(),
             usage: None,
         }

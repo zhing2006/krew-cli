@@ -427,7 +427,20 @@ impl App {
             match msg.role.as_str() {
                 "user" => {
                     header_shown_for = None;
-                    self.insert_user_message(terminal, &[], &msg.content)?;
+                    let is_whisper = msg.whisper_targets.is_some();
+                    // Resolve target names from addressee or whisper_targets for colored dots.
+                    let target_refs: Vec<&str> = if let Some(ref wt) = msg.whisper_targets {
+                        wt.iter().map(|s| s.as_str()).collect()
+                    } else if let Some(ref addr) = msg.addressee {
+                        if addr == "all" {
+                            self.config.agents.iter().map(|a| a.name.as_str()).collect()
+                        } else {
+                            addr.split(',').collect()
+                        }
+                    } else {
+                        vec![]
+                    };
+                    self.insert_user_message(terminal, &target_refs, &msg.content, is_whisper)?;
                 }
                 "assistant" => {
                     // Show agent header if this is the first assistant message
@@ -443,11 +456,13 @@ impl App {
                                 .map(|a| a.display_name.as_str())
                                 .unwrap_or(agent_name);
                             let color_name = agent_cfg.map(|a| a.color.as_str()).unwrap_or("white");
+                            let is_whisper = msg.whisper_targets.is_some();
                             self.insert_agent_header(
                                 terminal,
                                 agent_name,
                                 display_name,
                                 color_name,
+                                is_whisper,
                             )?;
                             header_shown_for = Some(agent_name.clone());
                         }
