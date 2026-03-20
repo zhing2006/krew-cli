@@ -61,7 +61,7 @@ impl App {
 
         // Parse @ addressee (only known agents are recognized as addressees).
         let agent_names: Vec<String> = self.config.agents.iter().map(|a| a.name.clone()).collect();
-        let (addressee, body) = match router::parse_input(trimmed, &agent_names) {
+        let (addressee, body, is_whisper) = match router::parse_input(trimmed, &agent_names) {
             Ok(result) => result,
             Err(e) => {
                 self.show_error(terminal, &e.to_string())?;
@@ -96,7 +96,17 @@ impl App {
         );
 
         // Insert user message with colored routing dots: > ●●● message
-        self.insert_user_message(terminal, &target_names, trimmed)?;
+        self.insert_user_message(terminal, &target_names, trimmed, is_whisper)?;
+
+        // Set whisper state for dispatch lifecycle.
+        let whisper_targets = if is_whisper {
+            let targets: Vec<String> = target_names.iter().map(|n| n.to_string()).collect();
+            self.current_whisper_targets = Some(targets.clone());
+            Some(targets)
+        } else {
+            self.current_whisper_targets = None;
+            None
+        };
 
         // Add user message to conversation history with addressee info.
         let addressee_str = match &addressee {
@@ -105,8 +115,10 @@ impl App {
             Addressee::Multiple(names) => Some(names.join(",")),
             Addressee::LastRespondent => resolved_last.clone(),
         };
-        self.messages
-            .push(ChatMessage::user_with_addressee(body, addressee_str));
+        self.messages.push(
+            ChatMessage::user_with_addressee(body, addressee_str)
+                .with_whisper_targets(whisper_targets),
+        );
 
         // Persist session after user message.
         self.save_session();
@@ -167,7 +179,7 @@ impl App {
         self.a2a_insert_cursor = 0;
 
         let agent_names: Vec<String> = self.config.agents.iter().map(|a| a.name.clone()).collect();
-        let (addressee, body) = match router::parse_input(trimmed, &agent_names) {
+        let (addressee, body, is_whisper) = match router::parse_input(trimmed, &agent_names) {
             Ok(result) => result,
             Err(e) => {
                 return self.show_error(terminal, &e.to_string());
@@ -194,7 +206,17 @@ impl App {
             resolved_last.as_deref(),
         );
 
-        self.insert_user_message(terminal, &target_names, trimmed)?;
+        self.insert_user_message(terminal, &target_names, trimmed, is_whisper)?;
+
+        // Set whisper state for dispatch lifecycle.
+        let whisper_targets = if is_whisper {
+            let targets: Vec<String> = target_names.iter().map(|n| n.to_string()).collect();
+            self.current_whisper_targets = Some(targets.clone());
+            Some(targets)
+        } else {
+            self.current_whisper_targets = None;
+            None
+        };
 
         let addressee_str = match &addressee {
             Addressee::All => Some("all".to_string()),
@@ -202,8 +224,10 @@ impl App {
             Addressee::Multiple(names) => Some(names.join(",")),
             Addressee::LastRespondent => resolved_last.clone(),
         };
-        self.messages
-            .push(ChatMessage::user_with_addressee(body, addressee_str));
+        self.messages.push(
+            ChatMessage::user_with_addressee(body, addressee_str)
+                .with_whisper_targets(whisper_targets),
+        );
 
         self.save_session();
 
@@ -266,6 +290,7 @@ impl App {
                     self.project_instructions.as_deref(),
                     None,
                     peers.as_deref(),
+                    self.current_whisper_targets.clone(),
                 );
                 self.agent_event_rx = Some(rx);
                 return Ok(true);
@@ -281,12 +306,21 @@ impl App {
         terminal: &mut custom_terminal::Terminal,
         target_names: &[&str],
         text: &str,
+        is_whisper: bool,
     ) -> anyhow::Result<()> {
         let green_bold = Style::default()
             .fg(Color::Green)
             .add_modifier(Modifier::BOLD);
 
         let mut spans: Vec<Span<'static>> = vec![Span::styled("> ".to_string(), green_bold)];
+
+        // Show lock icon for whisper messages.
+        if is_whisper {
+            spans.push(Span::styled(
+                "\u{1F512}".to_string(), // 🔒
+                Style::default().add_modifier(Modifier::BOLD),
+            ));
+        }
 
         if !target_names.is_empty() {
             for name in target_names {

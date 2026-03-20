@@ -50,42 +50,42 @@ fn combine_stdin_trims_trailing_whitespace() {
 #[test]
 fn addressing_no_at_returns_last_respondent() {
     let agents = vec!["claude".to_string(), "gpt".to_string()];
-    let (addressee, _) = router::parse_input("hello", &agents).unwrap();
+    let (addressee, _, _) = router::parse_input("hello", &agents).unwrap();
     assert!(matches!(addressee, Addressee::LastRespondent));
 }
 
 #[test]
 fn addressing_unknown_at_returns_last_respondent() {
     let agents = vec!["claude".to_string(), "gpt".to_string()];
-    let (addressee, _) = router::parse_input("@nonexistent hello", &agents).unwrap();
+    let (addressee, _, _) = router::parse_input("@nonexistent hello", &agents).unwrap();
     assert!(matches!(addressee, Addressee::LastRespondent));
 }
 
 #[test]
 fn addressing_known_agent_returns_single() {
     let agents = vec!["claude".to_string(), "gpt".to_string()];
-    let (addressee, _) = router::parse_input("@claude hello", &agents).unwrap();
+    let (addressee, _, _) = router::parse_input("@claude hello", &agents).unwrap();
     assert!(matches!(addressee, Addressee::Single(ref name) if name == "claude"));
 }
 
 #[test]
 fn addressing_all_returns_all() {
     let agents = vec!["claude".to_string(), "gpt".to_string()];
-    let (addressee, _) = router::parse_input("@all hello", &agents).unwrap();
+    let (addressee, _, _) = router::parse_input("@all hello", &agents).unwrap();
     assert!(matches!(addressee, Addressee::All));
 }
 
 #[test]
 fn addressing_multiple_agents() {
     let agents = vec!["claude".to_string(), "gpt".to_string()];
-    let (addressee, _) = router::parse_input("@claude @gpt hello", &agents).unwrap();
+    let (addressee, _, _) = router::parse_input("@claude @gpt hello", &agents).unwrap();
     assert!(matches!(addressee, Addressee::Multiple(ref names) if names.len() == 2));
 }
 
 #[test]
 fn addressing_known_mixed_with_unknown_routes_to_known() {
     let agents = vec!["claude".to_string(), "gpt".to_string()];
-    let (addressee, body) = router::parse_input("@claude explain @dataclass", &agents).unwrap();
+    let (addressee, body, _) = router::parse_input("@claude explain @dataclass", &agents).unwrap();
     assert!(matches!(addressee, Addressee::Single(ref name) if name == "claude"));
     // Body preserves the full text including @dataclass.
     assert!(body.contains("@dataclass"));
@@ -120,7 +120,7 @@ async fn text_format_outputs_header_and_text() {
     tx.send(make_done_event("hello")).unwrap();
     drop(tx);
 
-    let result = consume_agent_events(&mut rx, "claude", OutputFormat::Text).await;
+    let result = consume_agent_events(&mut rx, "claude", OutputFormat::Text, false, None).await;
     assert_eq!(result.final_text, "hello");
     assert!(!result.has_error);
     assert!(result.usage.is_some());
@@ -141,7 +141,7 @@ async fn json_format_outputs_text_event() {
     tx.send(make_done_event("hello world")).unwrap();
     drop(tx);
 
-    let result = consume_agent_events(&mut rx, "claude", OutputFormat::Json).await;
+    let result = consume_agent_events(&mut rx, "claude", OutputFormat::Json, false, None).await;
     assert_eq!(result.final_text, "hello world");
     assert!(!result.has_error);
 }
@@ -163,7 +163,7 @@ async fn thinking_delta_is_silently_discarded() {
     tx.send(make_done_event("output")).unwrap();
     drop(tx);
 
-    let result = consume_agent_events(&mut rx, "claude", OutputFormat::Text).await;
+    let result = consume_agent_events(&mut rx, "claude", OutputFormat::Text, false, None).await;
     assert_eq!(result.final_text, "output");
     // ThinkingDelta should not appear in the text buffer.
     assert!(!result.final_text.contains("thinking"));
@@ -194,7 +194,7 @@ async fn tool_call_events_processed() {
     tx.send(make_done_event("response")).unwrap();
     drop(tx);
 
-    let result = consume_agent_events(&mut rx, "claude", OutputFormat::Text).await;
+    let result = consume_agent_events(&mut rx, "claude", OutputFormat::Text, false, None).await;
     assert_eq!(result.final_text, "response");
     assert!(!result.has_error);
 }
@@ -230,7 +230,7 @@ async fn tool_call_output_processed() {
     tx.send(make_done_event("done")).unwrap();
     drop(tx);
 
-    let result = consume_agent_events(&mut rx, "claude", OutputFormat::Text).await;
+    let result = consume_agent_events(&mut rx, "claude", OutputFormat::Text, false, None).await;
     assert_eq!(result.final_text, "done");
 }
 
@@ -270,7 +270,7 @@ async fn server_tool_events_processed() {
     .unwrap();
     drop(tx);
 
-    let result = consume_agent_events(&mut rx, "claude", OutputFormat::Json).await;
+    let result = consume_agent_events(&mut rx, "claude", OutputFormat::Json, false, None).await;
     assert_eq!(result.final_text, "search results");
     assert_eq!(result.server_tool_uses.len(), 1);
     assert_eq!(result.server_tool_uses[0].name, "web_search");
@@ -319,7 +319,7 @@ async fn thinking_between_server_tool_does_not_trigger_gemini_style() {
     // This test verifies the function completes without panic and produces
     // correct results. The actual stdout format (⎿ vs 🌐 name_done) is
     // validated by the fact that text_after_server_tool stays false.
-    let result = consume_agent_events(&mut rx, "claude", OutputFormat::Text).await;
+    let result = consume_agent_events(&mut rx, "claude", OutputFormat::Text, false, None).await;
     assert_eq!(result.final_text, "result");
     assert!(!result.has_error);
 }
@@ -347,10 +347,9 @@ async fn approval_request_auto_approved() {
     drop(tx);
 
     // Spawn consumer — it will auto-approve.
-    let handle =
-        tokio::spawn(
-            async move { consume_agent_events(&mut rx, "claude", OutputFormat::Text).await },
-        );
+    let handle = tokio::spawn(async move {
+        consume_agent_events(&mut rx, "claude", OutputFormat::Text, false, None).await
+    });
 
     // Verify the approval was sent.
     let decision = resp_rx.await.unwrap();
@@ -377,7 +376,7 @@ async fn error_event_sets_has_error() {
     .unwrap();
     drop(tx);
 
-    let result = consume_agent_events(&mut rx, "claude", OutputFormat::Text).await;
+    let result = consume_agent_events(&mut rx, "claude", OutputFormat::Text, false, None).await;
     assert!(result.has_error);
     // No partial text → final_text should be empty.
     assert!(result.final_text.is_empty());
@@ -402,7 +401,7 @@ async fn error_with_partial_text_appends_error_annotation() {
     .unwrap();
     drop(tx);
 
-    let result = consume_agent_events(&mut rx, "claude", OutputFormat::Text).await;
+    let result = consume_agent_events(&mut rx, "claude", OutputFormat::Text, false, None).await;
     assert!(result.has_error);
     assert!(result.final_text.contains("partial output"));
     assert!(result.final_text.contains("[Error: connection reset]"));
@@ -441,7 +440,7 @@ async fn server_tool_uses_only_from_done_event() {
     .unwrap();
     drop(tx);
 
-    let result = consume_agent_events(&mut rx, "claude", OutputFormat::Text).await;
+    let result = consume_agent_events(&mut rx, "claude", OutputFormat::Text, false, None).await;
     // Should have exactly 1 entry (from Done), NOT 2 (Done + local).
     assert_eq!(result.server_tool_uses.len(), 1);
 }
@@ -467,7 +466,7 @@ async fn retrying_event_does_not_set_error() {
     tx.send(make_done_event("ok")).unwrap();
     drop(tx);
 
-    let result = consume_agent_events(&mut rx, "claude", OutputFormat::Text).await;
+    let result = consume_agent_events(&mut rx, "claude", OutputFormat::Text, false, None).await;
     assert!(!result.has_error);
     assert_eq!(result.final_text, "ok");
 }

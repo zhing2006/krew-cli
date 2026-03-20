@@ -27,6 +27,7 @@ fn make_test_session() -> SessionFile {
                 tool_calls: None,
                 tool_call_id: None,
                 server_tool_uses: vec![],
+                whisper_targets: None,
                 created_at: now,
             },
             MessageEntry {
@@ -42,6 +43,7 @@ fn make_test_session() -> SessionFile {
                 tool_calls: None,
                 tool_call_id: None,
                 server_tool_uses: vec![],
+                whisper_targets: None,
                 created_at: now,
             },
         ],
@@ -136,6 +138,7 @@ fn test_list_sessions() {
             tool_calls: None,
             tool_call_id: None,
             server_tool_uses: vec![],
+            whisper_targets: None,
             created_at: older,
         }],
     };
@@ -158,6 +161,7 @@ fn test_list_sessions() {
             tool_calls: None,
             tool_call_id: None,
             server_tool_uses: vec![],
+            whisper_targets: None,
             created_at: now,
         }],
     };
@@ -190,6 +194,76 @@ fn test_list_sessions_empty_dir() {
 fn test_list_sessions_nonexistent_dir() {
     let summaries = list_sessions(Path::new("/nonexistent/dir")).unwrap();
     assert!(summaries.is_empty());
+}
+
+#[test]
+fn test_whisper_targets_roundtrip() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("whisper.toml");
+
+    let now = Utc::now();
+    let session = SessionFile {
+        session: SessionMeta {
+            id: "whisper123".to_string(),
+            cwd: "/tmp".to_string(),
+            agents: vec!["opus".to_string(), "gemini".to_string()],
+            total_tokens_used: 0,
+            created_at: now,
+            updated_at: now,
+        },
+        messages: vec![
+            MessageEntry {
+                role: "user".to_string(),
+                agent_name: None,
+                addressee: Some("opus".to_string()),
+                content: "secret message".to_string(),
+                usage: None,
+                tool_calls: None,
+                tool_call_id: None,
+                server_tool_uses: vec![],
+                whisper_targets: Some(vec!["opus".to_string()]),
+                created_at: now,
+            },
+            MessageEntry {
+                role: "assistant".to_string(),
+                agent_name: Some("opus".to_string()),
+                addressee: None,
+                content: "secret reply".to_string(),
+                usage: None,
+                tool_calls: None,
+                tool_call_id: None,
+                server_tool_uses: vec![],
+                whisper_targets: Some(vec!["opus".to_string()]),
+                created_at: now,
+            },
+            MessageEntry {
+                role: "user".to_string(),
+                agent_name: None,
+                addressee: Some("all".to_string()),
+                content: "public message".to_string(),
+                usage: None,
+                tool_calls: None,
+                tool_call_id: None,
+                server_tool_uses: vec![],
+                whisper_targets: None,
+                created_at: now,
+            },
+        ],
+    };
+
+    save_session(&path, &session).unwrap();
+    let loaded = load_session(&path).unwrap();
+
+    assert_eq!(loaded.messages.len(), 3);
+    assert_eq!(
+        loaded.messages[0].whisper_targets,
+        Some(vec!["opus".to_string()])
+    );
+    assert_eq!(
+        loaded.messages[1].whisper_targets,
+        Some(vec!["opus".to_string()])
+    );
+    assert!(loaded.messages[2].whisper_targets.is_none());
 }
 
 #[test]

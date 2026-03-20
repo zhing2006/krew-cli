@@ -143,6 +143,8 @@ pub struct App {
     /// Insertion cursor for AI-to-AI immediate routing (new a2a targets insert
     /// at this position so they don't jump ahead of earlier a2a entries).
     pub(crate) a2a_insert_cursor: usize,
+    /// Current whisper targets (set during whisper dispatch, cleared when done).
+    pub(crate) current_whisper_targets: Option<Vec<String>>,
 }
 
 impl App {
@@ -239,6 +241,7 @@ impl App {
             pending_custom_command: None,
             ai_conversation_rounds: 0,
             a2a_insert_cursor: 0,
+            current_whisper_targets: None,
             session_created_at: Utc::now(),
         })
     }
@@ -524,7 +527,8 @@ impl App {
                     self.commit_tick_active = true;
                 }
 
-                self.insert_agent_header(terminal, &agent_name, &display_name, &color)?;
+                let is_whisper = self.current_whisper_targets.is_some();
+                self.insert_agent_header(terminal, &agent_name, &display_name, &color, is_whisper)?;
             }
             AgentEvent::Retrying {
                 attempt,
@@ -820,6 +824,7 @@ impl App {
                         completion_tokens: usage.completion_tokens,
                         total_tokens: usage.total_tokens,
                     });
+                    final_msg.whisper_targets = self.current_whisper_targets.clone();
                     self.messages.push(final_msg);
 
                     // Persist session after agent response.
@@ -838,6 +843,15 @@ impl App {
                 self.chunking_policy.reset();
 
                 // AI-to-AI routing: apply detected @mentions to the dispatch queue.
+                // In whisper mode, filter A2A targets to only include whisper group members.
+                let a2a_targets = if let Some(ref wt) = self.current_whisper_targets {
+                    a2a_targets
+                        .into_iter()
+                        .filter(|t| wt.contains(t))
+                        .collect::<Vec<_>>()
+                } else {
+                    a2a_targets
+                };
                 if !a2a_targets.is_empty() {
                     let max_a2a = self.config.settings.agent_to_agent_max_rounds;
                     for target in a2a_targets {
@@ -865,7 +879,10 @@ impl App {
                 }
 
                 // Chain-trigger next pending agent (if any).
-                self.start_next_agent(terminal)?;
+                if !self.start_next_agent(terminal)? {
+                    // No more pending agents — clear whisper state.
+                    self.current_whisper_targets = None;
+                }
             }
             AgentEvent::Error {
                 message: msg,
@@ -907,11 +924,10 @@ impl App {
                     if !partial_text.is_empty() {
                         let mut content = partial_text;
                         content.push_str(&format!("\n\n[Error: {msg}]"));
-                        self.messages.push(ChatMessage::text(
-                            ChatRole::Assistant,
-                            content,
-                            Some(agent_name),
-                        ));
+                        let mut error_msg =
+                            ChatMessage::text(ChatRole::Assistant, content, Some(agent_name));
+                        error_msg.whisper_targets = self.current_whisper_targets.clone();
+                        self.messages.push(error_msg);
                     }
 
                     // Persist session after error to avoid data loss.
@@ -932,7 +948,9 @@ impl App {
                 self.chunking_policy.reset();
 
                 // Error isolation: continue with next pending agent.
-                self.start_next_agent(terminal)?;
+                if !self.start_next_agent(terminal)? {
+                    self.current_whisper_targets = None;
+                }
             }
             AgentEvent::ApprovalRequest {
                 tool_name,
@@ -1016,15 +1034,21 @@ impl App {
         if let Some(agent_name) = self.current_agent_name.take()
             && !partial_text.is_empty()
         {
-            self.messages.push(ChatMessage::text(
+            let mut cancel_msg = ChatMessage::text(
                 ChatRole::Assistant,
                 format!("{partial_text}\n\n[Cancelled by user]"),
                 Some(agent_name),
-            ));
+            );
+            cancel_msg.whisper_targets = self.current_whisper_targets.clone();
+            self.messages.push(cancel_msg);
         }
+
+        // Persist session after cancel to avoid data loss.
+        self.save_session();
 
         // Clear pending agents (cancel the entire @all dispatch).
         self.pending_agents.clear();
+        self.current_whisper_targets = None;
 
         // Close shell output section if open.
         if self.shell_output_started {

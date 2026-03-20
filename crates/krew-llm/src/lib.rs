@@ -96,6 +96,8 @@ pub struct ChatMessage {
     pub server_tool_uses: Vec<ServerToolUseInfo>,
     /// Target addressee for user messages ("all", agent name, or None).
     pub addressee: Option<String>,
+    /// Whisper targets: when set, only these agents (and the sender) can see the message.
+    pub whisper_targets: Option<Vec<String>>,
     /// Timestamp when this message was created.
     pub created_at: DateTime<Utc>,
     /// Per-message token usage (assistant messages only).
@@ -135,6 +137,7 @@ impl ChatMessage {
             tool_call_id: None,
             server_tool_uses: Vec::new(),
             addressee: None,
+            whisper_targets: None,
             created_at: Utc::now(),
             usage: None,
         }
@@ -150,9 +153,16 @@ impl ChatMessage {
             tool_call_id: None,
             server_tool_uses: Vec::new(),
             addressee,
+            whisper_targets: None,
             created_at: Utc::now(),
             usage: None,
         }
+    }
+
+    /// Set whisper targets on this message (builder pattern).
+    pub fn with_whisper_targets(mut self, targets: Option<Vec<String>>) -> Self {
+        self.whisper_targets = targets;
+        self
     }
 }
 

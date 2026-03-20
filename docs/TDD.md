@@ -218,34 +218,32 @@ enum Addressee {
 ///
 /// The message body is always the **full original input** — `@name` tokens
 /// are not stripped, preserving context for the LLM.
-fn parse_input(input: &str, known_agents: &[String]) -> Result<(Addressee, String)> {
+fn parse_input(input: &str, known_agents: &[String]) -> Result<(Addressee, String, bool)> {
     let input = input.trim();
     if input.is_empty() {
         return Err(anyhow!("empty input"));
     }
 
-    // Scan all whitespace-delimited words for @name tokens.
-    let mut matched: Vec<String> = Vec::new();
+    // Scan all whitespace-delimited words for @name and #name tokens.
+    let mut at_matched: Vec<String> = Vec::new();
+    let mut hash_matched: Vec<String> = Vec::new();
     for word in input.split_whitespace() {
-        if let Some(name) = word.strip_prefix('@') {
-            if (name == "all" || known_agents.contains(&name.to_string()))
-                && !matched.contains(&name.to_string())
-            {
-                matched.push(name.to_string());
-            }
-        }
+        if let Some(name) = word.strip_prefix('@') { /* ... */ }
+        else if let Some(name) = word.strip_prefix('#') { /* ... */ }
     }
 
-    let message = input.to_string(); // full original input, not stripped
+    // Reject mixing @ and #, reject #all.
+    let is_whisper = !hash_matched.is_empty();
+    let matched = if is_whisper { hash_matched } else { at_matched };
 
     if matched.is_empty() {
-        Ok((Addressee::LastRespondent, message))
+        Ok((Addressee::LastRespondent, message, false))
     } else if matched.iter().any(|n| n == "all") {
-        Ok((Addressee::All, message))  // @all takes priority
+        Ok((Addressee::All, message, false))
     } else if matched.len() == 1 {
-        Ok((Addressee::Single(matched[0].clone()), message))
+        Ok((Addressee::Single(matched[0].clone()), message, is_whisper))
     } else {
-        Ok((Addressee::Multiple(matched), message))
+        Ok((Addressee::Multiple(matched), message, is_whisper))
     }
 }
 ```
@@ -258,6 +256,10 @@ fn parse_input(input: &str, known_agents: &[String]) -> Result<(Addressee, Strin
 - `@unknown 你好` → `Addressee::LastRespondent`（未知 agent 名被忽略）
 - `@`（裸 @）→ 当作普通文本，`Addressee::LastRespondent`
 - 空输入 → 报错
+- `#opus hello` → `Addressee::Single("opus")`, `is_whisper = true`
+- `#opus #gemini discuss` → `Addressee::Multiple(["opus", "gemini"])`, `is_whisper = true`
+- `#all hello` → 报错（禁止）
+- `@gpt #opus hello` → 报错（`@` 和 `#` 不可混用）
 
 #### 3.2.2 路由规则
 
@@ -267,6 +269,8 @@ fn parse_input(input: &str, known_agents: &[String]) -> Result<(Addressee, Strin
 | `@gpt` | 仅 gpt | 全部可见（上下文共享） |
 | `@gpt @opus` | gpt 和 opus（按 @ 出现顺序串行） | 全部可见 |
 | 无识别的 @ | 上一个回答者（无则提示指定） | 全部可见 |
+| `#opus` | 仅 opus | 仅 opus 可见内容，其他 Agent 看到占位符 |
+| `#opus #gemini` | opus 和 gemini | 组内成员互相可见，组外 Agent 看到占位符 |
 
 ### 3.3 LLM Client 抽象层
 
@@ -945,6 +949,7 @@ struct ChatMessage {
     role: Role,
     agent_name: Option<String>,     // assistant 消息标明来源 Agent
     addressee: Option<String>,      // user 消息的目标: "all" | agent_name（恢复会话时用于还原对话流）
+    whisper_targets: Option<Vec<String>>,  // 密语目标 Agent 列表（设置时仅组内可见）
     content: MessageContent,
     tool_calls: Option<Vec<ToolCall>>,
     tool_results: Option<Vec<ToolCallResult>>,
@@ -1402,3 +1407,4 @@ krew-cli
 - ~~**v0.3**: 自定义 Slash 命令（用户可扩展命令系统）~~ ✅ 已完成
 - ~~**v0.4**: Agent 间可 @对方 形成 AI-to-AI 对话（支持 immediate/queued 两种路由策略，`agent_to_agent_max_rounds` 轮次限制）~~ ✅ 已完成
 - ~~**v0.4.2**: 非交互式 Prompt 模式（`-p`），支持 stdin 管道、text/json 输出格式、全自动审批、AI-to-AI 路由、session 持久化~~ ✅ 已完成
+- ~~**v0.5.0**: 密语模式（`#agent`），支持单目标/多目标私密消息、密语组内 A2A、消息可见性过滤、密语压缩保留、TUI/P 模式锁图标显示~~ ✅ 已完成

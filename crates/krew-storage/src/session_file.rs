@@ -52,6 +52,9 @@ pub struct MessageEntry {
     /// Server-side tool uses (e.g. web_search) for display on resume.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub server_tool_uses: Vec<ServerToolUseEntry>,
+    /// Whisper targets: agents that can see this message (TOML native array).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub whisper_targets: Option<Vec<String>>,
     pub created_at: DateTime<Utc>,
 }
 
