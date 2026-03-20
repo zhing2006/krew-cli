@@ -103,36 +103,44 @@ pub fn resolve_dispatch_queue(
 /// are excluded. Returns matched names in text appearance order (no duplicates).
 pub fn parse_agent_mentions(text: &str, known_agents: &[String], self_name: &str) -> Vec<String> {
     let mut matched: Vec<String> = Vec::new();
-    for word in text.split_whitespace() {
-        if let Some(raw_name) = word.strip_prefix('@') {
-            if raw_name.is_empty() {
+    // Scan for every '@' in the text (not just whitespace-delimited tokens),
+    // so that CJK punctuation like "太好了！@gemini" is handled correctly.
+    for (at_pos, _) in text.match_indices('@') {
+        let after = &text[at_pos + 1..];
+        if after.is_empty() {
+            continue;
+        }
+        // Longest-prefix matching against known agents.
+        let found = known_agents
+            .iter()
+            .filter(|a| {
+                if after == a.as_str() {
+                    return true;
+                }
+                if let Some(rest) = after.strip_prefix(a.as_str()) {
+                    // Only ASCII alphanumeric chars extend the name token;
+                    // CJK characters act as delimiters (e.g. "@opus看看" matches "opus").
+                    rest.starts_with(|c: char| !c.is_ascii_alphanumeric())
+                } else {
+                    false
+                }
+            })
+            .max_by_key(|a| a.len());
+        if let Some(agent) = found {
+            let name = agent.as_str();
+            if name == "all" || name == self_name {
                 continue;
             }
-            // Longest-prefix matching against known agents. This handles
-            // trailing punctuation ("@opus,"), CJK runs without spaces
-            // ("@助手，你觉得呢"), and overlapping names ("foo" vs "foo-bar")
-            // by always picking the longest matching agent name.
-            let found = known_agents
-                .iter()
-                .filter(|a| {
-                    if raw_name == a.as_str() {
-                        return true;
-                    }
-                    if let Some(rest) = raw_name.strip_prefix(a.as_str()) {
-                        rest.starts_with(|c: char| !c.is_alphanumeric())
-                    } else {
-                        false
-                    }
-                })
-                .max_by_key(|a| a.len());
-            if let Some(agent) = found {
-                let name = agent.as_str();
-                if name == "all" || name == self_name {
+            // Skip if '@' is preceded by an ASCII alphanumeric character (e.g. "email@agent").
+            // CJK characters before '@' are fine (e.g. "问问@opus").
+            if at_pos > 0 {
+                let prev = text[..at_pos].chars().last().unwrap();
+                if prev.is_ascii_alphanumeric() {
                     continue;
                 }
-                if !matched.contains(agent) {
-                    matched.push(agent.clone());
-                }
+            }
+            if !matched.contains(agent) {
+                matched.push(agent.clone());
             }
         }
     }
@@ -151,6 +159,37 @@ pub fn apply_immediate_routing(pending: &mut VecDeque<String>, target: &str) {
         }
     } else {
         pending.push_front(target.to_string());
+    }
+}
+
+/// Apply the "immediate" AI-to-AI routing strategy using a cursor position.
+///
+/// New a2a targets are inserted at `cursor` (not at position 0), so they
+/// don't jump ahead of earlier a2a entries. After insertion, `cursor` is
+/// incremented. If the target already exists in the queue, it is moved to
+/// the cursor position instead.
+pub fn apply_immediate_routing_at(
+    pending: &mut VecDeque<String>,
+    target: &str,
+    cursor: &mut usize,
+) {
+    // Clamp cursor to queue length.
+    let pos = (*cursor).min(pending.len());
+    if let Some(existing) = pending.iter().position(|n| n == target) {
+        if existing != pos {
+            pending.remove(existing);
+            // Adjust insertion point if the removed element was before it.
+            let insert_at = if existing < pos { pos - 1 } else { pos };
+            pending.insert(insert_at, target.to_string());
+            *cursor = insert_at + 1;
+        }
+        // Already at the right position — just advance cursor past it.
+        else {
+            *cursor = pos + 1;
+        }
+    } else {
+        pending.insert(pos, target.to_string());
+        *cursor = pos + 1;
     }
 }
 
