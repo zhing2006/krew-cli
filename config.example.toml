@@ -7,6 +7,8 @@ reply_order = ["gpt", "opus", "sonnet", "gemini", "doubao"]
 auto_compact_threshold = 120000        # auto-compact token threshold (0 = disabled)
 paste_burst_detection = true           # timing-based paste detection for Windows (auto-disables if terminal supports bracketed paste)
 worker_threads = 4                     # tokio worker thread count (default: 4)
+agent_to_agent_routing = "immediate"   # immediate | queued — how @mentioned agents are scheduled
+agent_to_agent_max_rounds = 10         # max AI-to-AI rounds per user turn (0 = disabled)
 
 # Shell commands auto-approved without user confirmation (prefix-matched).
 # "ls" matches all ls invocations; "cargo build" matches only cargo build (not cargo test).
