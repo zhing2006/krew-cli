@@ -52,12 +52,12 @@ pub fn parse_input(
 
     // Reject mixing @ and # addressing.
     if !at_matched.is_empty() && !hash_matched.is_empty() {
-        anyhow::bail!("不能同时使用 @ 和 # 寻址");
+        anyhow::bail!("cannot mix @ and # addressing in the same message");
     }
 
     // Reject #all.
     if hash_matched.iter().any(|n| n == "all") {
-        anyhow::bail!("#all 没有意义——对所有 agent 密语等同于普通消息，请直接发送或使用 @all");
+        anyhow::bail!("#all is not supported — whispering to all agents is the same as a normal message, use @all instead");
     }
 
     let message = input.to_string();
