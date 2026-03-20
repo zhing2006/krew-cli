@@ -5,6 +5,7 @@ pub mod agent;
 pub mod command;
 pub mod compact;
 pub mod custom_command;
+pub mod discovery;
 pub mod event;
 pub mod persistence;
 pub mod process_stats;

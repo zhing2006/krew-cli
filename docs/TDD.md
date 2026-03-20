@@ -740,10 +740,16 @@ total_tokens = 5642
 ```txt
 内置默认值
     ↓ 被覆盖
-.krew/settings.toml           (项目级配置)
+~/.krew/settings.toml         (用户级配置：providers、偏好、全局 MCP)
+    ↓ 被覆盖
+.krew/settings.toml           (项目级配置：agents、reply_order、项目覆盖)
     ↓ 被覆盖
 CLI 参数                      (命令行覆盖)
 ```
+
+加载流程：`UserConfig::load()` → `RawConfig::load()` → `merge_user()` → `resolve()` → `apply_cli_overrides()` → `validate()`。
+
+`RawConfig` / `UserConfig` 为 partial 类型（settings 字段全部 `Option`），保留字段存在性用于合并。合并后由 `resolve()` 填充默认值生成最终 `Config`。
 
 #### 3.7.2 配置数据结构
 
@@ -1314,7 +1320,7 @@ krew-cli
 | TUI | Ratatui 全功能 | Ratatui 简化版 |
 | 会话存储 | SQLite + JSONL | TOML 文件 |
 | 工具系统 | MCP + 内置 + 沙箱 | MCP + 内置（无沙箱） |
-| 配置 | TOML 多层 | TOML 单层（仅项目级） |
+| 配置 | TOML 多层 | TOML 双层（用户级 + 项目级） |
 | 审批系统 | 多级策略 | 简化三级策略 |
 
 ---

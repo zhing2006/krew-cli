@@ -113,25 +113,18 @@ pub fn extract_frontmatter(content: &str) -> Option<(&str, &str)> {
 /// Discover all skills from default and extra paths.
 ///
 /// Default scan paths (in priority order):
-/// 1. `<cwd>/.krew/skills/` (project, client-specific)
+/// 1. `<cwd>/.krew/skills/` (project, krew-specific)
 /// 2. `<cwd>/.agents/skills/` (project, cross-client)
-/// 3. `~/.krew/skills/` (user, client-specific)
-/// 4. `~/.agents/skills/` (user, cross-client)
+/// 3. `<cwd>/.claude/skills/` (project, Claude Code compat)
+/// 4. `<home>/.krew/skills/` (user, krew-specific)
+/// 5. `<home>/.agents/skills/` (user, cross-client)
+/// 6. `<home>/.claude/skills/` (user, Claude Code compat)
 ///
 /// First-found wins on name collisions.
 pub fn discover_skills(cwd: &Path, extra_paths: &[PathBuf]) -> Vec<SkillRecord> {
     let mut seen: HashMap<String, SkillRecord> = HashMap::new();
 
-    // Build scan paths in priority order.
-    let mut scan_paths: Vec<PathBuf> = vec![
-        cwd.join(".krew").join("skills"),
-        cwd.join(".agents").join("skills"),
-    ];
-
-    if let Some(home) = dirs_home() {
-        scan_paths.push(home.join(".krew").join("skills"));
-        scan_paths.push(home.join(".agents").join("skills"));
-    }
+    let mut scan_paths = crate::discovery::discovery_paths(cwd, "skills");
 
     for extra in extra_paths {
         scan_paths.push(extra.clone());
@@ -194,14 +187,6 @@ fn scan_directory(dir: &Path, seen: &mut HashMap<String, SkillRecord>) {
             }
         }
     }
-}
-
-/// Get the user's home directory.
-fn dirs_home() -> Option<PathBuf> {
-    // Use HOME env on Unix, USERPROFILE on Windows.
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
 }
 
 #[cfg(test)]

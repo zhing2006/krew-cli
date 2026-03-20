@@ -1,8 +1,10 @@
 mod defaults;
 pub mod instructions;
+mod raw;
 
 pub use defaults::*;
 pub use instructions::load_project_instructions;
+pub use raw::{RawConfig, RawSettings, USER_CONFIG_DIR, UserConfig, UserSettings};
 
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -448,6 +450,10 @@ pub enum McpTrust {
 
 impl Config {
     /// Load configuration from a TOML file.
+    ///
+    /// Deserializes directly into `Config` (strict: required fields like
+    /// `agents` and `reply_order` must be present). For the permissive
+    /// partial-config path used during user+project merge, use `RawConfig::load()`.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let content = std::fs::read_to_string(path)?;
         Ok(toml::from_str(&content)?)
