@@ -69,6 +69,41 @@ fn load_invalid_toml() {
     assert!(matches!(result.unwrap_err(), ConfigError::Parse(_)));
 }
 
+#[test]
+fn load_missing_agents_is_parse_error() {
+    // Config::load() should reject a file with no [[agents]] section.
+    let toml = r#"
+[settings]
+approval_mode = "suggest"
+reply_order = []
+
+[providers.openai]
+type = "openai"
+api_key_env = "KEY"
+"#;
+    let mut f = NamedTempFile::new().unwrap();
+    f.write_all(toml.as_bytes()).unwrap();
+    let result = Config::load(f.path());
+    assert!(result.is_err(), "missing [[agents]] should fail at parse time");
+}
+
+#[test]
+fn load_missing_settings_is_parse_error() {
+    // Config::load() should reject a file with no [settings] section.
+    let toml = r#"
+[[agents]]
+name = "a"
+display_name = "A"
+provider = "builtin"
+model = "echo"
+color = "red"
+"#;
+    let mut f = NamedTempFile::new().unwrap();
+    f.write_all(toml.as_bytes()).unwrap();
+    let result = Config::load(f.path());
+    assert!(result.is_err(), "missing [settings] should fail at parse time");
+}
+
 // ── Config::default() ───────────────────────────────────────────────────
 
 #[test]

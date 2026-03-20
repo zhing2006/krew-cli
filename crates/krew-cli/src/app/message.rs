@@ -78,7 +78,10 @@ impl App {
 
         // Task 3.5: Block if LastRespondent has no value.
         if matches!(&addressee, Addressee::LastRespondent) && resolved_last.is_none() {
-            self.show_error(terminal, "No agent has replied yet — use @name to specify a target agent")?;
+            self.show_error(
+                terminal,
+                "No agent has replied yet — use @name to specify a target agent",
+            )?;
             self.clear_textarea();
             return Ok(());
         }
@@ -177,7 +180,10 @@ impl App {
         };
 
         if matches!(&addressee, Addressee::LastRespondent) && resolved_last.is_none() {
-            return self.show_error(terminal, "No agent has replied yet — use @name to specify a target agent");
+            return self.show_error(
+                terminal,
+                "No agent has replied yet — use @name to specify a target agent",
+            );
         }
 
         let available: std::collections::HashSet<String> = self.agents.keys().cloned().collect();
