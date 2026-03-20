@@ -98,7 +98,8 @@ impl AgentRuntime {
                 .collect();
             format!(
                 "{identity}\n\
-                 To collaborate with other agents, mention them with @name in your response.\n\
+                 You can ask another agent to respond by writing @name (with spaces before and after, e.g. \" @opus \").\n\
+                 Only use @name when you need that agent to reply — do NOT use @ when merely mentioning an agent by name.\n\
                  Other agents: {}.",
                 peer_list.join(", ")
             )
