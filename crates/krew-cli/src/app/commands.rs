@@ -4,7 +4,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use krew_core::command::SlashCommand;
-use krew_llm::ChatRole;
+use krew_llm::{ChatMessage, ChatRole};
 
 use crate::completion::{ActivePopup, CompletionItem, CompletionState};
 use crate::custom_terminal;
@@ -55,6 +55,9 @@ impl App {
             }
             SlashCommand::Skills => {
                 self.execute_skills(terminal)?;
+            }
+            SlashCommand::Rewind => {
+                self.execute_rewind(terminal)?;
             }
         }
         Ok(())
@@ -113,6 +116,12 @@ impl App {
         agent_arg: String,
         terminal: &mut custom_terminal::Terminal,
     ) -> anyhow::Result<()> {
+        if self.rewound {
+            return self.show_info(
+                terminal,
+                "Cannot compact in rewound state — send a new message first",
+            );
+        }
         if self.messages.is_empty() {
             return self.show_info(terminal, "Nothing to compact — session is empty");
         }
@@ -325,8 +334,10 @@ impl App {
             agent.tools.reset_session_state();
         }
 
-        // Generate new session ID.
+        // Generate new session ID and reset creation time.
         self.session_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
+        self.session_created_at = chrono::Utc::now();
+        self.rewound = false;
 
         // Clear screen and re-display header with new session ID.
         terminal.clear()?;
@@ -338,6 +349,270 @@ impl App {
             terminal,
             &format!("New session started: {}", self.session_id),
         )?;
+
+        Ok(())
+    }
+
+    /// Execute /rewind: open a rewind picker popup showing all user messages.
+    fn execute_rewind(&mut self, terminal: &mut custom_terminal::Terminal) -> anyhow::Result<()> {
+        // Collect user messages with their original indices.
+        let user_msgs: Vec<(usize, &ChatMessage)> = self
+            .messages
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.role == ChatRole::User)
+            .collect();
+
+        if user_msgs.is_empty() {
+            return self.show_info(terminal, "Nothing to rewind \u{2014} no messages yet");
+        }
+
+        // Build popup items in chronological order.
+        let items: Vec<CompletionItem> = user_msgs
+            .iter()
+            .map(|&(idx, msg)| {
+                let time_str = msg.created_at.format("%H:%M:%S").to_string();
+                let preview: String = msg.content.chars().take(40).collect();
+                let preview = preview.replace('\n', " ");
+                CompletionItem {
+                    value: idx.to_string(),
+                    description: format!("{time_str}  \"{preview}\""),
+                }
+            })
+            .collect();
+
+        // Default selection: last item (most recent user message).
+        let mut state = CompletionState::new(items);
+        let last_idx = state.visible_items().len().saturating_sub(1);
+        state.selected = last_idx;
+
+        self.popup = ActivePopup::RewindPicker(state);
+        Ok(())
+    }
+
+    /// Apply rewind: truncate messages to the given index and replay.
+    pub(crate) fn apply_rewind(
+        &mut self,
+        msg_index: usize,
+        terminal: &mut custom_terminal::Terminal,
+    ) -> anyhow::Result<()> {
+        // If selecting the first user message (index 0), treat as /clear.
+        if msg_index == 0 {
+            return self.execute_new(terminal);
+        }
+
+        // Truncate messages.
+        self.messages.truncate(msg_index);
+
+        // Rebuild token usage from remaining messages (last occurrence per agent).
+        self.agent_token_usage.clear();
+        for msg in self.messages.iter().rev() {
+            if msg.role == ChatRole::Assistant
+                && let Some(name) = &msg.name
+                && let Some(usage) = &msg.usage
+            {
+                self.agent_token_usage
+                    .entry(name.clone())
+                    .or_insert((usage.prompt_tokens, usage.completion_tokens));
+            }
+        }
+
+        // Rebuild last_respondent.
+        self.last_respondent = self
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == ChatRole::Assistant && m.name.is_some())
+            .and_then(|m| m.name.clone());
+
+        // Reset session-scoped tool state and rebuild skill activation.
+        let activated_skills: Vec<String> = self
+            .messages
+            .iter()
+            .filter(|m| m.role == ChatRole::Tool && m.content.contains("<skill_content"))
+            .filter_map(|m| {
+                m.content.find("name=\"").and_then(|start| {
+                    let rest = &m.content[start + 6..];
+                    rest.find('"').map(|end| rest[..end].to_string())
+                })
+            })
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        for agent in self.agents.values() {
+            agent.tools.restore_skill_state(&activated_skills);
+        }
+
+        // Set rewound state (fork semantics).
+        self.rewound = true;
+
+        // Replay truncated messages on screen.
+        let agent_names: Vec<String> = self
+            .config
+            .agents
+            .iter()
+            .filter(|a| self.agents.contains_key(&a.name))
+            .map(|a| a.name.clone())
+            .collect();
+        let snapshot = krew_core::persistence::SessionSnapshot {
+            session_id: &self.session_id,
+            cwd: &self.cwd,
+            agent_names,
+            messages: &self.messages,
+            token_usage: &self.agent_token_usage,
+            created_at: self.session_created_at,
+        };
+        let session_file = krew_core::persistence::build_session_file(&snapshot);
+
+        // Clear screen and replay.
+        terminal.clear()?;
+        let size = terminal.size()?;
+        terminal.set_viewport_area(ratatui::layout::Rect::new(0, 0, size.width, 0));
+        render::insert_header(terminal, self)?;
+        self.replay_messages(&session_file.messages, terminal)?;
+
+        self.show_info(terminal, "Rewound to selected message")?;
+        Ok(())
+    }
+
+    /// Replay messages on screen from serialized MessageEntry list.
+    ///
+    /// Extracted from `load_session()` for reuse by rewind.
+    fn replay_messages(
+        &self,
+        messages: &[krew_storage::session_file::MessageEntry],
+        terminal: &mut custom_terminal::Terminal,
+    ) -> anyhow::Result<()> {
+        let mut header_shown_for: Option<String> = None;
+
+        for msg in messages {
+            match msg.role.as_str() {
+                "user" => {
+                    header_shown_for = None;
+                    let is_whisper = msg.whisper_targets.is_some();
+                    let target_refs: Vec<&str> = if let Some(ref wt) = msg.whisper_targets {
+                        wt.iter().map(|s| s.as_str()).collect()
+                    } else if let Some(ref addr) = msg.addressee {
+                        if addr == "all" {
+                            self.config.agents.iter().map(|a| a.name.as_str()).collect()
+                        } else {
+                            addr.split(',').collect()
+                        }
+                    } else {
+                        vec![]
+                    };
+                    self.insert_user_message(terminal, &target_refs, &msg.content, is_whisper)?;
+                }
+                "assistant" => {
+                    if let Some(agent_name) = &msg.agent_name {
+                        let already_shown = header_shown_for
+                            .as_ref()
+                            .is_some_and(|shown| shown == agent_name);
+                        if !already_shown {
+                            let agent_cfg =
+                                self.config.agents.iter().find(|a| &a.name == agent_name);
+                            let display_name = agent_cfg
+                                .map(|a| a.display_name.as_str())
+                                .unwrap_or(agent_name);
+                            let color_name = agent_cfg.map(|a| a.color.as_str()).unwrap_or("white");
+                            let is_whisper = msg.whisper_targets.is_some();
+                            self.insert_agent_header(
+                                terminal,
+                                agent_name,
+                                display_name,
+                                color_name,
+                                is_whisper,
+                            )?;
+                            header_shown_for = Some(agent_name.clone());
+                        }
+                    }
+
+                    if let Some(ref tool_calls) = msg.tool_calls {
+                        if !msg.content.is_empty() {
+                            let md_lines = render::markdown::render_markdown(&msg.content);
+                            self.insert_indented_lines(terminal, md_lines)?;
+                        }
+                        for tc in tool_calls {
+                            let display = format_tool_call_display(&tc.name, &tc.arguments);
+                            let yellow = Style::default().fg(Color::Yellow);
+                            self.insert_tool_line(terminal, "\u{26A1} ", yellow, display)?;
+
+                            let width = terminal.size().map(|s| s.width as usize).unwrap_or(80);
+                            let preview = render_tool_diff_preview(&tc.name, &tc.arguments, width);
+                            if !preview.is_empty() {
+                                terminal.insert_lines_above(preview)?;
+                            }
+                        }
+                    } else {
+                        let (before_text, after_text): (Vec<_>, Vec<_>) = msg
+                            .server_tool_uses
+                            .iter()
+                            .partition(|s| s.name != "google_search");
+
+                        for stu in &before_text {
+                            let bold = Style::default().add_modifier(Modifier::BOLD);
+                            let display = vec![Span::styled(stu.name.clone(), bold)];
+                            let cyan = Style::default().fg(Color::Cyan);
+                            self.insert_tool_line(terminal, "\u{1F310} ", cyan, display)?;
+                            let dim = Style::default().fg(Color::DarkGray);
+                            let summary = stu
+                                .query
+                                .as_ref()
+                                .map(|q| format!("\"{q}\""))
+                                .unwrap_or_default();
+                            self.insert_tool_line(
+                                terminal,
+                                "   \u{23BF}  ",
+                                dim,
+                                vec![Span::raw(summary)],
+                            )?;
+                            terminal.insert_lines_above(vec![Line::default()])?;
+                        }
+
+                        let md_lines = render::markdown::render_markdown(&msg.content);
+                        self.insert_indented_lines(terminal, md_lines)?;
+
+                        for stu in &after_text {
+                            let bold = Style::default().add_modifier(Modifier::BOLD);
+                            let normal = Style::default();
+                            let done_name = format!("{}_done", stu.name);
+                            let display = if let Some(q) = &stu.query {
+                                vec![
+                                    Span::styled(done_name, bold),
+                                    Span::styled(format!("(\"{q}\")"), normal),
+                                ]
+                            } else {
+                                vec![Span::styled(done_name, bold)]
+                            };
+                            let cyan = Style::default().fg(Color::Cyan);
+                            self.insert_tool_line(terminal, "\u{1F310} ", cyan, display)?;
+                            terminal.insert_lines_above(vec![Line::default()])?;
+                        }
+                    }
+                }
+                "tool" => {
+                    let tool_name = msg.agent_name.as_deref().unwrap_or("tool");
+                    if tool_name == "shell"
+                        || tool_name == "fetch_url"
+                        || krew_tools::mcp::is_mcp_tool(tool_name)
+                    {
+                        let width = terminal.size().map(|s| s.width as usize).unwrap_or(80);
+                        render_resume_shell_output(terminal, &msg.content, width)?;
+                    }
+
+                    let summary = generate_tool_result_summary(tool_name, &msg.content);
+                    let dim = Style::default().fg(Color::DarkGray);
+                    self.insert_tool_line(
+                        terminal,
+                        "   \u{23BF}  ",
+                        dim,
+                        vec![Span::raw(summary)],
+                    )?;
+                    terminal.insert_lines_above(vec![Line::default()])?;
+                }
+                _ => {}
+            }
+        }
 
         Ok(())
     }
@@ -412,6 +687,9 @@ impl App {
             agent.tools.restore_skill_state(&activated_skills);
         }
 
+        // Session loaded successfully — clear rewound so save_session() works normally.
+        self.rewound = false;
+
         // Clear screen and show header with restored session ID.
         terminal.clear()?;
         let size = terminal.size()?;
@@ -419,150 +697,7 @@ impl App {
         render::insert_header(terminal, self)?;
 
         // Replay messages visually (TUI concern).
-        // Track whether the agent header has been shown for the current agent turn
-        // so we don't duplicate it across tool-call rounds.
-        let mut header_shown_for: Option<String> = None;
-
-        for msg in &restored.session_file.messages {
-            match msg.role.as_str() {
-                "user" => {
-                    header_shown_for = None;
-                    let is_whisper = msg.whisper_targets.is_some();
-                    // Resolve target names from addressee or whisper_targets for colored dots.
-                    let target_refs: Vec<&str> = if let Some(ref wt) = msg.whisper_targets {
-                        wt.iter().map(|s| s.as_str()).collect()
-                    } else if let Some(ref addr) = msg.addressee {
-                        if addr == "all" {
-                            self.config.agents.iter().map(|a| a.name.as_str()).collect()
-                        } else {
-                            addr.split(',').collect()
-                        }
-                    } else {
-                        vec![]
-                    };
-                    self.insert_user_message(terminal, &target_refs, &msg.content, is_whisper)?;
-                }
-                "assistant" => {
-                    // Show agent header if this is the first assistant message
-                    // for this agent (across tool-call rounds).
-                    if let Some(agent_name) = &msg.agent_name {
-                        let already_shown = header_shown_for
-                            .as_ref()
-                            .is_some_and(|shown| shown == agent_name);
-                        if !already_shown {
-                            let agent_cfg =
-                                self.config.agents.iter().find(|a| &a.name == agent_name);
-                            let display_name = agent_cfg
-                                .map(|a| a.display_name.as_str())
-                                .unwrap_or(agent_name);
-                            let color_name = agent_cfg.map(|a| a.color.as_str()).unwrap_or("white");
-                            let is_whisper = msg.whisper_targets.is_some();
-                            self.insert_agent_header(
-                                terminal,
-                                agent_name,
-                                display_name,
-                                color_name,
-                                is_whisper,
-                            )?;
-                            header_shown_for = Some(agent_name.clone());
-                        }
-                    }
-
-                    if let Some(ref tool_calls) = msg.tool_calls {
-                        // Assistant message with tool calls: show text + tool call lines.
-                        if !msg.content.is_empty() {
-                            let md_lines = render::markdown::render_markdown(&msg.content);
-                            self.insert_indented_lines(terminal, md_lines)?;
-                        }
-                        for tc in tool_calls {
-                            let display = format_tool_call_display(&tc.name, &tc.arguments);
-                            let yellow = Style::default().fg(Color::Yellow);
-                            self.insert_tool_line(terminal, "\u{26A1} ", yellow, display)?;
-
-                            // Render diff preview for write/edit tools (same as streaming).
-                            let width = terminal.size().map(|s| s.width as usize).unwrap_or(80);
-                            let preview = render_tool_diff_preview(&tc.name, &tc.arguments, width);
-                            if !preview.is_empty() {
-                                terminal.insert_lines_above(preview)?;
-                            }
-                        }
-                    } else {
-                        // Regular text-only assistant message.
-                        // Split server tool uses: "before text" (begin/end) vs "after text" (Gemini).
-                        let (before_text, after_text): (Vec<_>, Vec<_>) = msg
-                            .server_tool_uses
-                            .iter()
-                            .partition(|s| s.name != "google_search");
-
-                        // Render before-text server tools (OpenAI/Anthropic) in begin/end format.
-                        for stu in &before_text {
-                            let bold = Style::default().add_modifier(Modifier::BOLD);
-                            let display = vec![Span::styled(stu.name.clone(), bold)];
-                            let cyan = Style::default().fg(Color::Cyan);
-                            self.insert_tool_line(terminal, "\u{1F310} ", cyan, display)?;
-                            let dim = Style::default().fg(Color::DarkGray);
-                            let summary = stu
-                                .query
-                                .as_ref()
-                                .map(|q| format!("\"{q}\""))
-                                .unwrap_or_default();
-                            self.insert_tool_line(
-                                terminal,
-                                "   \u{23BF}  ",
-                                dim,
-                                vec![Span::raw(summary)],
-                            )?;
-                            terminal.insert_lines_above(vec![Line::default()])?;
-                        }
-
-                        let md_lines = render::markdown::render_markdown(&msg.content);
-                        self.insert_indented_lines(terminal, md_lines)?;
-
-                        // Render after-text server tools (Gemini) as full 🌐 line with query.
-                        for stu in &after_text {
-                            let bold = Style::default().add_modifier(Modifier::BOLD);
-                            let normal = Style::default();
-                            let done_name = format!("{}_done", stu.name);
-                            let display = if let Some(q) = &stu.query {
-                                vec![
-                                    Span::styled(done_name, bold),
-                                    Span::styled(format!("(\"{q}\")"), normal),
-                                ]
-                            } else {
-                                vec![Span::styled(done_name, bold)]
-                            };
-                            let cyan = Style::default().fg(Color::Cyan);
-                            self.insert_tool_line(terminal, "\u{1F310} ", cyan, display)?;
-                            terminal.insert_lines_above(vec![Line::default()])?;
-                        }
-                    }
-                }
-                "tool" => {
-                    // Tool result message: show shell output and summary line.
-                    let tool_name = msg.agent_name.as_deref().unwrap_or("tool");
-
-                    // Render shell/MCP/fetch_url output with separators (same as streaming).
-                    if tool_name == "shell"
-                        || tool_name == "fetch_url"
-                        || krew_tools::mcp::is_mcp_tool(tool_name)
-                    {
-                        let width = terminal.size().map(|s| s.width as usize).unwrap_or(80);
-                        render_resume_shell_output(terminal, &msg.content, width)?;
-                    }
-
-                    let summary = generate_tool_result_summary(tool_name, &msg.content);
-                    let dim = Style::default().fg(Color::DarkGray);
-                    self.insert_tool_line(
-                        terminal,
-                        "   \u{23BF}  ",
-                        dim,
-                        vec![Span::raw(summary)],
-                    )?;
-                    terminal.insert_lines_above(vec![Line::default()])?;
-                }
-                _ => {}
-            }
-        }
+        self.replay_messages(&restored.session_file.messages, terminal)?;
 
         // Update session to mark it as resumed.
         self.save_session();

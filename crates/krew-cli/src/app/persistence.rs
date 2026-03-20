@@ -6,7 +6,11 @@ use super::App;
 
 impl App {
     /// Save the current session to disk. Logs a warning on failure.
+    /// Skips saving when in rewound state (fork semantics).
     pub(crate) fn save_session(&self) {
+        if self.rewound {
+            return;
+        }
         let session_path = self.session_dir.join(format!("{}.toml", self.session_id));
 
         let agent_names: Vec<String> = self
