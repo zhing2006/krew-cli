@@ -769,6 +769,13 @@ struct Settings {
     retry: Option<RetryConfig>,           // LLM 请求重试配置
     shell_allow_commands: Option<Vec<String>>,  // 免审批 shell 命令前缀列表
     fetch_allow_domains: Option<Vec<String>>,   // 免审批 fetch_url 域名白名单
+    agent_to_agent_routing: Option<AgentToAgentRouting>,  // AI-to-AI 路由策略（默认 Immediate）
+    agent_to_agent_max_rounds: Option<u32>,               // AI-to-AI 最大轮次（默认 10，0 = 禁用）
+}
+
+enum AgentToAgentRouting {
+    Immediate,  // 目标 Agent 移到/插入队列头部（默认）
+    Queued,     // 目标 Agent 追加到队列尾部
 }
 
 #[derive(Deserialize)]
@@ -1314,6 +1321,6 @@ krew-cli
 
 ## 附录 B: 后续迭代方向
 
-- **v0.2**: Agent Skills 支持（为 Agent 配置特定技能/能力）
-- **v0.3**: 自定义 Slash 命令（用户可扩展命令系统）
-- **v0.4**: Agent 间可 @对方 形成 AI-to-AI 对话
+- ~~**v0.2**: Agent Skills 支持（为 Agent 配置特定技能/能力）~~ ✅ 已完成
+- ~~**v0.3**: 自定义 Slash 命令（用户可扩展命令系统）~~ ✅ 已完成
+- **v0.4**: Agent 间可 @对方 形成 AI-to-AI 对话（支持 immediate/queued 两种路由策略，`agent_to_agent_max_rounds` 轮次限制）

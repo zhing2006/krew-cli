@@ -326,11 +326,8 @@ async fn async_main(
 
     // Handle --resume CLI argument: resolve session ID now, replay in run().
     if let Some(resume_arg) = resume {
-        app.pending_resume_id = resolve_resume_session(
-            resume_arg,
-            &app.session_dir,
-            &mut app.startup_warnings,
-        );
+        app.pending_resume_id =
+            resolve_resume_session(resume_arg, &app.session_dir, &mut app.startup_warnings);
     }
 
     let result = app.run(&mut terminal).await;
