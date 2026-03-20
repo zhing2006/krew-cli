@@ -145,6 +145,8 @@ pub struct App {
     pub(crate) a2a_insert_cursor: usize,
     /// Current whisper targets (set during whisper dispatch, cleared when done).
     pub(crate) current_whisper_targets: Option<Vec<String>>,
+    /// Whether the session is in rewound state (fork semantics: don't save until new message).
+    pub(crate) rewound: bool,
 }
 
 impl App {
@@ -243,6 +245,7 @@ impl App {
             a2a_insert_cursor: 0,
             current_whisper_targets: None,
             session_created_at: Utc::now(),
+            rewound: false,
         })
     }
 
@@ -635,7 +638,6 @@ impl App {
                     let display = vec![ratatui::text::Span::styled(name, bold)];
                     let cyan = ratatui::style::Style::default().fg(ratatui::style::Color::Cyan);
                     self.insert_tool_line(terminal, "\u{1F310} ", cyan, display)?;
-                    terminal.insert_lines_above(vec![ratatui::text::Line::default()])?;
                 }
                 self.server_tool_started = true;
             }

@@ -57,7 +57,9 @@ pub fn parse_input(
 
     // Reject #all.
     if hash_matched.iter().any(|n| n == "all") {
-        anyhow::bail!("#all is not supported — whispering to all agents is the same as a normal message, use @all instead");
+        anyhow::bail!(
+            "#all is not supported — whispering to all agents is the same as a normal message, use @all instead"
+        );
     }
 
     let message = input.to_string();
