@@ -45,6 +45,12 @@ pub struct AgentRuntime {
     pub skill_catalog: Option<String>,
 }
 
+/// Information about a peer agent, used for AI-to-AI prompt injection.
+pub struct PeerAgent {
+    pub name: String,
+    pub display_name: String,
+}
+
 impl AgentRuntime {
     /// Start a streaming completion for this agent.
     ///
@@ -56,6 +62,7 @@ impl AgentRuntime {
         messages: Vec<ChatMessage>,
         project_instructions: Option<&str>,
         max_tool_rounds: Option<u32>,
+        peer_agents: Option<&[PeerAgent]>,
     ) -> mpsc::UnboundedReceiver<AgentEvent> {
         let (tx, rx) = mpsc::unbounded_channel();
 
@@ -83,6 +90,22 @@ impl AgentRuntime {
             model = self.config.model,
             name = self.config.name,
         );
+        // Append AI-to-AI collaboration hint if peer agents are available.
+        let identity = if let Some(peers) = peer_agents.filter(|p| !p.is_empty()) {
+            let peer_list: Vec<String> = peers
+                .iter()
+                .map(|p| format!("[{}] {}", p.name, p.display_name))
+                .collect();
+            format!(
+                "{identity}\n\
+                 To collaborate with other agents, mention them with @name in your response.\n\
+                 Other agents: {}.",
+                peer_list.join(", ")
+            )
+        } else {
+            identity
+        };
+
         let agent_prompt = match &self.config.system_prompt {
             Some(prompt) if !prompt.is_empty() => format!("{identity}\n\n{prompt}"),
             _ => identity,

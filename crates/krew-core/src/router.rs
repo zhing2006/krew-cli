@@ -96,6 +96,74 @@ pub fn resolve_dispatch_queue(
     queue
 }
 
+/// Parse an agent's response text for `@agent_name` mentions.
+///
+/// Scans whitespace-delimited tokens for `@name` patterns, strips trailing
+/// punctuation, and matches against `known_agents`. Self-mentions and `@all`
+/// are excluded. Returns matched names in text appearance order (no duplicates).
+pub fn parse_agent_mentions(text: &str, known_agents: &[String], self_name: &str) -> Vec<String> {
+    let mut matched: Vec<String> = Vec::new();
+    for word in text.split_whitespace() {
+        if let Some(raw_name) = word.strip_prefix('@') {
+            if raw_name.is_empty() {
+                continue;
+            }
+            // Longest-prefix matching against known agents. This handles
+            // trailing punctuation ("@opus,"), CJK runs without spaces
+            // ("@助手，你觉得呢"), and overlapping names ("foo" vs "foo-bar")
+            // by always picking the longest matching agent name.
+            let found = known_agents
+                .iter()
+                .filter(|a| {
+                    if raw_name == a.as_str() {
+                        return true;
+                    }
+                    if let Some(rest) = raw_name.strip_prefix(a.as_str()) {
+                        rest.starts_with(|c: char| !c.is_alphanumeric())
+                    } else {
+                        false
+                    }
+                })
+                .max_by_key(|a| a.len());
+            if let Some(agent) = found {
+                let name = agent.as_str();
+                if name == "all" || name == self_name {
+                    continue;
+                }
+                if !matched.contains(agent) {
+                    matched.push(agent.clone());
+                }
+            }
+        }
+    }
+    matched
+}
+
+/// Apply the "immediate" AI-to-AI routing strategy to the pending queue.
+///
+/// If the target is already in the queue, move it to the front.
+/// If not, insert it at the front.
+pub fn apply_immediate_routing(pending: &mut VecDeque<String>, target: &str) {
+    if let Some(pos) = pending.iter().position(|n| n == target) {
+        if pos != 0 {
+            pending.remove(pos);
+            pending.push_front(target.to_string());
+        }
+    } else {
+        pending.push_front(target.to_string());
+    }
+}
+
+/// Apply the "queued" AI-to-AI routing strategy to the pending queue.
+///
+/// If the target is not in the queue, append it to the back.
+/// If already present, do nothing.
+pub fn apply_queued_routing(pending: &mut VecDeque<String>, target: &str) {
+    if !pending.iter().any(|n| n == target) {
+        pending.push_back(target.to_string());
+    }
+}
+
 /// Resolve the list of target agent names for display purposes (e.g. colored
 /// routing dots in the TUI).
 pub fn resolve_target_names<'a>(
