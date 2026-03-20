@@ -124,7 +124,31 @@ krew> /resume
 krew> @all 我们昨天讨论到哪了？
 ```
 
-### US-5: 工具协作
+### US-5: 非交互式 Prompt 模式
+
+> 作为一个开发者，我希望在脚本或 CI 中调用 krew，无需手动交互即可获取 AI 回复。
+
+```txt
+# 单 Agent 调用
+$ krew -p "@claude 解释一下 Rust 的所有权机制"
+[claude]
+Rust 的所有权机制是其内存安全的核心...
+
+# 管道输入 + 代码审查
+$ cat src/main.rs | krew -p "@opus review this code"
+[opus]
+⚡ read_file(src/main.rs)
+   ⎿  done
+
+我看了你的代码，建议以下改进...
+
+# JSON 格式输出（适合脚本解析）
+$ krew -p "@all hello" --format json
+{"agent":"gpt","type":"text","content":"Hello! I'm GPT..."}
+{"agent":"opus","type":"text","content":"Hello! I'm Claude..."}
+```
+
+### US-6: 工具协作
 
 > 作为一个开发者，我希望 AI 能直接读取我的项目文件、执行命令来帮我解决问题。
 
@@ -251,7 +275,91 @@ headers = { Authorization = "Bearer $TOKEN" }
 
 *Shell 命令可通过 `shell_allow_commands` 配置前缀匹配的免审批列表（如 `["ls", "cargo build", "git status"]`）。
 
-### 4.5 会话历史管理
+### 4.5 非交互式 Prompt 模式（-p）
+
+通过 `-p <prompt>` 参数进入非交互式模式，执行单次 prompt 后退出，适用于脚本、CI/CD、管道组合等场景。
+
+#### 4.5.1 基本用法
+
+```bash
+# 单 Agent
+krew -p "@claude explain ownership in Rust"
+
+# 多 Agent
+krew -p "@claude @gpt compare your approaches"
+
+# 广播所有 Agent
+krew -p "@all hello"
+```
+
+#### 4.5.2 寻址要求
+
+`-p` 模式下 prompt **必须**包含至少一个已知 `@agent` 或 `@all` 寻址，否则报错退出（exit code 2）。这是因为非交互式模式没有"上一个回答者"的概念。
+
+#### 4.5.3 stdin 管道输入
+
+支持 stdin 管道输入，内容以 `<stdin>...</stdin>` 标签包裹后拼接到 prompt 前方。寻址解析仅针对 `-p` 参数执行，stdin 中的 `@agent` 不影响路由。
+
+```bash
+# 管道输入文件内容
+cat src/main.rs | krew -p "@opus review this"
+
+# 管道输入命令输出
+git diff | krew -p "@claude summarize these changes"
+```
+
+#### 4.5.4 输出格式
+
+| 格式 | 参数 | 描述 |
+| ---- | ---- | ---- |
+| Text（默认） | `--format text` | Streaming 输出，`[agent_name]` header + 逐 token 打印 |
+| JSON | `--format json` | JSONL 格式，每行一个 JSON 对象，非 streaming |
+
+**Text 格式示例：**
+
+```txt
+[claude]
+⚡ read_file(src/main.rs)
+   ⎿  done
+
+这段代码有以下问题...
+```
+
+**JSON 格式示例：**
+
+```txt
+{"agent":"claude","type":"tool_start","tool":"read_file","arguments":"{\"path\":\"src/main.rs\"}"}
+{"agent":"claude","type":"tool_done","tool":"read_file","summary":"done"}
+{"agent":"claude","type":"text","content":"这段代码有以下问题..."}
+```
+
+#### 4.5.5 工具审批
+
+`-p` 模式下强制使用 `full-auto` 审批策略，所有工具调用自动批准，无需用户确认。
+
+#### 4.5.6 AI-to-AI 路由
+
+支持 AI-to-AI 路由：当 Agent 回复中 @mention 其他 Agent 时，按配置的路由策略自动调度，遵循 `agent_to_agent_max_rounds` 限制。
+
+#### 4.5.7 错误处理与 Exit Code
+
+| Exit Code | 含义 |
+| --------- | ---- |
+| 0 | 所有 Agent 成功完成 |
+| 1 | 任一 Agent 出错（如 API 错误） |
+| 2 | 参数/配置错误（缺少寻址、参数冲突等） |
+
+某个 Agent 出错时，继续执行队列中的下一个 Agent（与 TUI 模式一致）。错误信息输出到 stderr。
+
+#### 4.5.8 会话持久化
+
+`-p` 模式同样保存 session 到 `.krew/sessions/`，可通过 `--resume` 在 TUI 模式恢复。
+
+#### 4.5.9 参数冲突
+
+`-p` 与 `--resume` 不可同时使用，同时指定时报错退出（exit code 2）。
+
+### 4.6 会话历史管理
 
 #### 4.5.1 自动持久化
 
@@ -542,6 +650,8 @@ Options:
   -a, --agents <NAMES>          本次会话启用的 Agent（逗号分隔，覆盖配置）
       --approval-mode <MODE>    工具审批策略（suggest | auto-edit | full-auto）
       --resume [ID]             恢复指定会话（无 ID 则交互选择）
+  -p, --prompt <PROMPT>         非交互式 prompt 模式，执行后退出
+      --format <FORMAT>         prompt 模式输出格式（text | json，默认 text）
   -v, --verbose                 详细输出模式
   -h, --help                    帮助信息
   -V, --version                 版本信息
@@ -550,7 +660,7 @@ Options:
 示例：
 
 ```bash
-# 启动默认配置
+# 启动默认配置（TUI 交互模式）
 krew
 
 # 只启用两个 Agent
@@ -558,6 +668,12 @@ krew -a gpt,opus
 
 # 恢复上次会话
 krew --resume
+
+# 非交互式 prompt 模式
+krew -p "@claude explain this code"
+
+# 管道输入 + JSON 输出
+cat src/main.rs | krew -p "@opus review" --format json
 ```
 
 ---

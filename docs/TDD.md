@@ -1111,6 +1111,58 @@ struct AgentRuntime {
          继续 Agent Loop（可能触发更多工具调用）
 ```
 
+### 5.4 非交互式 Prompt 模式流程（-p）
+
+```txt
+ CLI 参数: krew -p "@claude review" (可选 stdin 管道)
+     │
+     ▼
+ 1. 验证参数（-p 与 --resume 互斥，--format 校验）
+     │
+     ▼
+ 2. 加载配置 → normalize
+     │
+     ▼
+ 3. parse_input(raw_prompt) → 解析寻址（仅从 -p 参数，不含 stdin）
+     │  └── LastRespondent → 报错退出 (exit code 2)
+     │
+     ▼
+ 4. 读取 stdin（若有管道输入）→ <stdin>...</stdin> 包裹 → 拼接到 prompt 前方
+     │
+     ▼
+ 5. 初始化 Agents → 强制 FullAuto 审批模式
+     │
+     ▼
+ 6. 初始化 MCP（若有配置）
+     │
+     ▼
+ 7. 构建 dispatch queue（根据寻址 + reply_order）
+     │
+     ▼
+ 8. 串行执行每个 Agent:
+     │
+     ├─ [agent_name] 调用 start_completion(messages)
+     │    │
+     │    ├── TextDelta → text 格式: 立即打印并 flush; json 格式: 缓存
+     │    ├── ToolCallStart → 输出 ⚡ tool(args) 或 JSON
+     │    ├── ToolCallDone → 输出 ⎿ summary 或 JSON
+     │    ├── ServerToolStart/Done → 输出 🌐 tool 或 JSON
+     │    ├── ApprovalRequest → 自动 Approved
+     │    ├── ThinkingDelta → 静默丢弃
+     │    ├── Retrying → 输出到 stderr
+     │    ├── Done(usage) → json 格式: 输出完整 text JSON
+     │    └── Error → 输出到 stderr, 标记 has_error
+     │
+     ├─ 追加 Agent 回复到 messages
+     ├─ 保存 session（每个 Agent 完成后增量保存）
+     │
+     └─ AI-to-AI 路由: 检测回复中的 @mention → 加入 dispatch queue
+          └── 受 agent_to_agent_max_rounds 限制
+     │
+     ▼
+ 9. 退出: exit code 0 (全部成功) / 1 (有错误) / 2 (参数错误)
+```
+
 ---
 
 ## 6. 项目结构
@@ -1125,6 +1177,9 @@ krew-cli/
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── main.rs             # 入口 + clap 解析 + mimalloc 全局分配器
+│   │       ├── prompt_mode/        # 非交互式 prompt 模式（-p）
+│   │       │   ├── mod.rs          # Prompt 模式主逻辑（寻址、调度、输出）
+│   │       │   └── tests.rs        # Prompt 模式单元测试
 │   │       ├── completion.rs       # @ / 补全状态管理
 │   │       ├── textarea.rs         # 多行文本输入组件
 │   │       ├── app/                # App 状态机 + 事件循环
@@ -1253,7 +1308,7 @@ krew-cli/
 
 | Crate | 职责 | 依赖 |
 | ----- | ---- | ---- |
-| `krew-cli` | CLI 入口、TUI 渲染、用户交互、审批 overlay、流式管线 | krew-core, krew-config, krew-llm, krew-tools, krew-storage |
+| `krew-cli` | CLI 入口、TUI 渲染、非交互式 prompt 模式、用户交互、审批 overlay、流式管线 | krew-core, krew-config, krew-llm, krew-tools, krew-storage |
 | `krew-core` | 会话管理、Agent Loop、消息路由、Slash 命令、Compact | krew-llm, krew-tools, krew-storage, krew-config |
 | `krew-llm` | LLM API 抽象、各 Provider 实现 | reqwest, serde, eventsource-stream |
 | `krew-tools` | 工具 trait、内置工具（含 fetch_url）、MCP 客户端 | tokio, serde, rmcp, htmd, reqwest |
@@ -1306,6 +1361,7 @@ krew-cli
 | `message.rs` | 消息序列化/反序列化 |
 | `command.rs` | Slash 命令识别与匹配 |
 | `config` | 配置加载、合并、默认值 |
+| `prompt_mode` | stdin 拼接、寻址校验、输出格式、工具参数预览 |
 | `openai_responses.rs` / `openai_chat.rs` / `anthropic.rs` / `google.rs` | 消息格式转换正确性 |
 
 ### 8.2 集成测试
@@ -1345,3 +1401,4 @@ krew-cli
 - ~~**v0.2**: Agent Skills 支持（为 Agent 配置特定技能/能力）~~ ✅ 已完成
 - ~~**v0.3**: 自定义 Slash 命令（用户可扩展命令系统）~~ ✅ 已完成
 - ~~**v0.4**: Agent 间可 @对方 形成 AI-to-AI 对话（支持 immediate/queued 两种路由策略，`agent_to_agent_max_rounds` 轮次限制）~~ ✅ 已完成
+- ~~**v0.4.2**: 非交互式 Prompt 模式（`-p`），支持 stdin 管道、text/json 输出格式、全自动审批、AI-to-AI 路由、session 持久化~~ ✅ 已完成
