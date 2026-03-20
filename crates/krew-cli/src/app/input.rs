@@ -296,7 +296,8 @@ impl App {
                     ActivePopup::SlashCommand(s)
                     | ActivePopup::AgentName(s)
                     | ActivePopup::WhisperName(s)
-                    | ActivePopup::SessionPicker(s) => s.move_up(),
+                    | ActivePopup::SessionPicker(s)
+                    | ActivePopup::RewindPicker(s) => s.move_up(),
                     ActivePopup::None => {}
                 }
                 Ok(true)
@@ -306,7 +307,8 @@ impl App {
                     ActivePopup::SlashCommand(s)
                     | ActivePopup::AgentName(s)
                     | ActivePopup::WhisperName(s)
-                    | ActivePopup::SessionPicker(s) => s.move_down(),
+                    | ActivePopup::SessionPicker(s)
+                    | ActivePopup::RewindPicker(s) => s.move_down(),
                     ActivePopup::None => {}
                 }
                 Ok(true)
@@ -346,11 +348,21 @@ impl App {
                             let session_id = item.value.clone();
                             self.popup = ActivePopup::None;
                             self.clear_textarea();
-                            // Save current session if non-empty, then load selected.
+                            // Save current session if non-empty.
+                            // In rewound state, save_session() guard skips writing (preserves original).
                             if !self.messages.is_empty() {
                                 self.save_session();
                             }
                             self.load_session(&session_id, terminal)?;
+                            return Ok(true);
+                        }
+                    }
+                    ActivePopup::RewindPicker(state) => {
+                        if let Some(item) = state.selected_item() {
+                            let msg_index: usize = item.value.parse().unwrap_or(0);
+                            self.popup = ActivePopup::None;
+                            self.clear_textarea();
+                            self.apply_rewind(msg_index, terminal)?;
                             return Ok(true);
                         }
                     }
@@ -398,7 +410,7 @@ impl App {
                     }
                 }
             }
-            ActivePopup::SessionPicker(_) | ActivePopup::None => {}
+            ActivePopup::SessionPicker(_) | ActivePopup::RewindPicker(_) | ActivePopup::None => {}
         }
         self.popup = ActivePopup::None;
     }
@@ -439,8 +451,11 @@ impl App {
 
     /// Detect whether a completion popup should be shown based on current input.
     pub(crate) fn sync_popup(&mut self) {
-        // Session picker is managed by /resume command, not input-driven.
-        if matches!(self.popup, ActivePopup::SessionPicker(_)) {
+        // Session/rewind picker is managed by commands, not input-driven.
+        if matches!(
+            self.popup,
+            ActivePopup::SessionPicker(_) | ActivePopup::RewindPicker(_)
+        ) {
             return;
         }
 

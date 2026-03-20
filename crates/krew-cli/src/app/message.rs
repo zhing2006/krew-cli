@@ -86,6 +86,14 @@ impl App {
             return Ok(());
         }
 
+        // Fork semantics: generate new session ID on first real message after rewind.
+        // All validation has passed at this point — the message will be sent.
+        if self.rewound {
+            self.session_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
+            self.session_created_at = chrono::Utc::now();
+            self.rewound = false;
+        }
+
         // Resolve target agent names for colored dots on user message.
         let available: std::collections::HashSet<String> = self.agents.keys().cloned().collect();
         let target_names = router::resolve_target_names(
@@ -196,6 +204,14 @@ impl App {
                 terminal,
                 "No agent has replied yet — use @name to specify a target agent",
             );
+        }
+
+        // Fork semantics: generate new session ID on first real message after rewind.
+        // All validation has passed at this point — the message will be sent.
+        if self.rewound {
+            self.session_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
+            self.session_created_at = chrono::Utc::now();
+            self.rewound = false;
         }
 
         let available: std::collections::HashSet<String> = self.agents.keys().cloned().collect();

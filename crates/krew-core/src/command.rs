@@ -16,6 +16,8 @@ pub enum SlashCommand {
     Stats,
     /// Show available commands.
     Help,
+    /// Rewind to a previous message.
+    Rewind,
     /// Exit the program (also aliased as /quit).
     Exit,
 }
@@ -37,6 +39,7 @@ impl SlashCommand {
             "/skills" => Some(SlashCommand::Skills),
             "/stats" => Some(SlashCommand::Stats),
             "/help" => Some(SlashCommand::Help),
+            "/rewind" => Some(SlashCommand::Rewind),
             "/exit" | "/quit" => Some(SlashCommand::Exit),
             _ => None,
         }
@@ -53,6 +56,7 @@ impl SlashCommand {
             SlashCommand::Skills => "/skills",
             SlashCommand::Stats => "/stats",
             SlashCommand::Help => "/help",
+            SlashCommand::Rewind => "/rewind",
             SlashCommand::Exit => "/exit",
         }
     }
@@ -68,6 +72,7 @@ impl SlashCommand {
             ("/skills", "List available skills"),
             ("/stats", "Show process stats (memory, threads)"),
             ("/help", "Show available commands"),
+            ("/rewind", "Rewind to a previous message"),
             ("/exit", "Exit the program (/quit)"),
         ]
     }
@@ -83,6 +88,7 @@ impl SlashCommand {
             SlashCommand::Skills => "List available skills",
             SlashCommand::Stats => "Show process stats (memory, threads)",
             SlashCommand::Help => "Show available commands",
+            SlashCommand::Rewind => "Rewind to a previous message",
             SlashCommand::Exit => "Exit the program (/quit)",
         }
     }

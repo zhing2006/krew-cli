@@ -23,6 +23,8 @@ pub enum ActivePopup {
     WhisperName(CompletionState),
     /// Session picker (triggered by `/resume`).
     SessionPicker(CompletionState),
+    /// Rewind picker (triggered by `/rewind`).
+    RewindPicker(CompletionState),
 }
 
 /// Completion item with display text and optional description.
@@ -129,7 +131,8 @@ impl ActivePopup {
             ActivePopup::SlashCommand(state)
             | ActivePopup::AgentName(state)
             | ActivePopup::WhisperName(state)
-            | ActivePopup::SessionPicker(state) => {
+            | ActivePopup::SessionPicker(state)
+            | ActivePopup::RewindPicker(state) => {
                 if state.is_empty() {
                     0
                 } else {
@@ -147,7 +150,8 @@ impl ActivePopup {
             ActivePopup::SlashCommand(s)
             | ActivePopup::AgentName(s)
             | ActivePopup::WhisperName(s)
-            | ActivePopup::SessionPicker(s) => !s.is_empty(),
+            | ActivePopup::SessionPicker(s)
+            | ActivePopup::RewindPicker(s) => !s.is_empty(),
         }
     }
 
@@ -158,7 +162,8 @@ impl ActivePopup {
             ActivePopup::SlashCommand(s)
             | ActivePopup::AgentName(s)
             | ActivePopup::WhisperName(s)
-            | ActivePopup::SessionPicker(s) => s,
+            | ActivePopup::SessionPicker(s)
+            | ActivePopup::RewindPicker(s) => s,
         };
 
         let items = state.visible_items();
