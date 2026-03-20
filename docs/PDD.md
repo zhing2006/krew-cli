@@ -300,11 +300,27 @@ headers = { Authorization = "Bearer $TOKEN" }
 
 | 位置 | 用途 |
 | ---- | ---- |
+| `~/.krew/settings.toml` | 用户级配置（providers、偏好设置、全局 MCP） |
 | `.krew/settings.toml` | 项目级配置（Agent 定义、设置、Provider 配置） |
 | `.krew/sessions/` | 会话数据（每个会话一个 .toml 文件） |
 | `.krew/logs/` | 项目级日志 |
 
-所有数据都存储在项目目录的 `.krew/` 下，不使用全局配置。
+支持两层配置：用户级（`~/.krew/settings.toml`）和项目级（`.krew/settings.toml`）。用户级配置提供 providers、API keys、偏好设置等跨项目共享配置；项目级配置定义 agents 和项目特有覆盖。合并规则：project 覆盖 user（同名 provider 整项替换，同名 MCP server 替换，标量字段 project 优先）。`agents` 和 `reply_order` 仅在项目级配置中定义。
+
+#### 4.6.1.1 Commands / Skills 多目录 Discovery
+
+自定义命令和 Skills 支持从多个目录发现，优先级从高到低：
+
+| 优先级 | 路径 | 用途 |
+| ------ | ---- | ---- |
+| 1 | `.krew/commands/` · `.krew/skills/` | 项目级，krew 专属 |
+| 2 | `.agents/commands/` · `.agents/skills/` | 项目级，跨客户端共享 |
+| 3 | `.claude/commands/` · `.claude/skills/` | 项目级，Claude Code 兼容 |
+| 4 | `~/.krew/commands/` · `~/.krew/skills/` | 用户级，krew 专属 |
+| 5 | `~/.agents/commands/` · `~/.agents/skills/` | 用户级，跨客户端共享 |
+| 6 | `~/.claude/commands/` · `~/.claude/skills/` | 用户级，Claude Code 兼容 |
+
+同名条目采用 first-found wins 策略。
 
 #### 4.6.2 配置文件结构
 

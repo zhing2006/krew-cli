@@ -1,5 +1,12 @@
 # krew-cli configuration example
 # Copy this file to .krew/settings.toml and edit as needed.
+#
+# User-level config: ~/.krew/settings.toml
+#   Supports: [settings] (preferences), [providers.*], [[mcp_servers]], [skills]
+#   Does NOT support: [[agents]], reply_order (project-only)
+#   Merge rules: project overrides user for same-key fields;
+#                providers — same-name replaced entirely;
+#                mcp_servers — same-name replaced, unique ones merged.
 
 [settings]
 approval_mode = "suggest"              # suggest | auto-edit | full-auto

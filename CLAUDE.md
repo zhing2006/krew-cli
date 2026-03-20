@@ -71,8 +71,20 @@ OpenAI agents have an `api_type` config field: `"responses"` (Responses API) or 
 
 ## Versioning
 
-When bumping the version, **all** of the following must be updated in sync:
+When bumping the version, **all** of the following files must be updated in sync:
 
-1. **Cargo workspace** — `version` in root `Cargo.toml` `[workspace.package]` and each crate's `Cargo.toml`
-2. **npm packages** — `version` in all 6 `package.json` files under `npm/` (main `krew` + 5 platform sub-packages)
+1. **Cargo crates** (6 files, `version = "x.y.z"` on line 3):
+   - `crates/krew-cli/Cargo.toml`
+   - `crates/krew-config/Cargo.toml`
+   - `crates/krew-core/Cargo.toml`
+   - `crates/krew-llm/Cargo.toml`
+   - `crates/krew-storage/Cargo.toml`
+   - `crates/krew-tools/Cargo.toml`
+2. **npm packages** (6 files, `"version"` field + dependency versions in main package):
+   - `npm/krew/package.json` (version + 5 optionalDependencies versions)
+   - `npm/krew-win32-x64/package.json`
+   - `npm/krew-linux-x64/package.json`
+   - `npm/krew-linux-arm64/package.json`
+   - `npm/krew-darwin-x64/package.json`
+   - `npm/krew-darwin-arm64/package.json`
 3. **Git tag** — create a `v{VERSION}` tag on the release commit
