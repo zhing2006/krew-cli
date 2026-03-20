@@ -87,6 +87,7 @@
 **TLS 依赖**：reqwest 0.13 默认使用 rustls，无需额外配置。关闭 `default-features` 后通过 `rustls` feature 显式启用，避免 musl 下 OpenSSL 静态编译问题。
 
 **分发方式**：
+
 - **GitHub Release**：GitHub Actions 在 `v*` tag push 时自动构建五平台二进制并创建 Release
 - **npm**：`npm install -g @zhing2026/krew`，使用 optionalDependencies 平台子包模式（`@zhing2026/krew-{platform}`）
 
@@ -180,6 +181,7 @@
 #### 3.1.1 串行执行顺序
 
 当 `@all` 时，按 `reply_order` 配置顺序**串行**执行每个 Agent 的完整 Agent Loop。前一个 Agent 跑完（包括所有工具调用）后，其回复追加到共享消息历史，下一个 Agent 才开始。这确保：
+
 - 后续 Agent 能看到前面 Agent 的回复
 - 工具调用不会冲突
 - 用户审批流程清晰
@@ -249,6 +251,7 @@ fn parse_input(input: &str, known_agents: &[String]) -> Result<(Addressee, Strin
 ```
 
 **边界情况处理：**
+
 - `hey @gpt what do you think` → `Addressee::Single("gpt")` + 原始完整输入（`@name` 可出现在任意位置）
 - `@gpt @opus 你们觉得呢` → `Addressee::Multiple(["gpt", "opus"])` + 原始完整输入
 - `@all @opus 混合` → `Addressee::All`（`@all` 优先级最高）
@@ -315,7 +318,7 @@ struct Usage {
 
 #### 3.3.2 Provider 实现
 
-**OpenAI Client**
+##### OpenAI Client
 
 同时支持两种 API，通过 Agent 配置的 `api_type` 字段选择：
 
@@ -330,7 +333,7 @@ struct Usage {
   - 请求格式: `{ model, messages: [...], tools: [...], stream: true }`
   - 响应事件: 标准 SSE `data: {"choices":[{"delta":...}]}`
 
-**Anthropic Client**
+##### Anthropic Client
 
 - API: `POST /v1/messages` (stream=true)
 - 使用 SSE 解析流式响应
@@ -339,7 +342,7 @@ struct Usage {
 - 需要处理 Anthropic 特有的 content block 结构
 - Web Search: tools 中添加 `{ type: "web_search_20250305", name: "web_search" }`，响应含 `web_search_tool_result` block 和 `citations`
 
-**Google Client**
+##### Google Client
 
 - API: Gemini `generateContent` (stream=true)
 - 使用 SSE 解析流式响应
@@ -347,7 +350,7 @@ struct Usage {
 - 消息格式: `{ role, parts: [{ text } | { functionCall }] }`
 - Web Search: tools 中添加 `{ google_search: {} }`，响应含 `groundingMetadata` 包括 `groundingChunks` 和 `groundingSupports`
 
-**OpenAI-Compatible Client**
+##### OpenAI-Compatible Client
 
 - 复用 OpenAI Client 实现，替换 base_url 和认证方式
 - 用于接入豆包（ByteDance）等第三方 OpenAI 兼容服务
@@ -369,15 +372,19 @@ struct Usage {
 | gpt 的回复 | **待定（需测试）** | 方案 A 或 B |
 
 **方案 A：其他 Agent 的回复作为 `user` role**（默认）
-```
+
+```txt
 { role: "user", content: "[gpt] GPT-5.2:\n我建议使用 VecDeque..." }
 ```
+
 优点：LLM 不会混淆自己和别人的发言。
 
 **方案 B：其他 Agent 的回复作为 `assistant` role**
-```
+
+```txt
 { role: "assistant", content: "[gpt] GPT-5.2:\n我建议使用 VecDeque..." }
 ```
+
 优点：LLM 知道这是 AI 级别的回复。
 
 > **决策：通过 `settings.other_agent_role` 配置项控制。** 默认使用方案 A（`user`），可切换为方案 B（`assistant`）。`convert_messages` 方法接收 `self_agent_name` 和 `other_agent_role` 参数。
@@ -464,6 +471,7 @@ struct RetryConfig {
 ### 3.3.7 安全边界
 
 **路径边界**：内置文件工具（read_file, write_file, edit_file, glob, grep）在执行前校验路径：
+
 - 解析后的绝对路径必须在 `session.cwd` 及其子目录内
 - 拒绝包含 `..` 的路径穿越尝试
 - 符号链接解析后仍需在边界内
@@ -582,6 +590,7 @@ impl SlashCommand {
 `/agents` 命令输出当前会话的 Agent 列表及 token 用量统计。
 
 **输出格式：**
+
 ```txt
 Agents in session:
   [gpt]    GPT-5.2          openai/gpt-5.2           3,284 tokens (1,250 in / 2,034 out)
@@ -591,6 +600,7 @@ Agents in session:
 ```
 
 **聚合规则：**
+
 - 遍历 `session.messages` 中所有 `role = Assistant` 的消息，按 `agent_name` 分组
 - 每个 Agent 累加其所有消息的 `usage.prompt_tokens` 和 `usage.completion_tokens`
 - Total 行使用 `session.total_tokens_used`
@@ -600,6 +610,7 @@ Agents in session:
 `/compact <agent_name>` 使用指定 Agent 将当前会话历史压缩为一段摘要。
 
 **流程：**
+
 ```txt
 1. 取 session.messages 中除最后 N 条外的所有消息作为"待压缩区"（N 可配，默认保留最后 3 轮）
 2. 构建压缩请求: system="请将以下对话历史压缩为简洁摘要" + 待压缩区消息
@@ -611,6 +622,7 @@ Agents in session:
 ```
 
 **关键规则：**
+
 - **备份可回滚**：compact 前自动备份，用户可手动恢复
 - **跨 Agent 一致性**：压缩后的摘要作为 System 消息注入所有 Agent 的上下文，保证所有 Agent 看到相同的历史摘要
 - **持久化格式**：摘要存储为 session 文件中的 `[compact_summary]` 段
@@ -620,6 +632,7 @@ Agents in session:
 当会话的最近一次 `prompt_tokens`（即实际发送给 LLM 的上下文大小）超过 `settings.auto_compact_threshold` 时，在下一次 Agent Loop 开始前自动触发压缩，无需用户手动执行 `/compact`。
 
 **配置：**
+
 ```toml
 [settings]
 auto_compact_threshold = 120000   # 默认 120K tokens
@@ -637,6 +650,7 @@ auto_compact_threshold = 120000   # 默认 120K tokens
 | Google Gemini | 流式最后一个 chunk 的 `usageMetadata` 字段 | `promptTokenCount`, `candidatesTokenCount`, `totalTokenCount` |
 
 **触发流程：**
+
 ```txt
 Agent 回复完成，收到 StreamEvent::Done(usage)
     │
@@ -665,6 +679,7 @@ Agent 回复完成，收到 StreamEvent::Done(usage)
 ```
 
 **关键规则：**
+
 - 使用 `reply_order` 中第一个 Agent 执行压缩（用户也可通过 `/compact <agent>` 手动选择）
 - 自动压缩同样执行备份流程，确保可回滚
 - `auto_compact_threshold = 0` 时禁用自动压缩
@@ -1315,7 +1330,7 @@ krew-cli
 | 方面 | codex | krew-cli |
 | ---- | ----- | -------- |
 | Agent 数量 | 单 Agent | 多 Agent |
-| 消息模型 | SQ/EQ 队列 | 简化的 Vec<Message> |
+| 消息模型 | SQ/EQ 队列 | 简化的 `Vec<Message>` |
 | LLM 接入 | WebSocket + HTTP SSE | HTTP SSE（更简单） |
 | TUI | Ratatui 全功能 | Ratatui 简化版 |
 | 会话存储 | SQLite + JSONL | TOML 文件 |
