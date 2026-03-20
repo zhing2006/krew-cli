@@ -2,6 +2,8 @@
 approval_mode = "suggest"
 reply_order = ["opus", "gpt", "gemini", "sonnet", "doubao"]
 compact_keep_rounds = 3
+agent_to_agent_routing = "immediate"
+agent_to_agent_max_rounds = 10
 
 [[agents]]
 name = "gemini"
