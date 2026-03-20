@@ -24,6 +24,8 @@ pub(super) struct AgentLoopContext<'a> {
     pub(super) approval_cache: &'a ApprovalCache,
     pub(super) shell_allow_commands: &'a [String],
     pub(super) fetch_allow_domains: &'a [String],
+    /// Whisper targets to stamp on all produced messages (None = not a whisper).
+    pub(super) whisper_targets: Option<Vec<String>>,
 }
 
 /// Run the agent's tool-call loop: stream LLM → execute tools → re-call LLM.
@@ -125,6 +127,7 @@ pub(super) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
             tool_call_id: None,
             server_tool_uses: Vec::new(),
             addressee: None,
+            whisper_targets: ctx.whisper_targets.clone(),
             created_at: chrono::Utc::now(),
             usage: None,
         };
@@ -332,6 +335,7 @@ pub(super) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
                 tool_call_id: Some(id),
                 server_tool_uses: Vec::new(),
                 addressee: None,
+                whisper_targets: ctx.whisper_targets.clone(),
                 created_at: chrono::Utc::now(),
                 usage: None,
             };

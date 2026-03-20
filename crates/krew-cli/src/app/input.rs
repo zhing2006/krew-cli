@@ -295,6 +295,7 @@ impl App {
                 match &mut self.popup {
                     ActivePopup::SlashCommand(s)
                     | ActivePopup::AgentName(s)
+                    | ActivePopup::WhisperName(s)
                     | ActivePopup::SessionPicker(s) => s.move_up(),
                     ActivePopup::None => {}
                 }
@@ -304,6 +305,7 @@ impl App {
                 match &mut self.popup {
                     ActivePopup::SlashCommand(s)
                     | ActivePopup::AgentName(s)
+                    | ActivePopup::WhisperName(s)
                     | ActivePopup::SessionPicker(s) => s.move_down(),
                     ActivePopup::None => {}
                 }
@@ -335,7 +337,7 @@ impl App {
                             return Ok(true);
                         }
                     }
-                    ActivePopup::AgentName(_) => {
+                    ActivePopup::AgentName(_) | ActivePopup::WhisperName(_) => {
                         self.accept_completion();
                         return Ok(true);
                     }
@@ -380,8 +382,18 @@ impl App {
                     let insert_text = format!("{mention} ");
                     // Replace the @token at cursor with the selected name,
                     // then mark the @name part as an atomic element.
-                    if let Some(at_pos) = self.replace_at_token(&insert_text) {
+                    if let Some(at_pos) = self.replace_trigger_token('@', &insert_text) {
                         let mention_range = at_pos..(at_pos + mention.len());
+                        self.textarea.add_element_range(mention_range);
+                    }
+                }
+            }
+            ActivePopup::WhisperName(state) => {
+                if let Some(item) = state.selected_item() {
+                    let mention = format!("#{}", item.value);
+                    let insert_text = format!("{mention} ");
+                    if let Some(hash_pos) = self.replace_trigger_token('#', &insert_text) {
+                        let mention_range = hash_pos..(hash_pos + mention.len());
                         self.textarea.add_element_range(mention_range);
                     }
                 }
@@ -391,35 +403,36 @@ impl App {
         self.popup = ActivePopup::None;
     }
 
-    /// Replace the `@token` at the cursor position with `replacement`.
-    /// Returns the byte position of the `@` if successful.
-    fn replace_at_token(&mut self, replacement: &str) -> Option<usize> {
+    /// Replace the trigger token (`@` or `#`) at the cursor position with `replacement`.
+    /// Returns the byte position of the trigger char if successful.
+    fn replace_trigger_token(&mut self, trigger: char, replacement: &str) -> Option<usize> {
         let cursor = self.textarea.cursor();
         let text = self.textarea.text();
         let before = &text[..cursor];
 
-        // Find the last `@` before the cursor.
-        let at_pos = before.rfind('@')?;
+        // Find the last trigger char before the cursor.
+        let trigger_pos = before.rfind(trigger)?;
 
-        // Check that `@` is at start or preceded by whitespace.
-        if at_pos > 0 {
-            let prev_char = text[..at_pos].chars().next_back()?;
+        // Check that trigger is at start or preceded by whitespace.
+        if trigger_pos > 0 {
+            let prev_char = text[..trigger_pos].chars().next_back()?;
             if !prev_char.is_whitespace() {
                 return None;
             }
         }
 
-        // Find the end of the token (next whitespace or end of text from @).
-        let after_at = &text[at_pos..];
-        let token_end = after_at
+        // Find the end of the token (next whitespace or end of text from trigger).
+        let after_trigger = &text[trigger_pos..];
+        let token_end = after_trigger
             .find(|c: char| c.is_whitespace())
-            .map(|i| at_pos + i)
+            .map(|i| trigger_pos + i)
             .unwrap_or(text.len());
 
-        let new_cursor = at_pos + replacement.len();
-        self.textarea.replace_range(at_pos..token_end, replacement);
+        let new_cursor = trigger_pos + replacement.len();
+        self.textarea
+            .replace_range(trigger_pos..token_end, replacement);
         self.textarea.set_cursor(new_cursor);
-        Some(at_pos)
+        Some(trigger_pos)
     }
 
     // ── Completion popup sync ────────────────────────────────────────
@@ -481,32 +494,60 @@ impl App {
             return;
         }
 
+        // Whisper name popup: detect #token at cursor position.
+        if let Some(token) = self.current_trigger_token('#') {
+            let filter = &token;
+            match &mut self.popup {
+                ActivePopup::WhisperName(state) => {
+                    state.set_filter(filter);
+                    if state.is_empty() {
+                        self.popup = ActivePopup::None;
+                    }
+                }
+                _ => {
+                    let mut state = CompletionState::new(self.whisper_name_items());
+                    state.set_filter(filter);
+                    if state.is_empty() {
+                        self.popup = ActivePopup::None;
+                    } else {
+                        self.popup = ActivePopup::WhisperName(state);
+                    }
+                }
+            }
+            return;
+        }
+
         // No trigger condition — close popup.
         self.popup = ActivePopup::None;
     }
 
     /// Extract the `@token` at the current cursor position, if any.
-    /// Returns the text after `@` (may be empty for bare `@`).
     fn current_at_token(&self) -> Option<String> {
+        self.current_trigger_token('@')
+    }
+
+    /// Extract a trigger token (`@` or `#`) at the current cursor position.
+    /// Returns the text after the trigger char (may be empty for bare trigger).
+    fn current_trigger_token(&self, trigger: char) -> Option<String> {
         let cursor = self.textarea.cursor();
         let text = self.textarea.text();
         let before = &text[..cursor];
 
-        // Find the last `@` before the cursor.
-        let at_pos = before.rfind('@')?;
+        // Find the last trigger char before the cursor.
+        let trigger_pos = before.rfind(trigger)?;
 
-        // Check that `@` is at start or preceded by whitespace.
-        if at_pos > 0 {
-            let prev_char = text[..at_pos].chars().next_back()?;
+        // Check that trigger is at start or preceded by whitespace.
+        if trigger_pos > 0 {
+            let prev_char = text[..trigger_pos].chars().next_back()?;
             if !prev_char.is_whitespace() {
                 return None;
             }
         }
 
-        // Extract the token from @ to cursor (byte range).
-        let token = &text[at_pos + 1..cursor];
+        // Extract the token from trigger to cursor (byte range).
+        let token = &text[trigger_pos + 1..cursor];
 
-        // Don't trigger if there's a space between @ and cursor.
+        // Don't trigger if there's a space between trigger and cursor.
         if token.contains(' ') || token.contains('\n') {
             return None;
         }
@@ -542,6 +583,21 @@ impl App {
         }
 
         items
+    }
+
+    /// Build completion items for whisper targets (agents only, no "all").
+    fn whisper_name_items(&self) -> Vec<CompletionItem> {
+        self.config
+            .agents
+            .iter()
+            .map(|agent| CompletionItem {
+                value: agent.name.clone(),
+                description: format!(
+                    "{} ({}/{})",
+                    agent.display_name, agent.provider, agent.model
+                ),
+            })
+            .collect()
     }
 
     /// Build completion items for agent names (including "all").

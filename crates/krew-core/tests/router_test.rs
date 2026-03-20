@@ -11,35 +11,35 @@ fn agents() -> Vec<String> {
 
 #[test]
 fn parse_all() {
-    let (addr, msg) = parse_input("@all hello", &agents()).unwrap();
+    let (addr, msg, _) = parse_input("@all hello", &agents()).unwrap();
     assert_eq!(addr, Addressee::All);
     assert_eq!(msg, "@all hello");
 }
 
 #[test]
 fn parse_single_at_start() {
-    let (addr, msg) = parse_input("@gpt explain this", &agents()).unwrap();
+    let (addr, msg, _) = parse_input("@gpt explain this", &agents()).unwrap();
     assert_eq!(addr, Addressee::Single("gpt".to_string()));
     assert_eq!(msg, "@gpt explain this");
 }
 
 #[test]
 fn parse_single_in_middle() {
-    let (addr, msg) = parse_input("hey @gpt what do you think", &agents()).unwrap();
+    let (addr, msg, _) = parse_input("hey @gpt what do you think", &agents()).unwrap();
     assert_eq!(addr, Addressee::Single("gpt".to_string()));
     assert_eq!(msg, "hey @gpt what do you think");
 }
 
 #[test]
 fn parse_single_at_end() {
-    let (addr, msg) = parse_input("explain this @gpt", &agents()).unwrap();
+    let (addr, msg, _) = parse_input("explain this @gpt", &agents()).unwrap();
     assert_eq!(addr, Addressee::Single("gpt".to_string()));
     assert_eq!(msg, "explain this @gpt");
 }
 
 #[test]
 fn parse_multiple() {
-    let (addr, msg) = parse_input("@gpt @opus debate this", &agents()).unwrap();
+    let (addr, msg, _) = parse_input("@gpt @opus debate this", &agents()).unwrap();
     assert_eq!(
         addr,
         Addressee::Multiple(vec!["gpt".to_string(), "opus".to_string()])
@@ -49,7 +49,7 @@ fn parse_multiple() {
 
 #[test]
 fn parse_multiple_scattered() {
-    let (addr, msg) = parse_input("hey @gpt what does @opus think", &agents()).unwrap();
+    let (addr, msg, _) = parse_input("hey @gpt what does @opus think", &agents()).unwrap();
     assert_eq!(
         addr,
         Addressee::Multiple(vec!["gpt".to_string(), "opus".to_string()])
@@ -59,42 +59,42 @@ fn parse_multiple_scattered() {
 
 #[test]
 fn parse_all_mixed_with_specific() {
-    let (addr, msg) = parse_input("@gpt @all hello", &agents()).unwrap();
+    let (addr, msg, _) = parse_input("@gpt @all hello", &agents()).unwrap();
     assert_eq!(addr, Addressee::All);
     assert_eq!(msg, "@gpt @all hello");
 }
 
 #[test]
 fn parse_duplicate_deduped() {
-    let (addr, msg) = parse_input("@gpt hello @gpt again", &agents()).unwrap();
+    let (addr, msg, _) = parse_input("@gpt hello @gpt again", &agents()).unwrap();
     assert_eq!(addr, Addressee::Single("gpt".to_string()));
     assert_eq!(msg, "@gpt hello @gpt again");
 }
 
 #[test]
 fn parse_unknown_agent_is_plain_text() {
-    let (addr, msg) = parse_input("@unknown hello", &agents()).unwrap();
+    let (addr, msg, _) = parse_input("@unknown hello", &agents()).unwrap();
     assert_eq!(addr, Addressee::LastRespondent);
     assert_eq!(msg, "@unknown hello");
 }
 
 #[test]
 fn parse_bare_at_is_plain_text() {
-    let (addr, msg) = parse_input("@ hello", &agents()).unwrap();
+    let (addr, msg, _) = parse_input("@ hello", &agents()).unwrap();
     assert_eq!(addr, Addressee::LastRespondent);
     assert_eq!(msg, "@ hello");
 }
 
 #[test]
 fn parse_mixed_known_and_unknown() {
-    let (addr, msg) = parse_input("@gpt @unknown hello", &agents()).unwrap();
+    let (addr, msg, _) = parse_input("@gpt @unknown hello", &agents()).unwrap();
     assert_eq!(addr, Addressee::Single("gpt".to_string()));
     assert_eq!(msg, "@gpt @unknown hello");
 }
 
 #[test]
 fn parse_no_prefix() {
-    let (addr, msg) = parse_input("just chatting", &agents()).unwrap();
+    let (addr, msg, _) = parse_input("just chatting", &agents()).unwrap();
     assert_eq!(addr, Addressee::LastRespondent);
     assert_eq!(msg, "just chatting");
 }
@@ -538,4 +538,86 @@ fn queued_empty_queue() {
     let mut q: VecDeque<String> = VecDeque::new();
     apply_queued_routing(&mut q, "opus");
     assert_eq!(q, VecDeque::from(vec!["opus".to_string()]));
+}
+
+// ── Whisper (#) parsing tests ───────────────────────────────────────
+
+#[test]
+fn whisper_single_target() {
+    let (addr, msg, is_whisper) = parse_input("#gpt hello", &agents()).unwrap();
+    assert_eq!(addr, Addressee::Single("gpt".to_string()));
+    assert_eq!(msg, "#gpt hello");
+    assert!(is_whisper);
+}
+
+#[test]
+fn whisper_multiple_targets() {
+    let (addr, _msg, is_whisper) = parse_input("#gpt #opus discuss", &agents()).unwrap();
+    assert_eq!(
+        addr,
+        Addressee::Multiple(vec!["gpt".to_string(), "opus".to_string()])
+    );
+    assert!(is_whisper);
+}
+
+#[test]
+fn whisper_all_rejected() {
+    let result = parse_input("#all hello", &agents());
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("#all"));
+}
+
+#[test]
+fn whisper_mixed_at_hash_rejected() {
+    let result = parse_input("@gpt #opus hello", &agents());
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("@"));
+    assert!(err.contains("#"));
+}
+
+#[test]
+fn whisper_unknown_hash_is_plain_text() {
+    let (addr, msg, is_whisper) = parse_input("#unknown hello", &agents()).unwrap();
+    assert_eq!(addr, Addressee::LastRespondent);
+    assert_eq!(msg, "#unknown hello");
+    assert!(!is_whisper);
+}
+
+#[test]
+fn whisper_bare_hash_is_plain_text() {
+    let (addr, _msg, is_whisper) = parse_input("# hello", &agents()).unwrap();
+    assert_eq!(addr, Addressee::LastRespondent);
+    assert!(!is_whisper);
+}
+
+#[test]
+fn at_is_not_whisper() {
+    let (addr, _msg, is_whisper) = parse_input("@gpt hello", &agents()).unwrap();
+    assert_eq!(addr, Addressee::Single("gpt".to_string()));
+    assert!(!is_whisper);
+}
+
+#[test]
+fn whisper_dispatch_queue_integration() {
+    use krew_core::router::resolve_dispatch_queue;
+    use std::collections::HashSet;
+
+    let (addr, _msg, is_whisper) = parse_input("#gpt #opus discuss", &agents()).unwrap();
+    assert!(is_whisper);
+    assert_eq!(
+        addr,
+        Addressee::Multiple(vec!["gpt".to_string(), "opus".to_string()])
+    );
+    let available: HashSet<String> = agents().into_iter().collect();
+    let queue = resolve_dispatch_queue(
+        &addr,
+        &["gpt".to_string(), "opus".to_string()],
+        &available,
+        None,
+    );
+    assert_eq!(queue.len(), 2);
+    assert_eq!(queue[0], "gpt");
+    assert_eq!(queue[1], "opus");
 }

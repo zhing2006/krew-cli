@@ -139,6 +139,8 @@ pub fn convert_messages(
         let content = if is_other_agent {
             let name = msg.name.as_deref().unwrap_or("unknown");
             format!("[{name}] {}", msg.content)
+        } else if msg.role == ChatRole::User {
+            format!("[user] {}", msg.content)
         } else {
             msg.content.clone()
         };
@@ -639,7 +641,7 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0]["type"], "message");
         assert_eq!(result[0]["role"], "user");
-        assert_eq!(result[0]["content"], "hello");
+        assert_eq!(result[0]["content"], "[user] hello");
     }
 
     #[test]

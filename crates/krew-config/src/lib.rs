@@ -466,9 +466,14 @@ impl Config {
     /// - Every name in `reply_order` exists in `agents`
     /// - Every agent's `provider` exists in `providers` (except `"builtin"`)
     pub fn validate(&self) -> Result<(), ConfigError> {
-        // Check for duplicate agent names.
+        // Check for reserved and duplicate agent names.
         let mut seen = std::collections::HashSet::new();
         for agent in &self.agents {
+            if agent.name == "all" {
+                return Err(ConfigError::Validation(
+                    "agent name \"all\" is reserved and cannot be used".to_string(),
+                ));
+            }
             if !seen.insert(&agent.name) {
                 return Err(ConfigError::Validation(format!(
                     "duplicate agent name: \"{}\"",

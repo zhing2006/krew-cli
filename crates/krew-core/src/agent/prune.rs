@@ -218,6 +218,7 @@ pub(super) fn prune_stale_tool_calls(messages: Vec<ChatMessage>) -> Vec<ChatMess
                 tool_call_id: msg.tool_call_id,
                 server_tool_uses: msg.server_tool_uses,
                 addressee: msg.addressee,
+                whisper_targets: msg.whisper_targets,
                 created_at: msg.created_at,
                 usage: msg.usage,
             });
@@ -278,6 +279,7 @@ mod tests {
             tool_call_id: None,
             server_tool_uses: Vec::new(),
             addressee: None,
+            whisper_targets: None,
             created_at: chrono::Utc::now(),
             usage: None,
         }
@@ -292,6 +294,7 @@ mod tests {
             tool_call_id: Some(call_id.to_string()),
             server_tool_uses: Vec::new(),
             addressee: None,
+            whisper_targets: None,
             created_at: chrono::Utc::now(),
             usage: None,
         }

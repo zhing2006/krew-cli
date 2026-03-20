@@ -76,17 +76,17 @@ fn test_argument_substitution_and_routing() {
 
     // Test routing: expanded text should route to the correct agent.
     let agents = vec!["coder".to_string(), "reviewer".to_string()];
-    let (addressee, _body) =
+    let (addressee, _body, _) =
         router::parse_input(commit.substitute_args("fix").trim(), &agents).unwrap();
     assert!(matches!(addressee, router::Addressee::Single(ref name) if name == "coder"));
 
-    let (addressee, _body) =
+    let (addressee, _body, _) =
         router::parse_input(review.substitute_args("42").trim(), &agents).unwrap();
     assert!(matches!(addressee, router::Addressee::Single(ref name) if name == "reviewer"));
 
     // @all routing.
     let hello = registry.lookup("hello").unwrap();
     let expanded = hello.substitute_args("");
-    let (addressee, _body) = router::parse_input(expanded.trim(), &agents).unwrap();
+    let (addressee, _body, _) = router::parse_input(expanded.trim(), &agents).unwrap();
     assert!(matches!(addressee, router::Addressee::All));
 }

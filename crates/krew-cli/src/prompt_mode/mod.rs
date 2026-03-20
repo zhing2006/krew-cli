@@ -37,7 +37,7 @@ pub async fn run_prompt_mode(
 
     // Parse addressee from the raw prompt only (not stdin).
     let agent_names: Vec<String> = config.agents.iter().map(|a| a.name.clone()).collect();
-    let (addressee, _body) = match router::parse_input(&raw_prompt, &agent_names) {
+    let (addressee, _body, is_whisper) = match router::parse_input(&raw_prompt, &agent_names) {
         Ok(result) => result,
         Err(e) => {
             eprintln!("Error: {e}");
@@ -114,6 +114,20 @@ pub async fn run_prompt_mode(
         }
     }
 
+    // Track whisper state for dispatch lifecycle.
+    let current_whisper_targets: Option<Vec<String>> = if is_whisper {
+        let available: HashSet<String> = agents.keys().cloned().collect();
+        let target_names = router::resolve_target_names(
+            &addressee,
+            &config.settings.reply_order,
+            &available,
+            None,
+        );
+        Some(target_names.into_iter().map(String::from).collect())
+    } else {
+        None
+    };
+
     // Build user message and conversation state.
     let addressee_str = match &addressee {
         Addressee::All => Some("all".to_string()),
@@ -121,10 +135,10 @@ pub async fn run_prompt_mode(
         Addressee::Multiple(names) => Some(names.join(",")),
         Addressee::LastRespondent => None,
     };
-    let mut messages = vec![ChatMessage::user_with_addressee(
-        message_body,
-        addressee_str,
-    )];
+    let mut messages = vec![
+        ChatMessage::user_with_addressee(message_body, addressee_str)
+            .with_whisper_targets(current_whisper_targets.clone()),
+    ];
     let mut token_usage: HashMap<String, (u32, u32)> = HashMap::new();
     let mut has_error = false;
     let mut ai_conversation_rounds: u32 = 0;
@@ -178,6 +192,7 @@ pub async fn run_prompt_mode(
             project_instructions.as_deref(),
             None,
             peers.as_deref(),
+            current_whisper_targets.clone(),
         );
 
         // Blank line between agents (not before the first).
@@ -187,7 +202,14 @@ pub async fn run_prompt_mode(
         is_first_agent = false;
 
         // Consume events from this agent.
-        let result = consume_agent_events(&mut rx, &agent_name, format).await;
+        let result = consume_agent_events(
+            &mut rx,
+            &agent_name,
+            format,
+            current_whisper_targets.is_some(),
+            current_whisper_targets.clone(),
+        )
+        .await;
 
         // Update state from result.
         if result.has_error {
@@ -215,6 +237,7 @@ pub async fn run_prompt_mode(
                 Some(agent_name.clone()),
             );
             final_msg.server_tool_uses = result.server_tool_uses;
+            final_msg.whisper_targets = current_whisper_targets.clone();
             if let Some(usage) = result.usage {
                 final_msg.usage = Some(usage);
             }
@@ -228,6 +251,15 @@ pub async fn run_prompt_mode(
         if config.settings.agent_to_agent_max_rounds > 0 && !result.has_error {
             let known: Vec<String> = agents.keys().cloned().collect();
             let targets = router::parse_agent_mentions(&result.final_text, &known, &agent_name);
+            // In whisper mode, filter A2A targets to only include whisper group members.
+            let targets = if let Some(ref wt) = current_whisper_targets {
+                targets
+                    .into_iter()
+                    .filter(|t| wt.contains(t))
+                    .collect::<Vec<_>>()
+            } else {
+                targets
+            };
             for target in targets {
                 if ai_conversation_rounds >= config.settings.agent_to_agent_max_rounds {
                     break;
@@ -300,6 +332,8 @@ async fn consume_agent_events(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
     agent_name: &str,
     format: OutputFormat,
+    is_whisper: bool,
+    whisper_targets_for_json: Option<Vec<String>>,
 ) -> AgentResult {
     let mut text_buffer = String::new();
     let mut intermediate_messages = Vec::new();
@@ -321,7 +355,11 @@ async fn consume_agent_events(
                 agent_name: name, ..
             } => {
                 if format == OutputFormat::Text {
-                    println!("[{name}]");
+                    if is_whisper {
+                        println!("[{name}] [whisper]");
+                    } else {
+                        println!("[{name}]");
+                    }
                 }
             }
             AgentEvent::ThinkingDelta(_) => {
@@ -493,14 +531,15 @@ async fn consume_agent_events(
                         }
                     }
                     OutputFormat::Json => {
-                        println!(
-                            "{}",
-                            serde_json::json!({
-                                "agent": agent_name,
-                                "type": "text",
-                                "content": text_buffer,
-                            })
-                        );
+                        let mut json = serde_json::json!({
+                            "agent": agent_name,
+                            "type": "text",
+                            "content": text_buffer,
+                        });
+                        if let Some(ref wt) = whisper_targets_for_json {
+                            json["whisper_targets"] = serde_json::json!(wt);
+                        }
+                        println!("{json}");
                     }
                 }
             }

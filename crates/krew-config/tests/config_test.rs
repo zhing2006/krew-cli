@@ -230,6 +230,35 @@ api_key_env = "KEY"
 }
 
 #[test]
+fn validate_reserved_agent_name_all() {
+    let toml = r#"
+[settings]
+approval_mode = "suggest"
+reply_order = ["all"]
+
+[[agents]]
+name = "all"
+display_name = "All Agent"
+provider = "openai"
+model = "gpt-5"
+color = "green"
+
+[providers.openai]
+type = "openai"
+api_key_env = "KEY"
+"#;
+    let mut f = NamedTempFile::new().unwrap();
+    f.write_all(toml.as_bytes()).unwrap();
+    let config = Config::load(f.path()).unwrap();
+    let err = config.validate().unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("reserved"),
+        "error should mention reserved: {msg}"
+    );
+}
+
+#[test]
 fn validate_builtin_provider_skipped() {
     // builtin provider should not require an entry in [providers]
     let config = Config::default(); // uses provider = "builtin"
