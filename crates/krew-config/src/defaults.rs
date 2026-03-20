@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use crate::{
-    ApprovalMode, Config, DEFAULT_COMPACT_KEEP_ROUNDS, DEFAULT_INPUT_HISTORY_LIMIT,
-    DEFAULT_SHELL_ALLOW_COMMANDS, DEFAULT_WORKER_THREADS, OtherAgentRole, RetryConfig, Settings,
-    SkillsConfig,
+    AgentToAgentRouting, ApprovalMode, Config, DEFAULT_AGENT_TO_AGENT_MAX_ROUNDS,
+    DEFAULT_COMPACT_KEEP_ROUNDS, DEFAULT_INPUT_HISTORY_LIMIT, DEFAULT_SHELL_ALLOW_COMMANDS,
+    DEFAULT_WORKER_THREADS, OtherAgentRole, RetryConfig, Settings, SkillsConfig,
 };
 
 /// Default auto-compact threshold in tokens.
@@ -27,6 +27,8 @@ impl Default for Config {
                     .map(|s| s.to_string())
                     .collect(),
                 fetch_allow_domains: Vec::new(),
+                agent_to_agent_routing: AgentToAgentRouting::Immediate,
+                agent_to_agent_max_rounds: DEFAULT_AGENT_TO_AGENT_MAX_ROUNDS,
             },
             agents: Vec::new(),
             providers: HashMap::new(),

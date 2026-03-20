@@ -319,6 +319,8 @@ compact_keep_rounds = 3                # 压缩时保留最近 N 轮对话
 # worker_threads = 4                   # tokio 工作线程数
 # shell_allow_commands = ["ls", "cargo", "git status"]  # 免审批 shell 命令前缀
 # fetch_allow_domains = ["docs.rs"]    # 免审批 fetch_url 域名白名单
+# agent_to_agent_routing = "immediate" # AI-to-AI 路由策略: immediate | queued（默认 immediate）
+# agent_to_agent_max_rounds = 10       # AI-to-AI 最大轮次（0 = 禁用，默认 10）
 
 # Agent 定义
 [[agents]]

@@ -45,11 +45,11 @@
 ## 7. 文档与示例
 
 - [x] 7.1 更新 `config.example.toml` 添加 `[skills]` 配置节说明
-- [ ] 7.2 在 `.krew/skills/` 下创建一个示例 skill（如 `code-review/SKILL.md`）用于测试
-- [ ] 7.3 更新 PDD/TDD 文档，将 Agent Skills 从 v0.2 计划移到已实现功能
+- [x] 7.2 在 `.krew/skills/` 下创建一个示例 skill（如 `code-review/SKILL.md`）用于测试
+- [x] 7.3 更新 PDD/TDD 文档，将 Agent Skills 从 v0.2 计划移到已实现功能
 
 ## 8. 集成测试与验证
 
 - [x] 8.1 运行 `cargo fmt --all` 和 `cargo clippy --all-targets --all-features -- -D warnings` 确保代码规范
 - [x] 8.2 运行 `cargo test` 确保所有测试通过
-- [ ] 8.3 手动测试：放置一个 skill 到 `.krew/skills/`，启动 krew-cli，验证 `/skills` 显示、LLM 自动激活 skill 的完整流程
+- [x] 8.3 手动测试：放置一个 skill 到 `.krew/skills/`，启动 krew-cli，验证 `/skills` 显示、LLM 自动激活 skill 的完整流程

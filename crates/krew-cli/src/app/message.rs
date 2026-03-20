@@ -55,6 +55,9 @@ impl App {
             return self.show_error(terminal, &format!("Unknown command: /{cmd_part}"));
         }
 
+        // Reset AI-to-AI round counter on new user message.
+        self.ai_conversation_rounds = 0;
+
         // Parse @ addressee (only known agents are recognized as addressees).
         let agent_names: Vec<String> = self.config.agents.iter().map(|a| a.name.clone()).collect();
         let (addressee, body) = match router::parse_input(trimmed, &agent_names) {
@@ -155,6 +158,9 @@ impl App {
             return Ok(());
         }
 
+        // Reset AI-to-AI round counter on new user message.
+        self.ai_conversation_rounds = 0;
+
         let agent_names: Vec<String> = self.config.agents.iter().map(|a| a.name.clone()).collect();
         let (addressee, body) = match router::parse_input(trimmed, &agent_names) {
             Ok(result) => result,
@@ -230,10 +236,26 @@ impl App {
     ) -> anyhow::Result<bool> {
         while let Some(name) = self.pending_agents.pop_front() {
             if let Some(agent) = self.agents.get(&name) {
+                // Build peer agent list for AI-to-AI prompt injection.
+                let peers = if self.config.settings.agent_to_agent_max_rounds > 0 {
+                    Some(
+                        self.agents
+                            .values()
+                            .filter(|a| a.config.name != name)
+                            .map(|a| krew_core::agent::PeerAgent {
+                                name: a.config.name.clone(),
+                                display_name: a.config.display_name.clone(),
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    None
+                };
                 let rx = agent.start_completion(
                     self.messages.clone(),
                     self.project_instructions.as_deref(),
                     None,
+                    peers.as_deref(),
                 );
                 self.agent_event_rx = Some(rx);
                 return Ok(true);
