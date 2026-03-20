@@ -96,6 +96,12 @@ pub struct Settings {
     /// - `"docs.rs"` matches `docs.rs` and any subdomain
     #[serde(default)]
     pub fetch_allow_domains: Vec<String>,
+    /// AI-to-AI routing strategy: immediate (queue head) or queued (queue tail).
+    #[serde(default)]
+    pub agent_to_agent_routing: AgentToAgentRouting,
+    /// Maximum AI-to-AI routing rounds per user message turn (0 = disabled).
+    #[serde(default = "default_agent_to_agent_max_rounds")]
+    pub agent_to_agent_max_rounds: u32,
 }
 
 /// Retry configuration for LLM API requests.
@@ -201,6 +207,13 @@ pub const DEFAULT_SHELL_ALLOW_COMMANDS: &[&str] = &[
     "head", "hostname", "id", "ls", "nl", "paste", "printenv", "pwd", "rev", "rg", "seq", "sort",
     "stat", "tail", "tr", "true", "uname", "uniq", "wc", "which", "whoami",
 ];
+
+/// Default maximum AI-to-AI routing rounds per user message turn.
+pub const DEFAULT_AGENT_TO_AGENT_MAX_ROUNDS: u32 = 10;
+
+fn default_agent_to_agent_max_rounds() -> u32 {
+    DEFAULT_AGENT_TO_AGENT_MAX_ROUNDS
+}
 
 fn default_shell_allow_commands() -> Vec<String> {
     DEFAULT_SHELL_ALLOW_COMMANDS
@@ -409,6 +422,17 @@ pub enum ThinkingEffort {
     Low,
     Medium,
     High,
+}
+
+/// AI-to-AI routing strategy when an agent @-mentions another agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentToAgentRouting {
+    /// Move/insert target agent to queue head for immediate response.
+    #[default]
+    Immediate,
+    /// Append target agent to queue tail without changing existing order.
+    Queued,
 }
 
 /// MCP server trust level.

@@ -1,18 +1,18 @@
 ## ADDED Requirements
 
 ### Requirement: Slash 命令识别
-以 `/` 开头的输入 SHALL 优先识别为 Slash 命令。系统 SHALL 使用 `SlashCommand::from_input()` 解析命令。无法识别的 `/` 开头输入 SHALL 显示错误提示。
+以 `/` 开头的输入 SHALL 优先识别为 Slash 命令。系统 SHALL 先使用 `SlashCommand::from_input()` 检查内置命令，若无匹配再查找自定义命令注册表。仅当两者都无匹配时，SHALL 显示错误提示。
 
-#### Scenario: 已知命令
+#### Scenario: 已知内置命令
 - **WHEN** 用户输入 `/help`
-- **THEN** 系统 SHALL 识别为 `SlashCommand::Help` 并执行
+- **THEN** 系统 SHALL 识别为内置 `SlashCommand::Help` 并执行
 
-#### Scenario: stats 命令
-- **WHEN** 用户输入 `/stats`
-- **THEN** 系统 SHALL 识别为 `SlashCommand::Stats` 并执行
+#### Scenario: 已知自定义命令
+- **WHEN** 用户输入 `/commit fix typo` 且自定义命令 `/commit` 已注册
+- **THEN** 系统 SHALL 查找自定义命令注册表，执行命令展开（参数替换 + bash 预处理），并将结果作为普通消息发送
 
 #### Scenario: 未知命令
-- **WHEN** 用户输入 `/unknown`
+- **WHEN** 用户输入 `/unknown` 且内置和自定义命令均无匹配
 - **THEN** 系统 SHALL 在 viewport 上方显示错误提示 `Unknown command: /unknown`
 
 ### Requirement: /help 命令
@@ -78,7 +78,15 @@ The `/resume` command SHALL list recent sessions and allow the user to select on
 - **THEN** `/resume` SHALL be described as "Resume a previous session"
 
 ### Requirement: 占位命令
-`/compact` SHALL 在 viewport 上方显示"功能待实现"提示。
+`/mcp` 和 `/compact` SHALL 保持占位状态，显示 "not yet implemented" 提示。`/skills` SHALL 不再是占位命令。
+
+#### Scenario: /skills 不再是占位命令
+- **WHEN** 用户输入 `/skills`
+- **THEN** 系统 SHALL 执行 skill 列表显示逻辑，而非显示占位提示
+
+#### Scenario: /mcp 仍为占位
+- **WHEN** 用户输入 `/mcp`
+- **THEN** 系统 SHALL 显示 "not yet implemented" 提示
 
 #### Scenario: /compact 占位
 - **WHEN** 用户输入 `/compact`

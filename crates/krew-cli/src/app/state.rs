@@ -138,6 +138,8 @@ pub struct App {
     pub(crate) needs_auto_compact: bool,
     /// Pending custom command text (after arg substitution, before bash preprocessing).
     pub(crate) pending_custom_command: Option<String>,
+    /// AI-to-AI conversation round counter (reset on each user message).
+    pub(crate) ai_conversation_rounds: u32,
 }
 
 impl App {
@@ -232,6 +234,7 @@ impl App {
             pending_compact_agent: None,
             needs_auto_compact: false,
             pending_custom_command: None,
+            ai_conversation_rounds: 0,
             session_created_at: Utc::now(),
         })
     }
@@ -787,6 +790,23 @@ impl App {
                 }
 
                 // Persist intermediate tool-round messages and final text.
+                // Extract AI-to-AI mention target before final_text is moved.
+                let a2a_target = {
+                    let max_a2a = self.config.settings.agent_to_agent_max_rounds;
+                    if max_a2a > 0 {
+                        if let Some(ref current) = self.current_agent_name {
+                            let known: Vec<String> = self.agents.keys().cloned().collect();
+                            krew_core::router::parse_agent_mentions(&final_text, &known, current)
+                                .into_iter()
+                                .next()
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                };
+
                 if let Some(agent_name) = self.current_agent_name.take() {
                     self.last_respondent = Some(agent_name.clone());
                     self.messages.extend(intermediate_messages);
@@ -814,6 +834,30 @@ impl App {
                 self.agent_event_rx = None;
                 self.commit_tick_active = false;
                 self.chunking_policy.reset();
+
+                // AI-to-AI routing: apply detected @mention to the dispatch queue.
+                if let Some(target) = a2a_target {
+                    let max_a2a = self.config.settings.agent_to_agent_max_rounds;
+                    if self.ai_conversation_rounds < max_a2a {
+                        self.ai_conversation_rounds += 1;
+                        match self.config.settings.agent_to_agent_routing {
+                            krew_config::AgentToAgentRouting::Immediate => {
+                                krew_core::router::apply_immediate_routing(
+                                    &mut self.pending_agents,
+                                    &target,
+                                );
+                            }
+                            krew_config::AgentToAgentRouting::Queued => {
+                                krew_core::router::apply_queued_routing(
+                                    &mut self.pending_agents,
+                                    &target,
+                                );
+                            }
+                        }
+                    } else {
+                        self.show_info(terminal, "AI-to-AI 对话轮次已达上限")?;
+                    }
+                }
 
                 // Chain-trigger next pending agent (if any).
                 self.start_next_agent(terminal)?;
@@ -996,6 +1040,9 @@ impl App {
         self.commit_tick_active = false;
         self.is_thinking = false;
         self.chunking_policy.reset();
+
+        // Reset AI-to-AI round counter.
+        self.ai_conversation_rounds = 0;
 
         Ok(())
     }
