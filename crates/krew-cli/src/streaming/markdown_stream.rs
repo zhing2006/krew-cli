@@ -241,6 +241,31 @@ mod tests {
     }
 
     #[test]
+    fn soft_break_lines_not_lost() {
+        // Regression: single \n between lines within a paragraph is a markdown
+        // soft break. Previously commit_complete_lines would merge the lines
+        // and silently drop the new content because committed_line_count
+        // didn't increase.
+        let mut collector = MarkdownStreamCollector::new();
+
+        // First line of a stanza.
+        collector.push_delta("line one\n");
+        let first = collector.commit_complete_lines();
+        assert!(!first.is_empty(), "first line should be emitted");
+
+        // Second line — single \n means soft break in markdown.
+        collector.push_delta("line two\n");
+        let second = collector.commit_complete_lines();
+        assert!(!second.is_empty(), "second line must not be lost to soft-break merge");
+        let text: String = second
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(text.contains("line two"), "second line text should be present");
+    }
+
+    #[test]
     fn code_block_streaming() {
         let mut collector = MarkdownStreamCollector::new();
 
