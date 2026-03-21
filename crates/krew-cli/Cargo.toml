@@ -1,6 +1,6 @@
 [package]
 name = "krew-cli"
-version = "0.5.3"
+version = "0.5.4"
 edition = "2024"
 
 [[bin]]
