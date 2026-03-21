@@ -555,6 +555,20 @@ impl App {
                 self.agent_status_text = None;
 
                 if !self.is_thinking {
+                    // Flush any pending non-thinking text before switching
+                    // to thinking mode (e.g. when a proxy streams text
+                    // before thinking arrives in response.completed).
+                    if let Some(mut collector) = self.stream_collector.take() {
+                        let remaining = collector.finalize();
+                        if !remaining.is_empty() {
+                            self.stream_state.enqueue(remaining);
+                        }
+                    }
+                    let remaining = self.stream_state.drain_all();
+                    if !remaining.is_empty() {
+                        self.insert_indented_lines_streaming(terminal, remaining)?;
+                    }
+
                     self.is_thinking = true;
                 }
 

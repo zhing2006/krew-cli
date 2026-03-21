@@ -263,10 +263,40 @@ fn convert_tools(tools: &[ToolDefinition]) -> Vec<serde_json::Value> {
 /// Pending events to drain (when multiple events must be emitted for a single SSE chunk).
 type PendingQueue = std::collections::VecDeque<StreamEvent>;
 
+/// Extract a display string for a web_search_call action.
+/// Uses `query` for search actions and `url` for open_page actions.
+fn extract_web_search_query(item: &serde_json::Value) -> Option<String> {
+    let action = item.get("action")?;
+    let action_type = action.get("type").and_then(|t| t.as_str()).unwrap_or("");
+    match action_type {
+        "open_page" => action.get("url").and_then(|u| u.as_str()).map(|s| s.to_string()),
+        _ => action.get("query").and_then(|q| q.as_str()).map(|s| s.to_string()),
+    }
+}
+
+/// Mutable state carried through the SSE `unfold` stream.
+struct SseStreamState<S> {
+    sse: S,
+    pending: PendingQueue,
+    done: bool,
+    /// Whether `response.output_text.delta` events were received.
+    has_streamed_text: bool,
+    /// Whether `response.reasoning_summary_text.delta` events were received.
+    has_streamed_thinking: bool,
+    /// Whether `response.output_item.done` events were received
+    /// (covers function_call and web_search_call).
+    has_streamed_items: bool,
+}
+
 /// Parse OpenAI Responses SSE events into StreamEvents.
 ///
 /// Uses `response.output_item.done` to extract complete function calls
 /// (no incremental accumulation needed — the complete item is in one event).
+///
+/// When a proxy (e.g. litellm) falls back to fake streaming, content may
+/// only appear in `response.completed`. The `has_streamed_*` flags track
+/// what was already delivered incrementally so we can extract missing items
+/// from `response.completed` without duplicating native OpenAI events.
 fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamEvent> + Send {
     use eventsource_stream::Eventsource;
     use futures::StreamExt;
@@ -275,119 +305,222 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
     let byte_stream = response.bytes_stream();
     let sse_stream = byte_stream.eventsource();
 
-    let pending: PendingQueue = VecDeque::new();
+    let state = SseStreamState {
+        sse: sse_stream,
+        pending: VecDeque::new(),
+        done: false,
+        has_streamed_text: false,
+        has_streamed_thinking: false,
+        has_streamed_items: false,
+    };
 
-    futures::stream::unfold(
-        (sse_stream, pending, false),
-        |(mut sse_stream, mut pending, mut done)| async move {
-            // Drain pending events first (multiple events from one SSE chunk).
-            if let Some(event) = pending.pop_front() {
-                return Some((event, (sse_stream, pending, done)));
-            }
+    futures::stream::unfold(state, |mut st| async move {
+        // Drain pending events first (multiple events from one SSE chunk).
+        if let Some(event) = st.pending.pop_front() {
+            return Some((event, st));
+        }
 
-            if done {
-                return None;
-            }
+        if st.done {
+            return None;
+        }
 
-            loop {
-                let next = sse_stream.next().await;
-                match next {
-                    Some(Ok(event)) => {
-                        let event_type = event.event;
-                        let data = event.data.trim().to_string();
+        loop {
+            let next = st.sse.next().await;
+            match next {
+                Some(Ok(event)) => {
+                    let event_type = event.event;
+                    let data = event.data.trim().to_string();
 
-                        if data.is_empty() {
+                    if data.is_empty() || data == "[DONE]" {
+                        continue;
+                    }
+
+                    // Some proxies (e.g. litellm) send all SSE events with
+                    // the default "message" event type and put the real type
+                    // inside the JSON `type` field. Detect and use that.
+                    let effective_type = if event_type != "message" {
+                        event_type
+                    } else if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data)
+                        && let Some(t) = v.get("type").and_then(|t| t.as_str())
+                    {
+                        t.to_string()
+                    } else {
+                        event_type
+                    };
+
+                    match effective_type.as_str() {
+                        "response.output_text.delta" => {
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data)
+                                && let Some(delta) = v.get("delta").and_then(|d| d.as_str())
+                                && !delta.is_empty()
+                            {
+                                st.has_streamed_text = true;
+                                return Some((StreamEvent::TextDelta(delta.to_string()), st));
+                            }
                             continue;
                         }
 
-                        match event_type.as_str() {
-                            "response.output_text.delta" => {
-                                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data)
-                                    && let Some(delta) = v.get("delta").and_then(|d| d.as_str())
-                                    && !delta.is_empty()
-                                {
+                        "response.reasoning_summary_text.delta" => {
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data)
+                                && let Some(delta) = v.get("delta").and_then(|d| d.as_str())
+                                && !delta.is_empty()
+                            {
+                                st.has_streamed_thinking = true;
+                                return Some((StreamEvent::ThinkingDelta(delta.to_string()), st));
+                            }
+                            continue;
+                        }
+
+                        "response.output_item.done" => {
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data)
+                                && let Some(item) = v.get("item")
+                            {
+                                let item_type =
+                                    item.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
+                                st.has_streamed_items = true;
+
+                                // Server-side web search call completed.
+                                if item_type == "web_search_call" {
+                                    let query = extract_web_search_query(item);
                                     return Some((
-                                        StreamEvent::TextDelta(delta.to_string()),
-                                        (sse_stream, pending, done),
+                                        StreamEvent::ServerToolDone {
+                                            name: "web_search".to_string(),
+                                            query,
+                                        },
+                                        st,
                                     ));
                                 }
-                                continue;
-                            }
 
-                            "response.reasoning_summary_text.delta" => {
-                                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data)
-                                    && let Some(delta) = v.get("delta").and_then(|d| d.as_str())
-                                    && !delta.is_empty()
-                                {
+                                // Complete function call item.
+                                if item_type == "function_call" {
+                                    let call_id = item
+                                        .get("call_id")
+                                        .and_then(|c| c.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let name = item
+                                        .get("name")
+                                        .and_then(|n| n.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let arguments = item
+                                        .get("arguments")
+                                        .and_then(|a| a.as_str())
+                                        .unwrap_or("{}")
+                                        .to_string();
                                     return Some((
-                                        StreamEvent::ThinkingDelta(delta.to_string()),
-                                        (sse_stream, pending, done),
+                                        StreamEvent::ToolCall {
+                                            id: call_id,
+                                            name,
+                                            arguments,
+                                            thought_signature: None,
+                                        },
+                                        st,
                                     ));
                                 }
-                                continue;
                             }
+                            continue;
+                        }
 
-                            "response.output_item.done" => {
-                                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data)
-                                    && let Some(item) = v.get("item")
-                                {
-                                    let item_type =
-                                        item.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                        "response.completed" => {
+                            st.done = true;
+                            let parsed =
+                                serde_json::from_str::<serde_json::Value>(&data).ok();
+                            let resp = parsed.as_ref().and_then(|v| v.get("response"));
 
-                                    // Server-side web search call completed.
-                                    if item_type == "web_search_call" {
-                                        let query = item
-                                            .get("action")
-                                            .and_then(|a| a.get("query"))
-                                            .and_then(|q| q.as_str())
-                                            .map(|s| s.to_string());
-                                        return Some((
-                                            StreamEvent::ServerToolDone {
-                                                name: "web_search".to_string(),
-                                                query,
-                                            },
-                                            (sse_stream, pending, done),
-                                        ));
-                                    }
-
-                                    // Complete function call item — extract all fields at once.
-                                    if item_type == "function_call" {
-                                        let call_id = item
-                                            .get("call_id")
-                                            .and_then(|c| c.as_str())
-                                            .unwrap_or("")
-                                            .to_string();
-                                        let name = item
-                                            .get("name")
-                                            .and_then(|n| n.as_str())
-                                            .unwrap_or("")
-                                            .to_string();
-                                        let arguments = item
-                                            .get("arguments")
-                                            .and_then(|a| a.as_str())
-                                            .unwrap_or("{}")
-                                            .to_string();
-                                        return Some((
-                                            StreamEvent::ToolCall {
+                            // Extract output items that were NOT already delivered
+                            // via incremental streaming (proxy fake-stream fallback).
+                            if let Some(output) =
+                                resp.and_then(|r| r.get("output")).and_then(|o| o.as_array())
+                            {
+                                for item in output {
+                                    let item_type = item
+                                        .get("type")
+                                        .and_then(|t| t.as_str())
+                                        .unwrap_or("");
+                                    match item_type {
+                                        "reasoning" if !st.has_streamed_thinking => {
+                                            if let Some(summary) =
+                                                item.get("summary").and_then(|s| s.as_array())
+                                            {
+                                                for part in summary {
+                                                    if let Some(text) =
+                                                        part.get("text").and_then(|t| t.as_str())
+                                                        && !text.is_empty()
+                                                    {
+                                                        st.pending.push_back(
+                                                            StreamEvent::ThinkingDelta(
+                                                                text.to_string(),
+                                                            ),
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        "message" if !st.has_streamed_text => {
+                                            if let Some(content) =
+                                                item.get("content").and_then(|c| c.as_array())
+                                            {
+                                                for part in content {
+                                                    if part
+                                                        .get("type")
+                                                        .and_then(|t| t.as_str())
+                                                        == Some("output_text")
+                                                        && let Some(text) = part
+                                                            .get("text")
+                                                            .and_then(|t| t.as_str())
+                                                        && !text.is_empty()
+                                                    {
+                                                        st.pending.push_back(
+                                                            StreamEvent::TextDelta(
+                                                                text.to_string(),
+                                                            ),
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        "function_call" if !st.has_streamed_items => {
+                                            let call_id = item
+                                                .get("call_id")
+                                                .and_then(|c| c.as_str())
+                                                .unwrap_or("")
+                                                .to_string();
+                                            let name = item
+                                                .get("name")
+                                                .and_then(|n| n.as_str())
+                                                .unwrap_or("")
+                                                .to_string();
+                                            let arguments = item
+                                                .get("arguments")
+                                                .and_then(|a| a.as_str())
+                                                .unwrap_or("{}")
+                                                .to_string();
+                                            st.pending.push_back(StreamEvent::ToolCall {
                                                 id: call_id,
                                                 name,
                                                 arguments,
                                                 thought_signature: None,
-                                            },
-                                            (sse_stream, pending, done),
-                                        ));
+                                            });
+                                        }
+                                        "web_search_call" if !st.has_streamed_items => {
+                                            st.pending.push_back(StreamEvent::ServerToolStart {
+                                                name: "web_search".to_string(),
+                                            });
+                                            let query = extract_web_search_query(item);
+                                            st.pending.push_back(StreamEvent::ServerToolDone {
+                                                name: "web_search".to_string(),
+                                                query,
+                                            });
+                                        }
+                                        _ => {}
                                     }
                                 }
-                                continue;
                             }
 
-                            "response.completed" => {
-                                done = true;
-                                let usage = if let Ok(v) =
-                                    serde_json::from_str::<serde_json::Value>(&data)
-                                    && let Some(resp) = v.get("response")
-                                    && let Some(u) = resp.get("usage")
-                                {
+                            let usage =
+                                if let Some(u) = resp.and_then(|r| r.get("usage")) {
                                     Usage {
                                         prompt_tokens: u
                                             .get("input_tokens")
@@ -414,80 +547,80 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                                 } else {
                                     Usage::default()
                                 };
-                                return Some((
-                                    StreamEvent::Done(usage),
-                                    (sse_stream, pending, done),
-                                ));
+
+                            // If we have pending events, queue Done and drain
+                            // pending first.
+                            if !st.pending.is_empty() {
+                                st.pending.push_back(StreamEvent::Done(usage));
+                                let first = st.pending.pop_front().unwrap();
+                                return Some((first, st));
                             }
 
-                            "response.failed" => {
-                                done = true;
-                                let msg = if let Ok(v) =
-                                    serde_json::from_str::<serde_json::Value>(&data)
-                                    && let Some(resp) = v.get("response")
-                                    && let Some(status) = resp.get("status_details")
-                                    && let Some(err) = status.get("error")
-                                    && let Some(message) =
-                                        err.get("message").and_then(|m| m.as_str())
-                                {
-                                    message.to_string()
-                                } else {
-                                    "response failed".to_string()
-                                };
-                                return Some((
-                                    StreamEvent::Error(msg),
-                                    (sse_stream, pending, done),
-                                ));
-                            }
-
-                            "response.incomplete" => {
-                                done = true;
-                                return Some((
-                                    StreamEvent::Error("response incomplete".to_string()),
-                                    (sse_stream, pending, done),
-                                ));
-                            }
-
-                            "response.output_item.added" => {
-                                // Detect web search starting.
-                                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data)
-                                    && let Some(item) = v.get("item")
-                                    && item.get("type").and_then(|t| t.as_str())
-                                        == Some("web_search_call")
-                                {
-                                    return Some((
-                                        StreamEvent::ServerToolStart {
-                                            name: "web_search".to_string(),
-                                        },
-                                        (sse_stream, pending, done),
-                                    ));
-                                }
-                                continue;
-                            }
-
-                            // Ignore all other events (response.queued, response.in_progress,
-                            // response.content_part.added, response.output_text.done,
-                            // response.function_call_arguments.*,
-                            // response.reasoning_summary_text.done, etc.)
-                            _ => continue,
+                            return Some((StreamEvent::Done(usage), st));
                         }
-                    }
-                    Some(Err(e)) => {
-                        done = true;
-                        return Some((
-                            StreamEvent::Error(format!("SSE stream error: {e}")),
-                            (sse_stream, pending, done),
-                        ));
-                    }
-                    None => {
-                        done = true;
-                        return Some((
-                            StreamEvent::Error("stream interrupted".into()),
-                            (sse_stream, pending, done),
-                        ));
+
+                        "response.failed" => {
+                            st.done = true;
+                            let msg = if let Ok(v) =
+                                serde_json::from_str::<serde_json::Value>(&data)
+                                && let Some(resp) = v.get("response")
+                                && let Some(status) = resp.get("status_details")
+                                && let Some(err) = status.get("error")
+                                && let Some(message) =
+                                    err.get("message").and_then(|m| m.as_str())
+                            {
+                                message.to_string()
+                            } else {
+                                "response failed".to_string()
+                            };
+                            return Some((StreamEvent::Error(msg), st));
+                        }
+
+                        "response.incomplete" => {
+                            st.done = true;
+                            return Some((
+                                StreamEvent::Error("response incomplete".to_string()),
+                                st,
+                            ));
+                        }
+
+                        "response.output_item.added" => {
+                            // Detect web search starting.
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data)
+                                && let Some(item) = v.get("item")
+                                && item.get("type").and_then(|t| t.as_str())
+                                    == Some("web_search_call")
+                            {
+                                return Some((
+                                    StreamEvent::ServerToolStart {
+                                        name: "web_search".to_string(),
+                                    },
+                                    st,
+                                ));
+                            }
+                            continue;
+                        }
+
+                        // Ignore all other events (response.queued, response.in_progress,
+                        // response.content_part.added, response.output_text.done,
+                        // response.function_call_arguments.*,
+                        // response.reasoning_summary_text.done, etc.)
+                        _ => continue,
                     }
                 }
+                Some(Err(e)) => {
+                    st.done = true;
+                    return Some((
+                        StreamEvent::Error(format!("SSE stream error: {e}")),
+                        st,
+                    ));
+                }
+                None => {
+                    st.done = true;
+                    return Some((StreamEvent::Error("stream interrupted".into()), st));
+                }
             }
+        }
         },
     )
 }
@@ -548,6 +681,23 @@ impl LlmClient for OpenAiResponsesClient {
         let auth = AuthMode::Bearer(&self.api_key);
         let response =
             common::send_with_retry(&req_config, &auth, None, &self.retry_config, on_retry).await?;
+
+        // Guard: if the response is not SSE, read body as text and return an error.
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        if !content_type.contains("text/event-stream") {
+            let body_text = response.text().await.unwrap_or_default();
+            tracing::warn!(
+                "OpenAI Responses: expected text/event-stream but got {content_type}: {body_text}"
+            );
+            return Err(LlmError::Api(format!(
+                "unexpected content-type '{content_type}': {body_text}"
+            )));
+        }
 
         // Convert to SSE event stream.
         let stream = build_event_stream(response);
