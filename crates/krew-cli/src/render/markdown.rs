@@ -126,7 +126,10 @@ impl MarkdownRenderer {
                         .push(Span::styled(format!("`{code}`"), style));
                 }
                 Event::SoftBreak => {
-                    self.current_spans.push(Span::raw(" "));
+                    // Treat soft breaks as hard line breaks. CommonMark spec
+                    // renders single \n as a space, but LLM output uses \n to
+                    // mean "new line" (e.g. poetry, lists without markers).
+                    self.flush_line();
                 }
                 Event::HardBreak => {
                     self.flush_line();

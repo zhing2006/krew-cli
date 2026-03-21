@@ -4,6 +4,7 @@ use crate::common::{self, AuthMode, RequestConfig, RoleContent, merge_consecutiv
 use crate::{
     ChatMessage, ChatRole, LlmClient, LlmClientConfig, LlmError, StreamEvent, ToolDefinition, Usage,
 };
+use krew_config::ThinkingEffort;
 use futures::Stream;
 use krew_config::OtherAgentRole;
 use krew_config::RetryConfig;
@@ -21,6 +22,8 @@ pub struct OpenAiChatClient {
     agent_name: String,
     other_agent_role: OtherAgentRole,
     retry_config: RetryConfig,
+    enable_thinking: bool,
+    thinking_effort: Option<ThinkingEffort>,
 }
 
 impl OpenAiChatClient {
@@ -41,6 +44,8 @@ impl OpenAiChatClient {
             agent_name: config.agent_name,
             other_agent_role: config.other_agent_role,
             retry_config: config.retry_config,
+            enable_thinking: config.enable_thinking,
+            thinking_effort: config.thinking_effort,
         }
     }
 }
@@ -196,6 +201,26 @@ fn build_sampling_params(sampling: &SamplingConfig) -> serde_json::Value {
 }
 
 // ---------------------------------------------------------------------------
+// Thinking/reasoning parameter injection
+// ---------------------------------------------------------------------------
+
+/// Map `enable_thinking` + `thinking_effort` to the `reasoning_effort` string
+/// used by OpenAI Chat Completions API (and LiteLLM proxy).
+fn build_reasoning_effort(
+    enable_thinking: bool,
+    thinking_effort: Option<ThinkingEffort>,
+) -> Option<&'static str> {
+    if !enable_thinking {
+        return None;
+    }
+    Some(match thinking_effort {
+        Some(ThinkingEffort::Low) => "low",
+        Some(ThinkingEffort::High) => "high",
+        Some(ThinkingEffort::Medium) | None => "medium",
+    })
+}
+
+// ---------------------------------------------------------------------------
 // SSE stream parsing
 // ---------------------------------------------------------------------------
 
@@ -345,6 +370,11 @@ impl LlmClient for OpenAiChatClient {
             for (k, v) in map {
                 body[k] = v;
             }
+        }
+
+        // Add reasoning_effort if thinking is enabled (for proxies like LiteLLM).
+        if let Some(effort) = build_reasoning_effort(self.enable_thinking, self.thinking_effort) {
+            body["reasoning_effort"] = serde_json::json!(effort);
         }
 
         // Add tools if provided.
