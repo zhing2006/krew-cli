@@ -69,6 +69,7 @@ display_name = "豆包"
 provider = "litellm"
 model = "doubao-seed-2-0-lite"
 enable_thinking = true
+thinking_effort = "high"
 color = "yellow"
 
 [providers.litellm]
