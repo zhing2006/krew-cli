@@ -24,6 +24,7 @@ pub struct OpenAiChatClient {
     retry_config: RetryConfig,
     enable_thinking: bool,
     thinking_effort: Option<ThinkingEffort>,
+    enable_web_search: bool,
 }
 
 impl OpenAiChatClient {
@@ -46,6 +47,7 @@ impl OpenAiChatClient {
             retry_config: config.retry_config,
             enable_thinking: config.enable_thinking,
             thinking_effort: config.thinking_effort,
+            enable_web_search: config.enable_web_search,
         }
     }
 }
@@ -244,12 +246,35 @@ fn parse_sse_data(data: &str) -> Option<SseChunk> {
         })
     });
 
+    // Extract grounding metadata from LiteLLM proxy (Gemini).
+    // Empty `[{}]` means search in progress; non-empty with webSearchQueries means done.
+    let grounding = v
+        .get("vertex_ai_grounding_metadata")
+        .and_then(|arr| arr.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|gm| {
+            let obj = gm.as_object()?;
+            if obj.is_empty() {
+                Some(None) // Search in progress
+            } else {
+                // Search complete — extract first query if available.
+                let query = obj
+                    .get("webSearchQueries")
+                    .and_then(|q| q.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|q| q.as_str())
+                    .map(|s| s.to_string());
+                Some(query)
+            }
+        });
+
     if choices.is_empty() {
         // Usage-only chunk (the last chunk before [DONE]).
         return Some(SseChunk {
             event: None,
             usage,
             tool_call_delta: None,
+            grounding,
         });
     }
 
@@ -264,6 +289,7 @@ fn parse_sse_data(data: &str) -> Option<SseChunk> {
             event: Some(StreamEvent::ThinkingDelta(reasoning.to_string())),
             usage,
             tool_call_delta: None,
+            grounding,
         });
     }
 
@@ -275,6 +301,7 @@ fn parse_sse_data(data: &str) -> Option<SseChunk> {
             event: Some(StreamEvent::TextDelta(content.to_string())),
             usage,
             tool_call_delta: None,
+            grounding,
         });
     }
 
@@ -309,6 +336,7 @@ fn parse_sse_data(data: &str) -> Option<SseChunk> {
                 name,
                 arguments,
             }),
+            grounding,
         });
     }
 
@@ -316,6 +344,7 @@ fn parse_sse_data(data: &str) -> Option<SseChunk> {
         event: None,
         usage,
         tool_call_delta: None,
+        grounding,
     })
 }
 
@@ -324,6 +353,10 @@ struct SseChunk {
     usage: Option<Usage>,
     /// Partial tool call data to accumulate (OpenAI streams tool calls incrementally).
     tool_call_delta: Option<ToolCallDelta>,
+    /// Grounding metadata from LiteLLM proxy (Gemini web search via vertex_ai_grounding_metadata).
+    /// `Some(None)` = empty metadata (search in progress),
+    /// `Some(Some(query))` = search complete with query.
+    grounding: Option<Option<String>>,
 }
 
 /// A partial tool call chunk from OpenAI's incremental streaming.
@@ -377,6 +410,13 @@ impl LlmClient for OpenAiChatClient {
             body["reasoning_effort"] = serde_json::json!(effort);
         }
 
+        // Add web_search_options if enabled (OpenAI native + LiteLLM proxy).
+        if self.enable_web_search {
+            body["web_search_options"] = serde_json::json!({
+                "search_context_size": "medium"
+            });
+        }
+
         // Add tools if provided.
         if !tools.is_empty() {
             let tool_defs: Vec<serde_json::Value> = tools
@@ -413,11 +453,26 @@ impl LlmClient for OpenAiChatClient {
     }
 }
 
+/// Known server-side tool names (executed by the provider, not the client).
+const SERVER_TOOL_NAMES: &[&str] = &["web_search"];
+
+/// Extract the search query from accumulated server tool arguments JSON.
+fn extract_server_tool_query(args: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(args)
+        .ok()
+        .and_then(|v| v.get("query")?.as_str().map(|s| s.to_string()))
+}
+
 /// Convert an HTTP response into a `Stream<Item = StreamEvent>`.
 ///
 /// Tool calls are streamed incrementally by OpenAI (first chunk has id + name,
 /// subsequent chunks carry partial arguments). This function accumulates them
 /// and emits complete `StreamEvent::ToolCall` events only when `[DONE]` arrives.
+///
+/// Server-side tools (e.g. `web_search` via LiteLLM) are detected and emitted
+/// as `ServerToolStart`/`ServerToolDone` instead of `ToolCall`.
+///
+/// Gemini grounding metadata (`vertex_ai_grounding_metadata`) is also handled.
 fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamEvent> + Send {
     use eventsource_stream::Eventsource;
     use futures::StreamExt;
@@ -426,28 +481,27 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
     let byte_stream = response.bytes_stream();
     let sse_stream = byte_stream.eventsource();
 
-    // We track usage across SSE chunks because OpenAI sends it in a
-    // separate chunk just before [DONE].
-    let usage_state = std::sync::Arc::new(tokio::sync::Mutex::new(Usage::default()));
-
-    // Accumulated tool call deltas: Vec<(id, name, arguments)> indexed by tool call index.
-    let tool_calls_accum: Vec<(String, String, String)> = Vec::new();
-
-    // Queue for emitting multiple events at once (accumulated tool calls + Done).
-    let pending: VecDeque<StreamEvent> = VecDeque::new();
+    let state = ChatStreamState {
+        usage: Usage::default(),
+        tool_calls_accum: Vec::new(),
+        pending: VecDeque::new(),
+        done: false,
+        // Gemini grounding: 0=not seen, 1=started, 2=done
+        grounding_state: 0u8,
+        // Server-side tool (Claude web_search via LiteLLM):
+        // (name, accumulated_arguments)
+        server_tool: None,
+    };
 
     futures::stream::unfold(
-        (sse_stream, usage_state, tool_calls_accum, pending, false),
-        |(mut sse_stream, usage_state, mut tool_calls_accum, mut pending, mut done)| async move {
-            // Drain pending events first (e.g., accumulated tool calls before Done).
-            if let Some(event) = pending.pop_front() {
-                return Some((
-                    event,
-                    (sse_stream, usage_state, tool_calls_accum, pending, done),
-                ));
+        (sse_stream, state),
+        |(mut sse_stream, mut st)| async move {
+            // Drain pending events first.
+            if let Some(event) = st.pending.pop_front() {
+                return Some((event, (sse_stream, st)));
             }
 
-            if done {
+            if st.done {
                 return None;
             }
 
@@ -462,44 +516,148 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
 
                         match parse_sse_data(&data) {
                             None => {
-                                // [DONE] marker — emit accumulated tool calls, then Done.
-                                done = true;
-                                for (id, name, args) in tool_calls_accum.drain(..) {
-                                    pending.push_back(StreamEvent::ToolCall {
+                                // [DONE] — flush server tool if still pending.
+                                st.done = true;
+                                if let Some((name, args)) = st.server_tool.take() {
+                                    let query = extract_server_tool_query(&args);
+                                    st.pending.push_back(StreamEvent::ServerToolDone {
+                                        name,
+                                        query,
+                                    });
+                                }
+                                // Emit accumulated client-side tool calls.
+                                for (id, name, args) in st.tool_calls_accum.drain(..) {
+                                    st.pending.push_back(StreamEvent::ToolCall {
                                         id,
                                         name,
                                         arguments: args,
                                         thought_signature: None,
                                     });
                                 }
-                                let usage = usage_state.lock().await.clone();
-                                pending.push_back(StreamEvent::Done(usage));
+                                st.pending.push_back(StreamEvent::Done(st.usage.clone()));
 
-                                if let Some(event) = pending.pop_front() {
-                                    return Some((
-                                        event,
-                                        (sse_stream, usage_state, tool_calls_accum, pending, done),
-                                    ));
+                                if let Some(event) = st.pending.pop_front() {
+                                    return Some((event, (sse_stream, st)));
                                 }
                                 return None;
                             }
                             Some(chunk) => {
                                 // Accumulate usage if present.
                                 if let Some(u) = chunk.usage {
-                                    let mut s = usage_state.lock().await;
-                                    *s = u;
+                                    st.usage = u;
                                 }
 
-                                // Accumulate tool call deltas by index.
+                                // Handle Gemini grounding metadata (via LiteLLM proxy).
+                                if let Some(grounding) = chunk.grounding {
+                                    match grounding {
+                                        None if st.grounding_state == 0 => {
+                                            // Empty metadata — search started.
+                                            st.grounding_state = 1;
+                                            // Don't return yet; process event/delta below.
+                                            // ServerToolStart will be emitted with the
+                                            // first event from this chunk (or standalone).
+                                            if chunk.event.is_none()
+                                                && chunk.tool_call_delta.is_none()
+                                            {
+                                                return Some((
+                                                    StreamEvent::ServerToolStart {
+                                                        name: "web_search".to_string(),
+                                                    },
+                                                    (sse_stream, st),
+                                                ));
+                                            }
+                                            // Has event — queue ServerToolStart, fall through.
+                                            st.pending.push_back(
+                                                chunk.event.clone().unwrap_or(
+                                                    StreamEvent::ServerToolStart {
+                                                        name: "web_search".to_string(),
+                                                    },
+                                                ),
+                                            );
+                                            return Some((
+                                                StreamEvent::ServerToolStart {
+                                                    name: "web_search".to_string(),
+                                                },
+                                                (sse_stream, st),
+                                            ));
+                                        }
+                                        Some(query) if st.grounding_state < 2 => {
+                                            // Non-empty metadata — search done.
+                                            let prev = st.grounding_state;
+                                            st.grounding_state = 2;
+                                            if prev == 0 {
+                                                // Never started — emit start first.
+                                                st.pending.push_back(
+                                                    StreamEvent::ServerToolDone {
+                                                        name: "web_search".to_string(),
+                                                        query: Some(query),
+                                                    },
+                                                );
+                                                if let Some(ev) = chunk.event {
+                                                    st.pending.push_back(ev);
+                                                }
+                                                return Some((
+                                                    StreamEvent::ServerToolStart {
+                                                        name: "web_search".to_string(),
+                                                    },
+                                                    (sse_stream, st),
+                                                ));
+                                            }
+                                            // Already started — just emit done.
+                                            if let Some(ev) = chunk.event {
+                                                st.pending.push_back(ev);
+                                            }
+                                            return Some((
+                                                StreamEvent::ServerToolDone {
+                                                    name: "web_search".to_string(),
+                                                    query: Some(query),
+                                                },
+                                                (sse_stream, st),
+                                            ));
+                                        }
+                                        _ => {
+                                            // Already handled or no-op — fall through.
+                                        }
+                                    }
+                                }
+
+                                // Handle tool call deltas.
                                 if let Some(delta) = chunk.tool_call_delta {
+                                    // Check if this is a server-side tool.
+                                    let is_server_tool = (!delta.name.is_empty()
+                                        && SERVER_TOOL_NAMES.contains(&delta.name.as_str()))
+                                        || st.server_tool.is_some();
+
+                                    if is_server_tool {
+                                        if st.server_tool.is_none() {
+                                            // First chunk of a server tool — emit start.
+                                            st.server_tool = Some((
+                                                delta.name.clone(),
+                                                delta.arguments.clone(),
+                                            ));
+                                            return Some((
+                                                StreamEvent::ServerToolStart {
+                                                    name: delta.name,
+                                                },
+                                                (sse_stream, st),
+                                            ));
+                                        }
+                                        // Continuation chunk — accumulate arguments.
+                                        if let Some((_, ref mut args)) = st.server_tool {
+                                            args.push_str(&delta.arguments);
+                                        }
+                                        continue;
+                                    }
+
+                                    // Regular client-side tool call — accumulate.
                                     let idx = delta.index as usize;
-                                    if idx >= tool_calls_accum.len() {
-                                        tool_calls_accum.resize(
+                                    if idx >= st.tool_calls_accum.len() {
+                                        st.tool_calls_accum.resize(
                                             idx + 1,
                                             (String::new(), String::new(), String::new()),
                                         );
                                     }
-                                    let entry = &mut tool_calls_accum[idx];
+                                    let entry = &mut st.tool_calls_accum[idx];
                                     if !delta.id.is_empty() {
                                         entry.0 = delta.id;
                                     }
@@ -510,12 +668,25 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                                     continue;
                                 }
 
+                                // Before emitting text/thinking, flush pending server tool.
+                                if let Some(ev) = &chunk.event
+                                    && matches!(
+                                        ev,
+                                        StreamEvent::TextDelta(_) | StreamEvent::ThinkingDelta(_)
+                                    )
+                                    && let Some((name, args)) = st.server_tool.take()
+                                {
+                                    let query = extract_server_tool_query(&args);
+                                    st.pending.push_back(ev.clone());
+                                    return Some((
+                                        StreamEvent::ServerToolDone { name, query },
+                                        (sse_stream, st),
+                                    ));
+                                }
+
                                 // Emit stream event if present.
                                 if let Some(event) = chunk.event {
-                                    return Some((
-                                        event,
-                                        (sse_stream, usage_state, tool_calls_accum, pending, done),
-                                    ));
+                                    return Some((event, (sse_stream, st)));
                                 }
                                 // No event (e.g. usage-only chunk) — continue.
                                 continue;
@@ -523,25 +694,37 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                         }
                     }
                     Some(Err(e)) => {
-                        // SSE parsing error — emit error and stop.
-                        done = true;
+                        st.done = true;
                         return Some((
                             StreamEvent::Error(format!("SSE stream error: {e}")),
-                            (sse_stream, usage_state, tool_calls_accum, pending, done),
+                            (sse_stream, st),
                         ));
                     }
                     None => {
-                        // Stream ended without [DONE] — interrupted.
-                        done = true;
+                        st.done = true;
                         return Some((
                             StreamEvent::Error("stream interrupted".into()),
-                            (sse_stream, usage_state, tool_calls_accum, pending, done),
+                            (sse_stream, st),
                         ));
                     }
                 }
             }
         },
     )
+}
+
+/// Internal state for the chat completions SSE stream processor.
+struct ChatStreamState {
+    usage: Usage,
+    /// Accumulated client-side tool call deltas: (id, name, arguments).
+    tool_calls_accum: Vec<(String, String, String)>,
+    /// Queue for emitting multiple events at once.
+    pending: std::collections::VecDeque<StreamEvent>,
+    done: bool,
+    /// Gemini grounding state: 0=not seen, 1=started, 2=done.
+    grounding_state: u8,
+    /// Pending server-side tool: (name, accumulated_arguments).
+    server_tool: Option<(String, String)>,
 }
 
 #[cfg(test)]
