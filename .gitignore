@@ -33,6 +33,5 @@ Cargo.lock
 # Custom
 .vscode/*
 .krew/*
-!.krew/settings.toml
 NUL
 nul
