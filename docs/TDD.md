@@ -1,6 +1,6 @@
 # krew-cli — 技术设计文档 (TDD)
 
-> 版本: 0.1.0 | 日期: 2026-03-06
+> 版本: 0.5.4 | 日期: 2026-03-21
 > 参考: [PDD](./PDD.md) | 参考项目: [codex CLI](https://github.com/openai/codex)
 
 ---
@@ -198,6 +198,52 @@ for agent_name in &config.settings.reply_order {
 }
 ```
 
+#### 3.1.2 AgentEvent 通信协议
+
+Agent Loop 通过 channel 发送 `AgentEvent` 与 TUI 层通信：
+
+```rust
+enum AgentEvent {
+    /// Agent 开始回复
+    ResponseStart { agent_name: String, display_name: String, color: String },
+    /// 文本 token
+    TextDelta(String),
+    /// 思考/推理内容
+    ThinkingDelta(String),
+    /// 服务端工具开始（如 Web Search）
+    ServerToolStart { name: String },
+    /// 服务端工具完成
+    ServerToolDone { name: String, query: Option<String> },
+    /// 工具调用开始
+    ToolCallStart { name: String, arguments: String },
+    /// 工具实时输出（如 shell 流式输出）
+    ToolCallOutput { text: String },
+    /// 工具调用完成
+    ToolCallDone { name: String, result_summary: String },
+    /// 回复完成，携带 token 用量和中间消息
+    Done { usage: Usage, intermediate_messages: Vec<ChatMessage>, final_text: String,
+           server_tool_uses: Vec<ServerToolUseInfo> },
+    /// 错误
+    Error { message: String, intermediate_messages: Vec<ChatMessage> },
+    /// 需要用户审批
+    ApprovalRequest { tool_name: String, arguments: String,
+                      allow_session_approval: bool,
+                      respond: oneshot::Sender<ReviewDecision> },
+    /// 正在重试（429/5xx）
+    Retrying { attempt: u32, max_attempts: u32, reason: String, delay_secs: f64 },
+}
+```
+
+#### 3.1.3 工具调用循环
+
+当 Agent 回复包含 ToolCall 时，进入工具调用循环：
+
+1. 收集当前轮次所有 ToolCall
+2. 检查审批策略（不需审批的并行执行，需审批的依次发送 ApprovalRequest）
+3. 执行工具，追加 Tool role 消息（含 tool_call_id 和结果）到消息历史
+4. 再次调用 LLM（携带工具结果）
+5. 重复直到无 ToolCall 或达到最大轮数（默认 25 轮）
+
 ### 3.2 消息路由（@ 寻址）
 
 #### 3.2.1 寻址解析
@@ -283,7 +329,7 @@ trait LlmClient: Send + Sync {
     async fn chat_stream(
         &self,
         messages: &[ChatMessage],
-        tools: &[ToolDefinition],
+        tools: &[ToolSpec],
         sampling: &SamplingConfig,
     ) -> Result<Pin<Box<dyn Stream<Item = StreamEvent>>>>;
 }
@@ -330,33 +376,43 @@ struct Usage {
   - API: `POST /v1/responses` (stream=true)
   - 请求格式: `{ model, input: [...], tools: [...], stream: true }`
   - 响应事件: `response.output_item.added`, `response.output_text.delta`, `response.completed` 等
-  - Web Search: tools 中添加 `{ type: "web_search_preview" }`
+  - Web Search: tools 中添加 `{ type: "web_search" }`
+  - Thinking: `reasoning` 字段 `{ effort: "low"|"medium"|"high", summary: "auto" }`
+  - **Azure 模式**：当 `azure_endpoint` 配置时激活，使用 `api-key` header 认证（非 Bearer）
 
 - **Chat Completions API** (`api_type = "chat"`)
-  - API: `POST /v1/chat/completions` (stream=true)
+  - API: `POST /v1/chat/completions` (stream=true, stream_options.include_usage=true)
   - 请求格式: `{ model, messages: [...], tools: [...], stream: true }`
   - 响应事件: 标准 SSE `data: {"choices":[{"delta":...}]}`
+  - Web Search: 通过 `web_search_options` 支持（OpenAI 原生 + LiteLLM 代理）
+  - 支持自定义 `base_url`（用于 LiteLLM 等代理）
+  - 连续相同 role 消息自动合并
 
 ##### Anthropic Client
 
 - API: `POST /v1/messages` (stream=true)
-- 使用 SSE 解析流式响应
-- 支持 tool_use (tools 参数)
+- 使用 `x-api-key` header 认证（非 Bearer）
+- SSE 解析流式响应（`content_block_delta`、`message_delta`）
 - 消息格式: `{ role, content: [{ type: "text" | "tool_use" | "tool_result" }] }`
-- 需要处理 Anthropic 特有的 content block 结构
-- Web Search: tools 中添加 `{ type: "web_search_20250305", name: "web_search" }`，响应含 `web_search_tool_result` block 和 `citations`
+- system 消息分离到顶层 `system` 字段
+- `max_tokens` **必填**，未设置时根据模型名自动填入最大输出 token 数
+- `temperature` clamp 到 0-1 范围
+- Web Search: tools 中添加 `{ type: "web_search_20250305", name: "web_search" }`
+- Thinking: Opus 4.6/Sonnet 4.6 使用 `adaptive` thinking + `output_config.effort`；旧模型使用 `enabled` + `budget_tokens`。启用 thinking 时强制 `temperature = 1.0`
 
 ##### Google Client
 
-- API: Gemini `generateContent` (stream=true)
-- 使用 SSE 解析流式响应
-- 支持 function calling
-- 消息格式: `{ role, parts: [{ text } | { functionCall }] }`
-- Web Search: tools 中添加 `{ google_search: {} }`，响应含 `groundingMetadata` 包括 `groundingChunks` 和 `groundingSupports`
+- API: Gemini `/models/{model}:streamGenerateContent` (stream=true)
+- **Vertex AI 模式**：设置 `vertex_project`/`vertex_location` 时使用 Bearer token 认证
+- SSE 解析（data-only SSE）
+- 消息格式: `{ role: "user"|"model", parts: [{ text } | { functionCall }] }`
+- system 消息分离到 `systemInstruction` 字段
+- Web Search: tools 中添加 `{ google_search: {} }`
+- Thinking: Gemini 3.x 使用 `thinkingConfig.thinkingLevel`；Gemini 2.5 使用 `thinkingConfig.thinkingBudget`
 
 ##### OpenAI-Compatible Client
 
-- 复用 OpenAI Client 实现，替换 base_url 和认证方式
+- 复用 OpenAI Chat Completions 实现，替换 base_url 和认证方式
 - 用于接入豆包（ByteDance）等第三方 OpenAI 兼容服务
 - 同样支持 `api_type` 配置（默认 `chat`）
 - Web Search: 取决于具体服务是否支持
@@ -373,7 +429,7 @@ struct Usage {
 | -------- | -------------------- | -------- |
 | 用户消息 | `user` | 直接发送 |
 | opus 自己之前的回复 | `assistant` | 直接发送 |
-| gpt 的回复 | **待定（需测试）** | 方案 A 或 B |
+| gpt 的回复 | 由 `other_agent_role` 配置决定 | 方案 A 或 B |
 
 **方案 A：其他 Agent 的回复作为 `user` role**（默认）
 
@@ -432,7 +488,8 @@ struct RetryConfig {
 
 | Provider | 注入方式 | 工具标识 |
 | -------- | -------- | -------- |
-| OpenAI (Responses API) | `tools` 数组加 `{ type: "web_search_preview" }` | `web_search_preview` |
+| OpenAI (Responses API) | `tools` 数组加 `{ type: "web_search" }` | `web_search` |
+| OpenAI (Chat Completions) | `web_search_options: { search_context_size: "medium" }` | `web_search` |
 | Anthropic | `tools` 数组加 `{ type: "web_search_20250305", name: "web_search" }` | `web_search_20250305` |
 | Google Gemini | `tools` 数组加 `{ google_search: {} }` | `google_search` |
 | OpenAI-Compatible | 取决于服务商是否支持 | - |
@@ -472,7 +529,30 @@ struct RetryConfig {
 
 **Anthropic 特殊处理：** Anthropic 的 `max_tokens` 为必填参数，当用户未配置 `sampling.max_tokens` 时，LLM Client 必须根据模型名称自动填入对应的最大输出 token 数。
 
-### 3.3.7 安全边界
+### 3.3.7 Thinking 配置映射
+
+各 Provider 的 thinking/reasoning 参数映射：
+
+| Provider | 模型 | API 参数 | effort 映射 |
+| -------- | ---- | -------- | ----------- |
+| OpenAI Responses | 所有 | `reasoning: { effort, summary: "auto" }` | low→"low", medium→"medium", high→"high", 未设置→"medium" |
+| Anthropic | Opus 4.6 / Sonnet 4.6 | `thinking: { type: "adaptive" }` + `output_config: { effort }` | 使用 adaptive thinking |
+| Anthropic | 旧模型 | `thinking: { type: "enabled", budget_tokens }` | low→1024, medium→8192, high→32768, 未设置→8192 |
+| Google | Gemini 3.x | `thinkingConfig: { includeThoughts: true, thinkingLevel }` | low→"low", medium→"medium", high→"high", 未设置→"high" |
+| Google | Gemini 2.5 | `thinkingConfig: { includeThoughts: true, thinkingBudget }` | low→1024, medium→8192, high→24576, 未设置→-1 (动态) |
+
+**Anthropic 强制约束**：启用 thinking 时强制 `temperature = 1.0`，覆盖用户配置（记录 warn 日志）。
+
+### 3.3.8 通用工具函数（llm-common）
+
+`krew-llm::common` 模块提供各 Provider 共享的通用函数：
+
+- **HTTP 状态码分类**：区分 429 / 5xx / 认证错误
+- **错误消息提取**：从 HTTP 响应 body 提取错误信息
+- **带重试请求发送**：统一的重试逻辑（429 指数退避、5xx 固定间隔、超时重试）
+- **连续相同 Role 消息合并**：合并连续的 user 或 assistant 消息（部分 Provider 要求 role 交替）
+
+### 3.3.9 安全边界
 
 **路径边界**：内置文件工具（read_file, write_file, edit_file, glob, grep）在执行前校验路径：
 
@@ -484,15 +564,23 @@ struct RetryConfig {
 
 ### 3.4 工具系统
 
-#### 3.4.1 工具注册
+#### 3.4.1 工具抽象
+
+工具系统使用 `ToolHandler` trait（执行逻辑）+ `ToolSpec` 结构体（元数据）双层设计：
 
 ```rust
-trait Tool: Send + Sync {
+/// Tool execution handler.
+trait ToolHandler: Send + Sync {
     fn name(&self) -> &str;
-    fn description(&self) -> &str;
-    fn parameters_schema(&self) -> serde_json::Value;  // JSON Schema
     fn requires_approval(&self) -> bool;
     async fn execute(&self, args: serde_json::Value) -> Result<ToolResult>;
+}
+
+/// Tool metadata (name, description, JSON Schema).
+struct ToolSpec {
+    name: String,
+    description: String,
+    parameters_schema: serde_json::Value,
 }
 
 struct ToolResult {
@@ -501,25 +589,62 @@ struct ToolResult {
 }
 ```
 
-#### 3.4.2 内置工具列表
+#### 3.4.2 工具注册中心
+
+`ToolRegistry` 统一管理工具的注册与查询：
+
+```rust
+impl ToolRegistry {
+    /// Create registry with read-only tools (read_file, glob, grep).
+    fn create_readonly_registry(cwd: PathBuf) -> ToolRegistry;
+
+    /// Create registry with all 7 built-in tools + activate_skill (when skills non-empty).
+    fn create_full_registry(cwd: PathBuf, skills: HashMap<String, SkillInfo>) -> ToolRegistry;
+
+    /// Dynamically register a tool (used for MCP tools and activate_skill).
+    fn register(&mut self, spec: ToolSpec, handler: Arc<dyn ToolHandler>);
+
+    /// Query whether a tool requires approval.
+    fn requires_approval(&self, name: &str) -> bool;
+}
+```
+
+#### 3.4.3 内置工具列表
 
 | 工具名 | 功能 | 类别 | suggest 下 | auto-edit 下 | full-auto 下 |
 | ------ | ---- | ---- | --------- | ----------- | ----------- |
-| `read_file` | 读取文件内容 | 读操作 | 自动 | 自动 | 自动 |
-| `write_file` | 写入文件 | 写操作 | 需确认 | 自动 | 自动 |
-| `edit_file` | 搜索替换编辑 | 写操作 | 需确认 | 自动 | 自动 |
-| `shell` | 执行 Shell 命令 | Shell | 需确认 | 需确认 | 自动 |
-| `glob` | 文件名模式匹配 | 读操作 | 自动 | 自动 | 自动 |
-| `grep` | 文件内容搜索 | 读操作 | 自动 | 自动 | 自动 |
-| `fetch_url` | 抓取 URL 内容（HTML→Markdown） | 网络 | 白名单域名自动，其他需确认 | 同左 | 自动 |
+| `read_file` | 读取文件内容（带行号，支持 offset/limit） | 读操作 | 自动 | 自动 | 自动 |
+| `write_file` | 写入/创建文件（自动创建父目录） | 写操作 | 需确认 | 自动 | 自动 |
+| `edit_file` | 搜索替换编辑（验证唯一匹配，生成 unified diff） | 写操作 | 需确认 | 自动 | 自动 |
+| `shell` | 执行 Shell 命令（默认超时 120s，输出限制 100KB） | Shell | 需确认* | 需确认* | 自动 |
+| `glob` | 文件名模式匹配（globset + walkdir） | 读操作 | 自动 | 自动 | 自动 |
+| `grep` | 文件内容搜索（正则匹配，支持 include 过滤） | 读操作 | 自动 | 自动 | 自动 |
+| `fetch_url` | 抓取 URL 内容（HTTP→HTTPS 升级，HTML→Markdown，1MB 限制） | 网络 | 白名单自动，其他需确认 | 同左 | 自动 |
+| `activate_skill` | 激活 Skill，加载完整指令（发现 Skills 时自动注册） | 读操作 | 自动 | 自动 | 自动 |
 
-#### 3.4.3 MCP 集成
+*Shell 命令可通过 `shell_allow_commands` 配置前缀匹配的免审批列表。
+
+**Shell 工具细节：**
+
+- **跨平台 Shell 检测**：Windows 优先 Git Bash（搜索顺序：`KREW_BASH_PATH` 环境变量 → PATH 中的 bash.exe（跳过 WSL bash）→ `C:\Program Files\Git\bin\bash.exe`）；Unix 使用 `$SHELL` → `/bin/sh`
+- **超时**：`timeout_seconds` 参数（默认 120 秒）
+- **输出截断**：超过 100KB 时截断并附带提示 `[output truncated at 100KB]`
+- **Windows**：使用 `CREATE_NO_WINDOW` 创建标志防止控制台窗口闪现
+
+**fetch_url 工具细节：**
+
+- HTTP URL 自动升级为 HTTPS
+- 响应大小限制 1MB，超出截断
+- 域名白名单匹配：URL 域名以白名单项结尾即匹配（如 `docs.github.com` 匹配 `github.com`）
+- 跟随重定向，超时 30 秒
+
+#### 3.4.4 MCP 集成
 
 MCP 实现分为三个模块：
 
 - `McpClient` — 底层通信，封装 rmcp SDK，支持 stdio 和 Streamable HTTP 两种传输
-- `McpManager` — 管理多个 MCP 服务器的生命周期，提供统一的工具发现和调用接口
-- `McpToolHandler` — 将 MCP 工具适配为内置 Tool trait，统一注册到工具系统
+- `McpManager` — 管理多个 MCP 服务器的生命周期，提供统一的工具发现和调用接口。工具使用限定名格式 `mcp__{server}__{tool}`（字符清理），显示名格式 `mcp:{server}/{tool}`
+- `McpToolHandler` — 将 MCP 工具适配为 ToolHandler trait，统一注册到 ToolRegistry
 
 **双传输支持**：
 
@@ -537,9 +662,23 @@ url = "https://mcp.example.com/sse"
 headers = { Authorization = "Bearer $TOKEN" }
 ```
 
-MCP 服务器在会话启动时初始化，发现的工具自动注册到工具系统中，与内置工具统一暴露给 Agent。工具的审批级别由 MCP 服务器的 `trust` 配置和工具的 `annotations` 元数据共同决定。
+MCP 服务器在会话启动时初始化，发现的工具自动注册到 ToolRegistry 中，与内置工具统一暴露给 Agent。工具的审批级别由 MCP 服务器的 `trust` 配置和工具的 `annotations` 元数据共同决定：
 
-#### 3.4.4 工具审批流程
+- `trust = "auto"` → `requires_approval()` 始终返回 false
+- `trust = "confirm"`（默认）→ 根据 annotations 判断（`read_only` 且非 `destructive` 可自动执行，否则需确认）
+
+环境变量值支持 `$VAR` 语法展开。
+
+#### 3.4.5 工具审批流程
+
+```rust
+enum ReviewDecision {
+    Approved,              // 本次批准
+    ApprovedForSession,    // 本次会话内按策略缓存（shell 按前缀、fetch_url 按 host、其他按工具名）
+    Denied,                // 拒绝
+    Abort,                 // 中止整个 Agent 回合
+}
+```
 
 ```txt
 Agent 请求工具调用
@@ -547,7 +686,7 @@ Agent 请求工具调用
     ▼
 检查审批策略(approval_mode) + 工具类型
     │
-    │  读操作(read_file/glob/grep): 所有策略下均自动执行
+    │  读操作(read_file/glob/grep/activate_skill): 所有策略下均自动执行
     │
     ├── full-auto ──→ 所有工具直接执行
     │
@@ -557,12 +696,26 @@ Agent 请求工具调用
     └── suggest ───→ 写操作/Shell/MCP 均需确认
                           │
                           ▼
-                    渲染审批提示
-                    ⚡ shell("cargo test") — 允许? [y/n/always]
+                    渲染审批 Overlay（含工具名、参数、diff 预览）
+                    快捷键: y=批准 / a=会话级批准 / n=拒绝 / Ctrl+C=中止
                           │
                           ▼
                     用户选择 ──→ 执行或跳过
 ```
+
+**会话级审批缓存**：选择 `ApprovedForSession` 后，按工具类型分策略缓存：
+
+- **Shell 工具**：按命令前缀缓存（如 `cargo build`），同前缀不同参数自动放行，不同子命令仍需审批
+- **fetch_url**：按域名缓存，同 host 不同路径自动放行，不同域名仍需审批
+- **其他写工具/MCP 工具**：按工具名缓存，同名工具后续调用自动放行
+
+**审批 Overlay 细节：**
+
+- 布局：工具调用信息 + 可选项列表（支持 `↑`/`↓` 导航、`Enter` 确认）
+- 快捷键：`y`=批准 / `a`=会话级批准 / `n` 或 `Esc`=拒绝 / `Ctrl+C`=中止
+- `edit_file` 审批显示 colored unified diff 预览
+- `write_file` 审批显示文件内容预览
+- 多个工具调用串行处理（审批队列，逐一显示）
 
 ### 3.5 Slash 命令系统
 
@@ -570,6 +723,7 @@ Agent 请求工具调用
 enum SlashCommand {
     Clear,              // 清屏（同 /new）
     Resume,             // 恢复历史会话
+    Rewind,             // 回退到历史消息（fork 语义）
     Agents,             // 列出 Agent 及 token 用量
     Compact(String),    // 参数: agent name
     Mcp,                // 列出 MCP 服务器及工具
@@ -587,7 +741,7 @@ impl SlashCommand {
 }
 ```
 
-命令发现：输入 `/` 后，匹配所有命令名前缀，弹出补全列表。
+命令发现：输入 `/` 后，匹配所有内置命令和自定义命令名前缀，弹出补全列表。内置命令优先级高于自定义命令。
 
 #### 3.5.1 /agents 输出规格
 
@@ -605,7 +759,7 @@ Agents in session:
 
 **聚合规则：**
 
-- 遍历 `session.messages` 中所有 `role = Assistant` 的消息，按 `agent_name` 分组
+- 遍历 `session.messages` 中所有 `role = Assistant` 的消息，按 `name` 字段分组
 - 每个 Agent 累加其所有消息的 `usage.prompt_tokens` 和 `usage.completion_tokens`
 - Total 行使用 `session.total_tokens_used`
 
@@ -616,20 +770,25 @@ Agents in session:
 **流程：**
 
 ```txt
-1. 取 session.messages 中除最后 N 条外的所有消息作为"待压缩区"（N 可配，默认保留最后 3 轮）
-2. 构建压缩请求: system="请将以下对话历史压缩为简洁摘要" + 待压缩区消息
-3. 调用指定 Agent 的 LLM 生成摘要文本
-4. 替换 session.messages:
-   [{ role: System, content: "会话历史摘要:\n{摘要}" }, ...保留的最后 N 条]
-5. 持久化: 将 compact 前的完整历史备份到 .krew/sessions/{id}.pre-compact.{timestamp}.toml
-6. 更新当前会话文件
+1. 取 session.messages 中除最后 N 轮外的所有消息作为"待压缩区"
+   （N 由 compact_keep_rounds 配置，默认 10 轮。一轮 = 一条用户消息 + 其后所有非用户消息）
+2. 从待压缩区提取密语消息（带 whisper_targets 的用户消息及其 agent 回复）
+3. 从待压缩区提取 skill activation 消息
+4. 构建压缩请求: system="请将以下对话历史压缩为简洁摘要" + 剩余待压缩区消息
+5. 调用指定 Agent 的 LLM 生成摘要文本
+6. 替换 session.messages:
+   [{ role: User, content: "[Session History Summary]\n{摘要}" },
+    ...提取的 skill 消息, ...提取的密语消息, ...保留的最后 N 轮]
+7. 持久化: 将 compact 前的完整历史备份到 .krew/sessions/{id}.pre-compact.{unix_timestamp}.toml
+8. 更新当前会话文件，显示 token 缩减统计和备份路径
 ```
 
 **关键规则：**
 
 - **备份可回滚**：compact 前自动备份，用户可手动恢复
-- **跨 Agent 一致性**：压缩后的摘要作为 System 消息注入所有 Agent 的上下文，保证所有 Agent 看到相同的历史摘要
-- **持久化格式**：摘要存储为 session 文件中的 `[compact_summary]` 段
+- **摘要格式**：摘要作为 **user-role** 消息注入（前缀 `[Session History Summary]`），所有 Agent 共享
+- **密语保留**：密语消息从压缩区提取并保留，不送入 LLM 压缩，完整保留其 `whisper_targets` 元数据
+- **消息顺序**：`[Summary] + [skill messages] + [whisper messages] + [kept rounds]`
 
 #### 3.5.3 自动压缩（Auto Compact）
 
@@ -688,6 +847,105 @@ Agent 回复完成，收到 StreamEvent::Done(usage)
 - 自动压缩同样执行备份流程，确保可回滚
 - `auto_compact_threshold = 0` 时禁用自动压缩
 - 压缩后重置标记，下一次 Agent 回复后重新评估
+- 密语消息从压缩区提取并保留（不发给 LLM 压缩，而是作为独立消息保留）
+
+#### 3.5.4 /rewind 实现
+
+`/rewind` 命令弹出 RewindPicker 选择截断点，使用 fork 语义：
+
+```txt
+1. 用户输入 /rewind
+    │
+    ▼
+2. 弹出 RewindPicker popup（列出所有用户消息，时间正序，默认选中最后一条）
+    │
+    ▼
+3. 用户选择消息（存储该消息在 self.messages 中的原始下标）
+    │
+    ├── 选中第一条用户消息 → 等同 /clear：保存当前完整 session，清屏，新 session ID
+    │
+    └── 选中非第一条消息 → fork:
+         ├── 截断 self.messages 到选择点
+         ├── 设置 rewound 标记（不立即保存）
+         ├── 清屏并重放保留的消息
+         └── 重建状态（token usage、last_respondent、skills）
+    │
+    ▼
+4. 后续行为:
+    ├── 发送新消息 → 生成新 session ID → 正常保存
+    ├── /exit → 不保存截断后的 session
+    ├── /clear → 不保存，清除 rewound 标记
+    ├── /resume → 不保存，加载后清除 rewound 标记
+    └── /compact → 拒绝执行，提示先发送新消息
+```
+
+#### 3.5.5 自定义命令
+
+用户可通过 Markdown 文件定义自定义 Slash 命令。
+
+**发现逻辑：**
+
+使用 `discovery_paths()` 函数生成 6 层搜索路径（`.krew/commands/`、`.agents/commands/`、`.claude/commands/`，项目级 + 用户级），递归扫描子目录。子目录形成命名空间（如 `review/code.md` → `/review:code`）。同名命令 first-found wins，内置命令优先级高于自定义命令。
+
+**Frontmatter 解析：**
+
+```rust
+struct CommandFrontmatter {
+    description: Option<String>,
+    argument_hint: Option<String>,  // YAML key: "argument-hint"
+}
+```
+
+**参数替换：** `$ARGUMENTS` → 完整参数字符串；`$1`、`$2`... → 位置参数。
+
+**Bash 预处理：** 参数替换后，扫描命令内容中的 `` !`command` `` 块，在 session cwd 中执行 Shell 命令，将块内容替换为 stdout 输出。执行失败时替换为错误消息（不中止）。最终内容通过 `parse_input()` 路由给 Agent。
+
+#### 3.5.6 Skill 系统实现
+
+**Skill 发现（`krew-core::skill_discovery`）：**
+
+```rust
+struct SkillRecord {
+    name: String,
+    description: String,
+    location: PathBuf,       // SKILL.md absolute path
+    base_dir: PathBuf,       // skill directory absolute path
+    compatibility: Option<String>,
+    metadata: Option<HashMap<String, String>>,
+}
+
+enum SkillError {
+    ParseError(String),      // frontmatter parse failure
+    MissingField(String),    // required field missing
+    IoError(std::io::Error),
+}
+
+/// Discover skills from 7 priority-ordered paths.
+/// Scan depth: 4 levels. Skip: .git/, node_modules/, target/.
+fn discover_skills(cwd: &Path, home: &Path, extra_paths: &[String]) -> Vec<SkillRecord>;
+```
+
+**Skill Catalog 注入（`krew-core::skill_catalog`）：**
+
+```rust
+/// Build XML catalog from discovered skills.
+fn build_skill_catalog(skills: &[SkillRecord]) -> Option<String>;
+```
+
+生成 `<available-skills>` XML 格式，注入到 system prompt 中（项目指令之后、Agent identity 之前），附带行为指令告知 LLM 何时调用 `activate_skill`。
+
+**Skill 激活（`krew-tools::builtin::activate_skill`）：**
+
+`activate_skill` 工具（只读，`requires_approval() = false`）接受 `name: String` 参数，返回 XML 包裹的 SKILL.md 正文内容 + Skill 目录绝对路径 + 资源文件列表（枚举 `scripts/`、`references/`、`assets/` 子目录，深度限制 2 层）。支持激活去重。
+
+**Skill 配置（`krew-config`）：**
+
+```rust
+struct SkillsConfig {
+    enabled: bool,                // default true
+    extra_paths: Vec<String>,
+}
+```
 
 ### 3.6 会话持久化
 
@@ -752,6 +1010,31 @@ total_tokens = 5642
 
 所有数据都存储在项目目录的 `.krew/` 下，跨平台统一。
 
+#### 3.6.3 会话生命周期与 Rewound 状态
+
+```txt
+启动
+  │
+  ├── 无 --resume → 创建新 session（生成 ID，记录 cwd/agents/时间）
+  │
+  └── --resume → 加载历史 session（恢复消息历史到各 Agent 上下文）
+  │
+  ▼
+运行中
+  │
+  ├── 用户消息 / Agent 回复 → 实时保存（原子写入: .tmp → rename）
+  ├── /rewind → 设置 rewound 标记，延迟生成新 session ID
+  ├── /compact → 备份后压缩
+  ├── /clear → 保存当前 session，新建 session
+  └── /resume → 保存当前 session，加载另一个 session
+  │
+  ▼
+退出
+  └── rewound 状态下 /exit → 不保存截断后的 session
+```
+
+**Rewound 状态守卫**：`save_session()` 统一检查 `rewound` 标记，标记为 true 时拒绝保存（避免截断后的历史覆盖原始完整历史）。发送新消息时先生成新 session ID，清除 `rewound` 标记，然后正常保存。
+
 ### 3.7 配置管理
 
 #### 3.7.1 配置加载优先级
@@ -770,6 +1053,21 @@ CLI 参数                      (命令行覆盖)
 
 `RawConfig` / `UserConfig` 为 partial 类型（settings 字段全部 `Option`），保留字段存在性用于合并。合并后由 `resolve()` 填充默认值生成最终 `Config`。
 
+**合并规则：**
+
+- 同名 provider 整项替换（project 覆盖 user）
+- 同名 MCP server 替换，不同名追加
+- 标量字段 project 优先
+- `agents` 和 `reply_order` 仅在项目级配置中定义
+- `--config` 指定路径时仍合并 user config
+
+**配置校验（`Config::validate()`）：**
+
+- `reply_order` 中引用的 agent 必须存在于 `agents` 列表
+- agent 的 `provider` 必须存在于 `providers` 表（`"builtin"` 除外）
+- agent `name` 不可重复
+- `"all"` 为保留字，不可用作 agent 名称（大小写敏感，仅匹配全小写）
+
 #### 3.7.2 配置数据结构
 
 ```rust
@@ -779,6 +1077,7 @@ struct Config {
     agents: Vec<AgentConfig>,
     providers: HashMap<String, ProviderConfig>,
     mcp_servers: Vec<McpServerConfig>,
+    skills: SkillsConfig,           // Skill 系统配置（默认 enabled=true）
 }
 
 #[derive(Deserialize)]
@@ -786,7 +1085,7 @@ struct Settings {
     approval_mode: ApprovalMode,    // suggest | auto-edit | full-auto
     reply_order: Vec<String>,       // @all 回答顺序
     auto_compact_threshold: Option<u32>,  // 会话自动压缩 token 阈值（默认 120000）
-    compact_keep_rounds: Option<usize>,   // 压缩时保留最近 N 轮对话（默认 3）
+    compact_keep_rounds: Option<usize>,   // 压缩时保留最近 N 轮对话（默认 10）
     input_history_limit: Option<usize>,   // 输入历史上限（默认 1000）
     paste_burst_detection: Option<bool>,  // 粘贴检测（Windows 回退方案）
     worker_threads: Option<usize>,        // tokio 工作线程数（默认 4）
@@ -850,6 +1149,8 @@ struct ProviderConfig {
     api_key: Option<String>,            // 方式二：直接填写（不推荐）
     api_key_env: Option<String>,        // 方式一：环境变量名（优先）
     base_url: Option<String>,
+    azure_endpoint: Option<String>,     // Azure OpenAI 端点（设置时激活 Azure 模式）
+    azure_api_version: Option<String>,  // Azure API 版本
     vertex_project: Option<String>,     // Google Vertex AI 项目 ID
     vertex_location: Option<String>,    // Google Vertex AI 区域（如 "us-central1"）
 }
@@ -877,6 +1178,12 @@ struct McpServerConfig {
 enum McpTrust {
     Auto,       // 跳过审批
     Confirm,    // 按 approval_mode 确认（默认）
+}
+
+#[derive(Deserialize)]
+struct SkillsConfig {
+    enabled: bool,                  // 是否启用 Skill 系统（默认 true）
+    extra_paths: Vec<String>,       // 额外的 Skill 搜索路径
 }
 ```
 
@@ -914,28 +1221,68 @@ pub fn load_project_instructions(cwd: &Path) -> Result<Option<String>, std::io::
 
 **注入格式（`krew-core::agent::build_system_prompt`）：**
 
-```rust
-/// Build the final system prompt by merging project instructions
-/// with the agent's configured system_prompt.
-pub fn build_system_prompt(
-    project_instructions: Option<&str>,
-    agent_system_prompt: Option<&str>,
-) -> Option<String>;
-```
-
-输出格式：
+System Prompt 层级合并顺序：
 
 ```txt
-<project-instructions>
-{AGENTS.md 合并内容}
-</project-instructions>
+1. <project-instructions>        ← AGENTS.md 合并内容
+   {AGENTS.md 合并内容}
+   </project-instructions>
 
-{agent system_prompt}
+2. <available-skills>             ← Skill Catalog（如有 skills）
+   <skill name="..." location="...">...</skill>
+   </available-skills>
+   {行为指令}
+
+3. {agent system_prompt}          ← Agent 自身配置的 system_prompt
 ```
 
-当无项目指令时，直接使用 `system_prompt` 原值。
+当无项目指令时跳过第 1 层；无可用 Skills 时跳过第 2 层。
 
 **加载时机：** `App::new()` 中一次性加载，结果存储在 `App.project_instructions` 字段，所有 Agent 共享。文件不存在时静默返回 `None`。
+
+### 3.8 TUI 实现细节
+
+#### 3.8.1 Inline TUI 框架
+
+基于 ratatui + crossterm，不使用 alternate screen，而是使用 inline viewport（自定义 Terminal 实现）。消息通过 `insert_before` 插入到 viewport 上方，viewport 动态调整高度。支持 keyboard enhancement（静默降级）。
+
+#### 3.8.2 流式渲染管线
+
+以 ~60Hz 频率执行 commit tick，驱动 token 队列 drain 和行插入。使用 `AdaptiveChunkingPolicy::decide()` 决定每次 drain 的数量，平衡渲染流畅性与响应速度。
+
+#### 3.8.3 Agent 状态指示器
+
+Agent 生成回复期间，在 viewport 分隔线上方显示状态行：闪烁 spinner（`●`/`◦`，600ms 间隔）、Agent 显示名、"Working" 文字、已用时间（紧凑格式：`45s` / `1m 23s` / `1h 05m`）、中断提示 "ESC to interrupt"。`ResponseStart` 出现，`Done`/`Error` 消失。
+
+#### 3.8.4 Diff 渲染
+
+`edit_file` 工具的审批 overlay 显示 colored diff 预览：
+
+- **主题感知**：dark theme 使用深色背景，light theme 使用 GitHub pastel 背景
+- **三级颜色深度**：TrueColor / ANSI-256 / ANSI-16 自动适配
+- **行布局**：gutter（行号）+ sign（+/-/空格）+ content
+- **语法高亮**：使用 syntect（超过 512KB 或 10,000 行跳过高亮）
+- **Unicode 感知**：CJK 字符宽度计算（unicode-width）
+
+#### 3.8.5 补全弹窗
+
+输入 `/`、`@`、`#` 触发对应的补全弹窗，替换状态栏区域并扩展 viewport 高度。支持键盘导航（上下箭头、Tab/Enter 确认、Esc 关闭），同一时间只能显示一个弹窗。Slash 命令补全同时包含内置命令和自定义命令。
+
+### 3.9 日志系统
+
+使用 `tracing-subscriber` + `tracing-appender` 将日志写入 `.krew/logs/` 目录。按天滚动（daily rolling），默认保留 7 天，过期自动删除。日志不输出到 stdout/stderr（不干扰 TUI）。`--verbose` 参数切换 DEBUG/INFO 级别。
+
+### 3.10 进程统计
+
+`ProcessStats::collect()` 跨平台查询当前进程的物理内存占用（RSS）和线程数量：
+
+| 平台 | 内存查询 | 线程查询 |
+| ---- | -------- | -------- |
+| Linux | `/proc/self/status` (VmRSS) | `/proc/self/status` (Threads) |
+| Windows | `GetProcessMemoryInfo` | `CreateToolhelp32Snapshot` |
+| macOS | `mach_task_basic_info` | `proc_pidinfo` |
+
+失败时返回 `None` 而非报错。提供 `format_memory()` 格式化显示（`512 B` / `15.00 MB`）。
 
 ---
 
@@ -946,39 +1293,34 @@ pub fn build_system_prompt(
 ```rust
 /// 统一消息格式（所有 Provider 通用）
 struct ChatMessage {
-    role: Role,
-    agent_name: Option<String>,     // assistant 消息标明来源 Agent
-    addressee: Option<String>,      // user 消息的目标: "all" | agent_name（恢复会话时用于还原对话流）
+    role: ChatRole,
+    name: Option<String>,           // assistant 消息: Agent name; tool 消息: tool name
+    content: String,
+    tool_calls: Option<Vec<ToolCallInfo>>,   // assistant 消息携带的工具调用
+    tool_call_id: Option<String>,            // tool 消息: 对应的 tool_call id
+    server_tool_uses: Vec<ServerToolUseInfo>, // 服务端工具调用（Web Search 等）
+    addressee: Option<String>,      // user 消息的目标: "all" | agent_name
     whisper_targets: Option<Vec<String>>,  // 密语目标 Agent 列表（设置时仅组内可见）
-    content: MessageContent,
-    tool_calls: Option<Vec<ToolCall>>,
-    tool_results: Option<Vec<ToolCallResult>>,
     usage: Option<Usage>,           // assistant 消息携带本次请求的 token 用量
     created_at: DateTime<Utc>,
 }
 
-enum Role {
+enum ChatRole {
     System,
     User,
     Assistant,
     Tool,           // 工具结果消息
 }
 
-enum MessageContent {
-    Text(String),
-    Blocks(Vec<ContentBlock>),  // Anthropic 风格的多 block 内容
-}
-
-struct ToolCall {
+struct ToolCallInfo {
     id: String,
     name: String,
-    arguments: serde_json::Value,
+    arguments: String,  // JSON string
 }
 
-struct ToolCallResult {
-    tool_call_id: String,
-    content: String,
-    is_error: bool,
+struct ServerToolUseInfo {
+    name: String,
+    query: Option<String>,
 }
 ```
 
@@ -1042,7 +1384,7 @@ struct AgentRuntime {
  7. StreamEvent::Done(usage)
      │
      ▼
- 8. 构建 Agent 回复 ChatMessage { role: Assistant, agent_name: "opus", usage, ... }
+ 8. 构建 Agent 回复 ChatMessage { role: Assistant, name: "opus", usage, ... }
      │
      ▼
  9. session.messages.push(reply)
@@ -1104,7 +1446,7 @@ struct AgentRuntime {
          tool.execute(args)
               │
               ▼
-         构建 ToolCallResult
+         构建 Tool role 消息（含 tool_call_id）
               │
               ▼
          追加到消息列表
@@ -1128,8 +1470,10 @@ struct AgentRuntime {
  2. 加载配置 → normalize
      │
      ▼
- 3. parse_input(raw_prompt) → 解析寻址（仅从 -p 参数，不含 stdin）
+ 3. parse_input(raw_prompt) → 解析 @agent/@all/#agent 寻址（仅从 -p 参数，不含 stdin）
      │  └── LastRespondent → 报错退出 (exit code 2)
+     │  └── #all → 报错退出 (exit code 2)
+     │  └── #agent → 密语模式（标记 whisper_targets，Agent 间可见性过滤）
      │
      ▼
  4. 读取 stdin（若有管道输入）→ <stdin>...</stdin> 包裹 → 拼接到 prompt 前方
@@ -1149,9 +1493,11 @@ struct AgentRuntime {
      ├─ [agent_name] 调用 start_completion(messages)
      │    │
      │    ├── TextDelta → text 格式: 立即打印并 flush; json 格式: 缓存
-     │    ├── ToolCallStart → 输出 ⚡ tool(args) 或 JSON
-     │    ├── ToolCallDone → 输出 ⎿ summary 或 JSON
-     │    ├── ServerToolStart/Done → 输出 🌐 tool 或 JSON
+     │    ├── ToolCallStart → 输出 ⚡ tool(args) 或 JSON {type:"tool_start"}
+     │    ├── ToolCallOutput → 输出工具实时文本或 JSON {type:"tool_output"}
+     │    ├── ToolCallDone → 输出 ⎿ summary 或 JSON {type:"tool_done"}
+     │    ├── ServerToolStart → 输出 🌐 tool 或 JSON {type:"server_tool_start"}
+     │    ├── ServerToolDone → 输出 🌐 done 或 JSON {type:"server_tool_done"}
      │    ├── ApprovalRequest → 自动 Approved
      │    ├── ThinkingDelta → 静默丢弃
      │    ├── Retrying → 输出到 stderr
@@ -1229,18 +1575,20 @@ krew-cli/
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       ├── router.rs           # @ 寻址解析与消息路由
-│   │       ├── command.rs          # Slash 命令定义与执行
-│   │       ├── compact.rs          # /compact 实现
-│   │       ├── event.rs            # 事件类型定义
-│   │       ├── persistence.rs      # 会话持久化逻辑
-│   │       ├── process_stats.rs    # 进程统计（内存、线程）
+│   │       ├── router.rs           # @ / # 寻址解析与消息路由
+│   │       ├── command.rs          # Slash 命令定义与执行（含自定义命令发现）
+│   │       ├── compact.rs          # /compact 实现（含密语消息保留）
+│   │       ├── event.rs            # AgentEvent 类型定义
+│   │       ├── persistence.rs      # 会话持久化逻辑（含 rewound 状态守卫）
+│   │       ├── process_stats.rs    # 进程统计（内存、线程，跨平台）
+│   │       ├── skill_discovery.rs  # Skill 发现与 SKILL.md 解析
+│   │       ├── skill_catalog.rs    # Skill Catalog XML 构建
 │   │       └── agent/              # Agent 运行时 + Agent Loop
 │   │           ├── mod.rs
-│   │           ├── agent_loop.rs   # Agent Loop 主循环
-│   │           ├── approval.rs     # 工具审批逻辑
+│   │           ├── agent_loop.rs   # Agent Loop 主循环（含工具调用循环）
+│   │           ├── approval.rs     # 工具审批逻辑（含会话级缓存）
 │   │           ├── init.rs         # Agent 初始化
-│   │           ├── prepare.rs      # 消息准备与转换
+│   │           ├── prepare.rs      # 消息准备与转换（含密语可见性过滤）
 │   │           └── prune.rs        # 消息裁剪
 │   │
 │   ├── krew-llm/             # LLM Client 抽象
@@ -1257,7 +1605,7 @@ krew-cli/
 │   ├── krew-tools/           # 工具系统
 │   │   ├── Cargo.toml
 │   │   └── src/
-│   │       ├── lib.rs              # Tool trait + 注册
+│   │       ├── lib.rs              # ToolHandler trait + ToolSpec + ToolRegistry
 │   │       ├── builtin/            # 内置工具
 │   │       │   ├── mod.rs
 │   │       │   ├── read_file.rs
@@ -1267,12 +1615,13 @@ krew-cli/
 │   │       │   ├── shell_parse.rs  # Shell 参数解析
 │   │       │   ├── glob.rs
 │   │       │   ├── grep.rs
-│   │       │   └── fetch_url.rs    # URL 抓取（HTML→Markdown）
+│   │       │   ├── fetch_url.rs    # URL 抓取（HTML→Markdown）
+│   │       │   └── activate_skill.rs  # Skill 激活工具
 │   │       └── mcp/                # MCP 客户端
 │   │           ├── mod.rs
 │   │           ├── client.rs       # MCP 通信层
 │   │           ├── manager.rs      # 多服务器管理
-│   │           └── handler.rs      # MCP→Tool trait 适配
+│   │           └── handler.rs      # MCP→ToolHandler 适配
 │   │
 │   ├── krew-storage/         # 持久化
 │   │   ├── Cargo.toml
@@ -1314,9 +1663,9 @@ krew-cli/
 | Crate | 职责 | 依赖 |
 | ----- | ---- | ---- |
 | `krew-cli` | CLI 入口、TUI 渲染、非交互式 prompt 模式、用户交互、审批 overlay、流式管线 | krew-core, krew-config, krew-llm, krew-tools, krew-storage |
-| `krew-core` | 会话管理、Agent Loop、消息路由、Slash 命令、Compact | krew-llm, krew-tools, krew-storage, krew-config |
-| `krew-llm` | LLM API 抽象、各 Provider 实现 | reqwest, serde, eventsource-stream |
-| `krew-tools` | 工具 trait、内置工具（含 fetch_url）、MCP 客户端 | tokio, serde, rmcp, htmd, reqwest |
+| `krew-core` | 会话管理、Agent Loop、消息路由、Slash 命令、Compact、Skill 发现/Catalog、自定义命令 | krew-llm, krew-tools, krew-storage, krew-config |
+| `krew-llm` | LLM API 抽象、各 Provider 实现、通用重试逻辑 | reqwest, serde, eventsource-stream |
+| `krew-tools` | ToolHandler trait、ToolRegistry、内置工具（含 fetch_url、activate_skill）、MCP 客户端 | tokio, serde, rmcp, htmd, reqwest |
 | `krew-storage` | TOML 文件会话持久化、输入历史 | toml, serde |
 | `krew-config` | TOML 配置加载、AGENTS.md 指令加载 | toml, serde |
 
@@ -1362,11 +1711,12 @@ krew-cli
 
 | 模块 | 测试重点 |
 | ---- | ------- |
-| `router.rs` | @ 寻址解析的各种边界情况 |
-| `message.rs` | 消息序列化/反序列化 |
-| `command.rs` | Slash 命令识别与匹配 |
-| `config` | 配置加载、合并、默认值 |
+| `router.rs` | @ / # 寻址解析的各种边界情况（含密语） |
+| `message.rs` | 消息序列化/反序列化（含 whisper_targets） |
+| `command.rs` | Slash 命令识别与匹配（含自定义命令发现） |
+| `config` | 配置加载、合并、默认值、skills 配置 |
 | `prompt_mode` | stdin 拼接、寻址校验、输出格式、工具参数预览 |
+| `skill_discovery` | Skill 发现、SKILL.md 解析、优先级 |
 | `openai_responses.rs` / `openai_chat.rs` / `anthropic.rs` / `google.rs` | 消息格式转换正确性 |
 
 ### 8.2 集成测试
@@ -1408,3 +1758,7 @@ krew-cli
 - ~~**v0.4**: Agent 间可 @对方 形成 AI-to-AI 对话（支持 immediate/queued 两种路由策略，`agent_to_agent_max_rounds` 轮次限制）~~ ✅ 已完成
 - ~~**v0.4.2**: 非交互式 Prompt 模式（`-p`），支持 stdin 管道、text/json 输出格式、全自动审批、AI-to-AI 路由、session 持久化~~ ✅ 已完成
 - ~~**v0.5.0**: 密语模式（`#agent`），支持单目标/多目标私密消息、密语组内 A2A、消息可见性过滤、密语压缩保留、TUI/P 模式锁图标显示~~ ✅ 已完成
+- ~~**v0.5.1**: `/rewind` 会话回退命令（fork 语义、RewindPicker UI、rewound 状态管理）~~ ✅ 已完成
+- ~~**v0.5.2**: LiteLLM 代理支持（OpenAI Responses API 自定义 base_url）~~ ✅ 已完成
+- ~~**v0.5.3**: Markdown 软换行处理、OpenAI Chat reasoning_effort 支持~~ ✅ 已完成
+- ~~**v0.5.4**: OpenAI Chat Web Search 支持~~ ✅ 已完成

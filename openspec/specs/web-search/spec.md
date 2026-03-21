@@ -17,11 +17,11 @@ When `enable_web_search = true` is configured for an agent, the LLM client SHALL
 
 #### Scenario: OpenAI Chat Completions API with web search enabled
 - **WHEN** an agent uses OpenAI Chat Completions API (`api_type: "chat"`) with `enable_web_search = true`
-- **THEN** the system SHALL silently ignore the setting and NOT inject any search tool
+- **THEN** the request body SHALL include `web_search_options: { "search_context_size": "medium" }` to enable OpenAI native web search or LiteLLM proxy search
 
 #### Scenario: Compatible provider with web search enabled
 - **WHEN** an agent uses a Compatible provider with `enable_web_search = true`
-- **THEN** the system SHALL silently ignore the setting and NOT inject any search tool
+- **THEN** the request body SHALL include `web_search_options: { "search_context_size": "medium" }` (behavior depends on whether the compatible service supports it)
 
 #### Scenario: Web search disabled
 - **WHEN** an agent has `enable_web_search = false` (default)

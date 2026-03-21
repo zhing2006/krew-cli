@@ -55,17 +55,20 @@ Agent loop SHALL evaluate whether a tool call requires approval based on `Approv
 - **THEN** the agent loop SHALL block (await the oneshot receiver) until TUI sends a ReviewDecision
 
 ### Requirement: Approval session cache
-Agent loop SHALL maintain a session-scoped approval cache. When user selects `ApprovedForSession`, future calls to the same tool with the same arguments SHALL skip approval.
+Agent loop SHALL maintain a session-scoped approval cache. When user selects `ApprovedForSession`, the cache key depends on the tool type:
+- **shell**: cache by extracted command prefix (e.g. `cargo build`); same prefix with different flags auto-approved, different subcommands still need approval
+- **fetch_url**: cache by URL host; same host auto-approved, different hosts still need approval
+- **other tools** (write_file, edit_file, MCP): cache by tool name; all future calls to the same tool auto-approved
 
-#### Scenario: Cached approval
-- **WHEN** user approves `shell("cargo test")` with ApprovedForSession
-- **AND** agent later calls `shell("cargo test")` again
-- **THEN** agent loop SHALL skip approval and execute directly
+#### Scenario: Shell cached by prefix
+- **WHEN** user approves `shell("cargo build --release")` with ApprovedForSession
+- **AND** agent later calls `shell("cargo build -p krew-core")`
+- **THEN** agent loop SHALL skip approval (same prefix `cargo build`)
 
-#### Scenario: Different args not cached
-- **WHEN** user approves `shell("cargo test")` with ApprovedForSession
-- **AND** agent later calls `shell("rm -rf /tmp/foo")`
-- **THEN** agent loop SHALL still require approval
+#### Scenario: Shell different subcommand not cached
+- **WHEN** user approves `shell("cargo build --release")` with ApprovedForSession
+- **AND** agent later calls `shell("cargo test")`
+- **THEN** agent loop SHALL still require approval (different prefix)
 
 ### Requirement: Denied tool result
 When user selects `Denied`, agent loop SHALL return a ToolResult with `is_error: true` and content explaining the user denied the operation. The LLM can then decide an alternative approach.

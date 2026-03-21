@@ -32,16 +32,21 @@ impl ApprovalCache {
         Self::default()
     }
 
-    /// Check if a tool has a cached session approval.
-    pub async fn is_approved(&self, tool_name: &str) -> bool {
+    /// Check if a cache key has a session approval.
+    ///
+    /// Keys are constructed by `cache_session_approval()`:
+    /// - shell: `"shell:<command_prefix>"`
+    /// - fetch_url: `"fetch_url:<host>"`
+    /// - other tools: `"<tool_name>"`
+    pub async fn is_approved(&self, key: &str) -> bool {
         let cache = self.inner.lock().await;
-        cache.get(tool_name) == Some(&ReviewDecision::ApprovedForSession)
+        cache.get(key) == Some(&ReviewDecision::ApprovedForSession)
     }
 
-    /// Record a session-wide approval for a tool.
-    pub async fn approve_for_session(&self, tool_name: String) {
+    /// Record a session-wide approval for a cache key.
+    pub async fn approve_for_session(&self, key: String) {
         let mut cache = self.inner.lock().await;
-        cache.insert(tool_name, ReviewDecision::ApprovedForSession);
+        cache.insert(key, ReviewDecision::ApprovedForSession);
     }
 }
 

@@ -77,16 +77,20 @@ The `/resume` command SHALL list recent sessions and allow the user to select on
 - **WHEN** the `/help` command lists available commands
 - **THEN** `/resume` SHALL be described as "Resume a previous session"
 
-### Requirement: 占位命令
-`/mcp` 和 `/compact` SHALL 保持占位状态，显示 "not yet implemented" 提示。`/skills` SHALL 不再是占位命令。
+### Requirement: 已实现的命令
+`/compact`、`/mcp`、`/skills` SHALL 执行各自的功能逻辑。`/compact` 的完整行为定义在 compact spec 中，`/mcp` 列出已连接的 MCP 服务器及其工具，`/skills` 列出可用的 skill 列表。
 
-#### Scenario: /skills 不再是占位命令
+#### Scenario: /skills 执行 skill 列表显示
 - **WHEN** 用户输入 `/skills`
-- **THEN** 系统 SHALL 执行 skill 列表显示逻辑，而非显示占位提示
+- **THEN** 系统 SHALL 执行 skill 列表显示逻辑
 
-#### Scenario: /mcp 仍为占位
+#### Scenario: /mcp 列出 MCP 服务器
 - **WHEN** 用户输入 `/mcp`
-- **THEN** 系统 SHALL 显示 "not yet implemented" 提示
+- **THEN** 系统 SHALL 列出已连接的 MCP 服务器及其提供的工具
+
+#### Scenario: /compact 执行压缩
+- **WHEN** 用户输入 `/compact`
+- **THEN** 系统 SHALL 执行会话压缩逻辑（详见 compact spec）
 
 #### Scenario: /compact 占位
 - **WHEN** 用户输入 `/compact`
