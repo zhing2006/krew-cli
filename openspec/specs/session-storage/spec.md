@@ -64,6 +64,8 @@ The system SHALL scan `.krew/sessions/` and return session summaries sorted by `
 ### Requirement: Session TOML 序列化
 系统 SHALL 将 session 序列化为 TOML 格式，包含 `[session]` 表（id、cwd、agents、total_tokens_used、created_at、updated_at 等元数据）和 `[[messages]]` 数组（每条消息的 role、content、agent_name、addressee、whisper_targets、usage、created_at）。`whisper_targets` 字段 SHALL 序列化为 TOML 原生数组（如 `["opus", "gemini"]`），为 `None` 时跳过。
 
+> **注：** 持久化层使用 `agent_name` 作为 TOML 字段名（`krew-storage::MessageEntry`），运行时消息结构 `krew-llm::ChatMessage` 使用 `name` 字段。两者在加载/保存时互相映射。
+
 #### Scenario: 序列化包含用户和 assistant 消息的 session
 - **WHEN** 一个包含 id "abc123"、cwd "/project"、agents ["gpt", "opus"] 和 2 条消息的 session 被序列化
 - **THEN** 输出 TOML SHALL 包含带所有元数据字段的 `[session]` 表和 2 个 `[[messages]]` 条目

@@ -48,15 +48,15 @@ Agent 列表 SHALL 按 `config.settings.reply_order` 的顺序排列。每个 `[
 - **THEN** SHALL 回退为 `Color::White`
 
 ### Requirement: 消息前缀样式
-用户消息 SHALL 使用 `> ` 前缀（绿色粗体），agent 回复 SHALL 使用 `● ` 前缀（使用 agent 配置的颜色，粗体）。`insert_message()` SHALL 接收 agent 颜色参数。多行消息续行 SHALL 按前缀的 Unicode 显示宽度对齐。
+用户消息 SHALL 使用 `> ` 前缀（绿色粗体）+ 彩色路由圆点（`●`）。agent 回复 SHALL 使用 `[name] DisplayName:` header（`[name]` 使用 agent 配置的颜色，粗体），回复内容缩进 2 空格。多行消息续行 SHALL 按前缀的 Unicode 显示宽度对齐。
 
 #### Scenario: 用户消息
-- **WHEN** 用户发送消息
-- **THEN** SHALL 显示为 `> 消息内容`（绿色）
+- **WHEN** 用户发送消息给单个 agent
+- **THEN** SHALL 显示为 `> ● 消息内容`（`>` 绿色，`●` 为目标 agent 颜色）
 
-#### Scenario: Agent 回复颜色跟随配置
-- **WHEN** agent 配置颜色为 `"magenta"`
-- **THEN** 回复前缀 `● ` SHALL 使用 magenta 颜色
+#### Scenario: Agent 回复 header
+- **WHEN** agent "opus" 配置颜色为 `"magenta"`
+- **THEN** header SHALL 显示为 `[opus] Claude Opus:`，`[opus]` 使用 magenta 颜色
 
 ### Requirement: CJK 宽字符渲染
 `custom_terminal::draw_cells()` SHALL 使用 `unicode-width` 计算 cell 显示宽度，跳过宽字符（CJK、emoji）的续接 cell，避免覆盖宽字符右半部分导致中文间出现空格。
