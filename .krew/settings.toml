@@ -1,6 +1,6 @@
 [settings]
 approval_mode = "suggest"
-reply_order = ["opus", "gpt", "gemini", "sonnet", "doubao"]
+reply_order = ["opus", "gpt", "gemini", "sonnet", "gemini-flash", "gpt-mini", "doubao"]
 compact_keep_rounds = 3
 agent_to_agent_routing = "immediate"
 agent_to_agent_max_rounds = 10
@@ -10,6 +10,16 @@ name = "gemini"
 display_name = "Gemini"
 provider = "google"
 model = "gemini-3.1-pro-preview"
+enable_web_search = true
+enable_thinking = true
+thinking_effort = "high"
+color = "cyan"
+
+[[agents]]
+name = "gemini-flash"
+display_name = "Gemini Flash"
+provider = "litellm"
+model = "gemini-3.1-flash-lite-preview"
 enable_web_search = true
 enable_thinking = true
 thinking_effort = "high"
@@ -27,8 +37,18 @@ color = "blue"
 [[agents]]
 name = "gpt"
 display_name = "GPT"
-provider = "openai"
+provider = "azure6"
 model = "gpt-5.4"
+api_type = "responses"
+enable_web_search = true
+enable_thinking = true
+color = "green"
+
+[[agents]]
+name = "gpt-mini"
+display_name = "GPT Mini"
+provider = "litellm"
+model = "gpt-5.4-mini"
 api_type = "responses"
 enable_web_search = true
 enable_thinking = true
@@ -56,7 +76,12 @@ type = "openai"
 api_key_env = "OPENAI_API_KEY"
 base_url = "https://litellm.tsd.xindong.com"
 
-[providers.openai]
+[providers.azure5]
+type = "openai"
+api_key_env = "AZURE5_OPENAI_API_KEY"
+base_url = "https://xdts-dev-auto5.openai.azure.com/openai"
+
+[providers.azure6]
 type = "openai"
 api_key_env = "AZURE6_OPENAI_API_KEY"
 base_url = "https://xdts-dev-auto6.openai.azure.com/openai"
