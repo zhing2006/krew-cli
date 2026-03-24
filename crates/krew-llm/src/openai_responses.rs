@@ -269,8 +269,14 @@ fn extract_web_search_query(item: &serde_json::Value) -> Option<String> {
     let action = item.get("action")?;
     let action_type = action.get("type").and_then(|t| t.as_str()).unwrap_or("");
     match action_type {
-        "open_page" => action.get("url").and_then(|u| u.as_str()).map(|s| s.to_string()),
-        _ => action.get("query").and_then(|q| q.as_str()).map(|s| s.to_string()),
+        "open_page" => action
+            .get("url")
+            .and_then(|u| u.as_str())
+            .map(|s| s.to_string()),
+        _ => action
+            .get("query")
+            .and_then(|q| q.as_str())
+            .map(|s| s.to_string()),
     }
 }
 
@@ -425,20 +431,18 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
 
                         "response.completed" => {
                             st.done = true;
-                            let parsed =
-                                serde_json::from_str::<serde_json::Value>(&data).ok();
+                            let parsed = serde_json::from_str::<serde_json::Value>(&data).ok();
                             let resp = parsed.as_ref().and_then(|v| v.get("response"));
 
                             // Extract output items that were NOT already delivered
                             // via incremental streaming (proxy fake-stream fallback).
-                            if let Some(output) =
-                                resp.and_then(|r| r.get("output")).and_then(|o| o.as_array())
+                            if let Some(output) = resp
+                                .and_then(|r| r.get("output"))
+                                .and_then(|o| o.as_array())
                             {
                                 for item in output {
-                                    let item_type = item
-                                        .get("type")
-                                        .and_then(|t| t.as_str())
-                                        .unwrap_or("");
+                                    let item_type =
+                                        item.get("type").and_then(|t| t.as_str()).unwrap_or("");
                                     match item_type {
                                         "reasoning" if !st.has_streamed_thinking => {
                                             if let Some(summary) =
@@ -463,9 +467,7 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                                                 item.get("content").and_then(|c| c.as_array())
                                             {
                                                 for part in content {
-                                                    if part
-                                                        .get("type")
-                                                        .and_then(|t| t.as_str())
+                                                    if part.get("type").and_then(|t| t.as_str())
                                                         == Some("output_text")
                                                         && let Some(text) = part
                                                             .get("text")
@@ -519,34 +521,33 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                                 }
                             }
 
-                            let usage =
-                                if let Some(u) = resp.and_then(|r| r.get("usage")) {
-                                    Usage {
-                                        prompt_tokens: u
+                            let usage = if let Some(u) = resp.and_then(|r| r.get("usage")) {
+                                Usage {
+                                    prompt_tokens: u
+                                        .get("input_tokens")
+                                        .and_then(|t| t.as_u64())
+                                        .unwrap_or(0)
+                                        as u32,
+                                    completion_tokens: u
+                                        .get("output_tokens")
+                                        .and_then(|t| t.as_u64())
+                                        .unwrap_or(0)
+                                        as u32,
+                                    total_tokens: {
+                                        let input = u
                                             .get("input_tokens")
                                             .and_then(|t| t.as_u64())
-                                            .unwrap_or(0)
-                                            as u32,
-                                        completion_tokens: u
+                                            .unwrap_or(0);
+                                        let output = u
                                             .get("output_tokens")
                                             .and_then(|t| t.as_u64())
-                                            .unwrap_or(0)
-                                            as u32,
-                                        total_tokens: {
-                                            let input = u
-                                                .get("input_tokens")
-                                                .and_then(|t| t.as_u64())
-                                                .unwrap_or(0);
-                                            let output = u
-                                                .get("output_tokens")
-                                                .and_then(|t| t.as_u64())
-                                                .unwrap_or(0);
-                                            (input + output) as u32
-                                        },
-                                    }
-                                } else {
-                                    Usage::default()
-                                };
+                                            .unwrap_or(0);
+                                        (input + output) as u32
+                                    },
+                                }
+                            } else {
+                                Usage::default()
+                            };
 
                             // If we have pending events, queue Done and drain
                             // pending first.
@@ -566,8 +567,7 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                                 && let Some(resp) = v.get("response")
                                 && let Some(status) = resp.get("status_details")
                                 && let Some(err) = status.get("error")
-                                && let Some(message) =
-                                    err.get("message").and_then(|m| m.as_str())
+                                && let Some(message) = err.get("message").and_then(|m| m.as_str())
                             {
                                 message.to_string()
                             } else {
@@ -610,10 +610,7 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                 }
                 Some(Err(e)) => {
                     st.done = true;
-                    return Some((
-                        StreamEvent::Error(format!("SSE stream error: {e}")),
-                        st,
-                    ));
+                    return Some((StreamEvent::Error(format!("SSE stream error: {e}")), st));
                 }
                 None => {
                     st.done = true;
@@ -621,8 +618,7 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                 }
             }
         }
-        },
-    )
+    })
 }
 
 // ---------------------------------------------------------------------------

@@ -175,6 +175,7 @@ pub fn init_agents(config: &Config, cwd: Option<PathBuf>) -> InitAgentsResult {
             shell_allow_commands: config.settings.shell_allow_commands.clone(),
             fetch_allow_domains: config.settings.fetch_allow_domains.clone(),
             skill_catalog: skill_catalog.clone(),
+            language: config.settings.language.clone(),
         };
 
         agents.insert(agent_config.name.clone(), runtime);

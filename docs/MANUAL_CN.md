@@ -423,6 +423,13 @@ compact_keep_rounds = 10
 
 # AI-to-AI 最大轮次（默认 10，0 = 禁用）
 # agent_to_agent_max_rounds = 10
+
+# Agent 回复语言（不设置 = 不注入语言指令）
+# 设置后会在每个 Agent 的 system prompt 中注入：
+# "Always respond in {language}. Use {language} for all explanations,
+# comments, and communications with the user. Technical terms and code
+# identifiers should remain in their original form."
+# language = "中文"
 ```
 
 ### 5.3 Agent 定义

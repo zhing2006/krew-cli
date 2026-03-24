@@ -43,6 +43,8 @@ pub struct AgentRuntime {
     pub fetch_allow_domains: Vec<String>,
     /// Pre-built skill catalog XML for system prompt injection.
     pub skill_catalog: Option<String>,
+    /// Language for agent responses (injected into system prompt when set).
+    pub language: Option<String>,
 }
 
 /// Information about a peer agent, used for AI-to-AI prompt injection.
@@ -75,77 +77,18 @@ impl AgentRuntime {
         });
 
         // Build agent identity + optional custom system prompt.
-        let other_agent_hint = "Their messages are prefixed with [agent_name] in the content. User messages are prefixed with [user].";
         let now = chrono::Local::now()
             .format("%Y-%m-%d %H:%M (%A)")
             .to_string();
-        let identity = format!(
-            "You are {display_name}, powered by the {model} model.\n\
-             Your agent name in this conversation is \"{name}\".\n\
-             You are participating in a multi-agent conversation hosted by krew-cli.\n\
-             Other agents in this conversation are DIFFERENT AI models, not you. \
-             {other_agent_hint}\n\
-             Respond as yourself — do not role-play or impersonate other agents.\n\
-             Current date/time: {now}",
-            display_name = self.config.display_name,
-            model = self.config.model,
-            name = self.config.name,
+        let identity = build_identity_prompt(
+            &self.config.display_name,
+            &self.config.model,
+            &self.config.name,
+            &now,
+            self.language.as_deref(),
+            peer_agents,
+            whisper_targets.as_deref(),
         );
-        // Append AI-to-AI collaboration hint if peer agents are available.
-        let identity = if let Some(peers) = peer_agents.filter(|p| !p.is_empty()) {
-            let peer_list: Vec<String> = peers
-                .iter()
-                .map(|p| format!("[{}] {}", p.name, p.display_name))
-                .collect();
-            format!(
-                "{identity}\n\
-                 You can ask another agent to respond by writing @name (with spaces before and after, e.g. \" @opus \").\n\
-                 Only use @name when you need that agent to reply — do NOT use @ when merely mentioning an agent by name.\n\
-                 Other agents: {}.",
-                peer_list.join(", ")
-            )
-        } else {
-            identity
-        };
-
-        // Append whisper context layers if in whisper mode.
-        let identity = if let Some(ref targets) = whisper_targets {
-            let self_name = &self.config.name;
-            let other_members: Vec<&String> = targets.iter().filter(|t| *t != self_name).collect();
-
-            // Layer 1: Privacy context (always injected when whisper).
-            let privacy = if other_members.is_empty() {
-                "You are in a private whisper conversation with the user. Other agents cannot see this conversation.".to_string()
-            } else {
-                let member_list: Vec<String> =
-                    other_members.iter().map(|n| format!("@{n}")).collect();
-                format!(
-                    "You are in a private whisper conversation with the user and {}. \
-                     Agents outside this group cannot see the conversation content.",
-                    member_list.join(", ")
-                )
-            };
-
-            // Layer 2: @mention collaboration (only when A2A enabled and multi-member group).
-            let a2a_hint =
-                if !other_members.is_empty() && peer_agents.is_some_and(|p| !p.is_empty()) {
-                    format!(
-                        "\nIn this whisper group, you may only @mention group members: {}. \
-                     Mentions of agents outside the group will be ignored.",
-                        other_members
-                            .iter()
-                            .map(|n| format!("@{n}"))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                } else {
-                    String::new()
-                };
-
-            format!("{identity}\n{privacy}{a2a_hint}")
-        } else {
-            identity
-        };
 
         let agent_prompt = match &self.config.system_prompt {
             Some(prompt) if !prompt.is_empty() => format!("{identity}\n\n{prompt}"),
@@ -251,5 +194,104 @@ pub fn build_system_prompt(
         None
     } else {
         Some(parts.join("\n\n"))
+    }
+}
+
+/// Build the language instruction string for system prompt injection.
+///
+/// Returns a newline-prefixed instruction when `language` is `Some`,
+/// or an empty string when `None`.
+pub fn build_language_instruction(language: Option<&str>) -> String {
+    match language {
+        Some(lang) => format!(
+            "\nAlways respond in {lang}. Use {lang} for all explanations, comments, and communications with the user. Technical terms and code identifiers should remain in their original form."
+        ),
+        None => String::new(),
+    }
+}
+
+/// Build the complete identity prompt for an agent.
+///
+/// Assembly order:
+/// 1. Core identity (name, model, date/time, language instruction)
+/// 2. Peer agent collaboration hints (if peers exist)
+/// 3. Whisper privacy context (if in whisper mode)
+pub fn build_identity_prompt(
+    display_name: &str,
+    model: &str,
+    agent_name: &str,
+    now: &str,
+    language: Option<&str>,
+    peer_agents: Option<&[PeerAgent]>,
+    whisper_targets: Option<&[String]>,
+) -> String {
+    let other_agent_hint = "Their messages are prefixed with [agent_name] in the content. User messages are prefixed with [user].";
+    let language_instruction = build_language_instruction(language);
+
+    // 1. Core identity block.
+    let identity = format!(
+        "You are {display_name}, powered by the {model} model.\n\
+         Your agent name in this conversation is \"{agent_name}\".\n\
+         You are participating in a multi-agent conversation hosted by krew-cli.\n\
+         Other agents in this conversation are DIFFERENT AI models, not you. \
+         {other_agent_hint}\n\
+         Respond as yourself — do not role-play or impersonate other agents.\n\
+         Current date/time: {now}{language_instruction}",
+    );
+
+    // 2. Peer agent collaboration hint.
+    let identity = if let Some(peers) = peer_agents.filter(|p| !p.is_empty()) {
+        let peer_list: Vec<String> = peers
+            .iter()
+            .map(|p| format!("[{}] {}", p.name, p.display_name))
+            .collect();
+        format!(
+            "{identity}\n\
+             You can ask another agent to respond by writing @name (with spaces before and after, e.g. \" @opus \").\n\
+             Only use @name when you need that agent to reply — do NOT use @ when merely mentioning an agent by name.\n\
+             Other agents: {}.",
+            peer_list.join(", ")
+        )
+    } else {
+        identity
+    };
+
+    // 3. Whisper context layers.
+    if let Some(targets) = whisper_targets {
+        let other_members: Vec<&String> = targets
+            .iter()
+            .filter(|t| t.as_str() != agent_name)
+            .collect();
+
+        // Layer 1: Privacy context (always injected when whisper).
+        let privacy = if other_members.is_empty() {
+            "You are in a private whisper conversation with the user. Other agents cannot see this conversation.".to_string()
+        } else {
+            let member_list: Vec<String> = other_members.iter().map(|n| format!("@{n}")).collect();
+            format!(
+                "You are in a private whisper conversation with the user and {}. \
+                 Agents outside this group cannot see the conversation content.",
+                member_list.join(", ")
+            )
+        };
+
+        // Layer 2: @mention collaboration (only when A2A enabled and multi-member group).
+        let a2a_hint = if !other_members.is_empty() && peer_agents.is_some_and(|p| !p.is_empty()) {
+            format!(
+                "\nIn this whisper group, you may only @mention group members: {}. \
+                     Mentions of agents outside the group will be ignored.",
+                other_members
+                    .iter()
+                    .map(|n| format!("@{n}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        } else {
+            String::new()
+        };
+
+        format!("{identity}\n{privacy}{a2a_hint}")
+    } else {
+        identity
     }
 }

@@ -38,6 +38,7 @@ pub struct RawSettings {
     pub fetch_allow_domains: Option<Vec<String>>,
     pub agent_to_agent_routing: Option<AgentToAgentRouting>,
     pub agent_to_agent_max_rounds: Option<u32>,
+    pub language: Option<String>,
 }
 
 // ── RawConfig ───────────────────────────────────────────────────────
@@ -114,6 +115,7 @@ impl RawConfig {
         merge_option!(fetch_allow_domains);
         merge_option!(agent_to_agent_routing);
         merge_option!(agent_to_agent_max_rounds);
+        merge_option!(language);
 
         // ── skills: project Some wins, else inherit user ──
         if self.skills.is_none() {
@@ -157,6 +159,7 @@ impl RawConfig {
                     .settings
                     .agent_to_agent_max_rounds
                     .unwrap_or(DEFAULT_AGENT_TO_AGENT_MAX_ROUNDS),
+                language: self.settings.language,
             },
             agents: self.agents,
             providers: self.providers,
@@ -183,6 +186,7 @@ pub struct UserSettings {
     pub fetch_allow_domains: Option<Vec<String>>,
     pub agent_to_agent_routing: Option<AgentToAgentRouting>,
     pub agent_to_agent_max_rounds: Option<u32>,
+    pub language: Option<String>,
 }
 
 // ── UserConfig ──────────────────────────────────────────────────────

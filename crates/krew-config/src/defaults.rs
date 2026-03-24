@@ -29,6 +29,7 @@ impl Default for Config {
                 fetch_allow_domains: Vec::new(),
                 agent_to_agent_routing: AgentToAgentRouting::Immediate,
                 agent_to_agent_max_rounds: DEFAULT_AGENT_TO_AGENT_MAX_ROUNDS,
+                language: None,
             },
             agents: Vec::new(),
             providers: HashMap::new(),
