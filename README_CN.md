@@ -7,12 +7,19 @@
 在一个终端中同时与多个 AI 模型（GPT、Claude、Gemini 等）对话 —— 像组织一场 AI 圆桌会议。
 
 [![CI](https://github.com/ZHing2006/krew-cli/actions/workflows/release.yml/badge.svg)](https://github.com/ZHing2006/krew-cli/actions/workflows/release.yml)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![npm](https://img.shields.io/npm/v/@zhing2026/krew)](https://www.npmjs.com/package/@zhing2026/krew)
+[![npm downloads](https://img.shields.io/npm/dm/@zhing2026/krew)](https://www.npmjs.com/package/@zhing2026/krew)
+[![GitHub stars](https://img.shields.io/github/stars/ZHing2006/krew-cli)](https://github.com/ZHing2006/krew-cli/stargazers)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/built%20with-Rust-dea584)](https://www.rust-lang.org/)
 
 [English](README.md) | [中文](README_CN.md)
 
 </div>
+
+<p align="center">
+  <img src="docs/images/demo_cn.gif" alt="krew-cli 演示" width="800">
+</p>
 
 ---
 
