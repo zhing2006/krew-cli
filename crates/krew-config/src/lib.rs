@@ -104,6 +104,9 @@ pub struct Settings {
     /// Maximum AI-to-AI routing rounds per user message turn (0 = disabled).
     #[serde(default = "default_agent_to_agent_max_rounds")]
     pub agent_to_agent_max_rounds: u32,
+    /// Language for agent responses (e.g. "中文", "English", "日本語").
+    /// When set, a language instruction is injected into every agent's system prompt.
+    pub language: Option<String>,
 }
 
 /// Retry configuration for LLM API requests.

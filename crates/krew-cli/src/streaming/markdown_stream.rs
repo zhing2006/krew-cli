@@ -256,13 +256,19 @@ mod tests {
         // Second line — single \n means soft break in markdown.
         collector.push_delta("line two\n");
         let second = collector.commit_complete_lines();
-        assert!(!second.is_empty(), "second line must not be lost to soft-break merge");
+        assert!(
+            !second.is_empty(),
+            "second line must not be lost to soft-break merge"
+        );
         let text: String = second
             .iter()
             .flat_map(|l| l.spans.iter())
             .map(|s| s.content.as_ref())
             .collect();
-        assert!(text.contains("line two"), "second line text should be present");
+        assert!(
+            text.contains("line two"),
+            "second line text should be present"
+        );
     }
 
     #[test]

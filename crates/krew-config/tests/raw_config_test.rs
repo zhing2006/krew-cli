@@ -449,3 +449,54 @@ api_key_env = "PROJECT_OAI"
     assert!(config.skills.enabled);
     assert_eq!(config.skills.extra_paths, vec!["/user-skills"]);
 }
+
+// ── language setting ─────────────────────────────────────────────────
+
+#[test]
+fn resolve_language_default_is_none() {
+    let raw = RawConfig::default();
+    let config = raw.resolve();
+    assert!(config.settings.language.is_none());
+}
+
+#[test]
+fn resolve_language_preserves_value() {
+    let mut raw = RawConfig::default();
+    raw.settings.language = Some("中文".to_string());
+    let config = raw.resolve();
+    assert_eq!(config.settings.language.as_deref(), Some("中文"));
+}
+
+#[test]
+fn merge_language_project_overrides_user() {
+    let user = UserConfig {
+        settings: UserSettings {
+            language: Some("English".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut raw = RawConfig {
+        settings: krew_config::RawSettings {
+            language: Some("中文".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    raw.merge_user(&user);
+    assert_eq!(raw.settings.language.as_deref(), Some("中文"));
+}
+
+#[test]
+fn merge_language_project_none_inherits_user() {
+    let user = UserConfig {
+        settings: UserSettings {
+            language: Some("日本語".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut raw = RawConfig::default();
+    raw.merge_user(&user);
+    assert_eq!(raw.settings.language.as_deref(), Some("日本語"));
+}

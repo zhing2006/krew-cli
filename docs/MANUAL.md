@@ -423,6 +423,12 @@ compact_keep_rounds = 10
 
 # Max AI-to-AI rounds (default: 10, 0 = disable)
 # agent_to_agent_max_rounds = 10
+
+# Language for agent responses (unset = no instruction injected)
+# Injects: "Always respond in {language}. Use {language} for all explanations,
+# comments, and communications with the user. Technical terms and code
+# identifiers should remain in their original form."
+# language = "中文"
 ```
 
 ### 5.3 Agent definition

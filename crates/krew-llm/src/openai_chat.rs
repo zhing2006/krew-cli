@@ -4,11 +4,11 @@ use crate::common::{self, AuthMode, RequestConfig, RoleContent, merge_consecutiv
 use crate::{
     ChatMessage, ChatRole, LlmClient, LlmClientConfig, LlmError, StreamEvent, ToolDefinition, Usage,
 };
-use krew_config::ThinkingEffort;
 use futures::Stream;
 use krew_config::OtherAgentRole;
 use krew_config::RetryConfig;
 use krew_config::SamplingConfig;
+use krew_config::ThinkingEffort;
 use std::pin::Pin;
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com";
@@ -493,224 +493,180 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
         server_tool: None,
     };
 
-    futures::stream::unfold(
-        (sse_stream, state),
-        |(mut sse_stream, mut st)| async move {
-            // Drain pending events first.
-            if let Some(event) = st.pending.pop_front() {
-                return Some((event, (sse_stream, st)));
-            }
+    futures::stream::unfold((sse_stream, state), |(mut sse_stream, mut st)| async move {
+        // Drain pending events first.
+        if let Some(event) = st.pending.pop_front() {
+            return Some((event, (sse_stream, st)));
+        }
 
-            if st.done {
-                return None;
-            }
+        if st.done {
+            return None;
+        }
 
-            loop {
-                let next = sse_stream.next().await;
-                match next {
-                    Some(Ok(event)) => {
-                        let data = event.data.trim().to_string();
-                        if data.is_empty() {
-                            continue;
-                        }
+        loop {
+            let next = sse_stream.next().await;
+            match next {
+                Some(Ok(event)) => {
+                    let data = event.data.trim().to_string();
+                    if data.is_empty() {
+                        continue;
+                    }
 
-                        match parse_sse_data(&data) {
-                            None => {
-                                // [DONE] — flush server tool if still pending.
-                                st.done = true;
-                                if let Some((name, args)) = st.server_tool.take() {
-                                    let query = extract_server_tool_query(&args);
-                                    st.pending.push_back(StreamEvent::ServerToolDone {
-                                        name,
-                                        query,
-                                    });
-                                }
-                                // Emit accumulated client-side tool calls.
-                                for (id, name, args) in st.tool_calls_accum.drain(..) {
-                                    st.pending.push_back(StreamEvent::ToolCall {
-                                        id,
-                                        name,
-                                        arguments: args,
-                                        thought_signature: None,
-                                    });
-                                }
-                                st.pending.push_back(StreamEvent::Done(st.usage.clone()));
-
-                                if let Some(event) = st.pending.pop_front() {
-                                    return Some((event, (sse_stream, st)));
-                                }
-                                return None;
+                    match parse_sse_data(&data) {
+                        None => {
+                            // [DONE] — flush server tool if still pending.
+                            st.done = true;
+                            if let Some((name, args)) = st.server_tool.take() {
+                                let query = extract_server_tool_query(&args);
+                                st.pending
+                                    .push_back(StreamEvent::ServerToolDone { name, query });
                             }
-                            Some(chunk) => {
-                                // Accumulate usage if present.
-                                if let Some(u) = chunk.usage {
-                                    st.usage = u;
-                                }
+                            // Emit accumulated client-side tool calls.
+                            for (id, name, args) in st.tool_calls_accum.drain(..) {
+                                st.pending.push_back(StreamEvent::ToolCall {
+                                    id,
+                                    name,
+                                    arguments: args,
+                                    thought_signature: None,
+                                });
+                            }
+                            st.pending.push_back(StreamEvent::Done(st.usage.clone()));
 
-                                // Handle Gemini grounding metadata (via LiteLLM proxy).
-                                if let Some(grounding) = chunk.grounding {
-                                    match grounding {
-                                        None if st.grounding_state == 0 => {
-                                            // Empty metadata — search started.
+                            if let Some(event) = st.pending.pop_front() {
+                                return Some((event, (sse_stream, st)));
+                            }
+                            return None;
+                        }
+                        Some(chunk) => {
+                            // Accumulate usage if present.
+                            if let Some(u) = chunk.usage {
+                                st.usage = u;
+                            }
+
+                            // Handle Gemini grounding metadata (via LiteLLM proxy).
+                            // Empty metadata `[{}]` just means the grounding feature
+                            // is active, NOT that a search actually happened.  Only
+                            // emit ServerToolStart/Done when non-empty metadata with
+                            // actual search queries arrives.
+                            if let Some(grounding) = chunk.grounding {
+                                match grounding {
+                                    None => {
+                                        // Empty metadata — grounding feature active but
+                                        // no search confirmed yet.  Record it silently.
+                                        if st.grounding_state == 0 {
                                             st.grounding_state = 1;
-                                            // Don't return yet; process event/delta below.
-                                            // ServerToolStart will be emitted with the
-                                            // first event from this chunk (or standalone).
-                                            if chunk.event.is_none()
-                                                && chunk.tool_call_delta.is_none()
-                                            {
-                                                return Some((
-                                                    StreamEvent::ServerToolStart {
-                                                        name: "web_search".to_string(),
-                                                    },
-                                                    (sse_stream, st),
-                                                ));
-                                            }
-                                            // Has event — queue ServerToolStart, fall through.
-                                            st.pending.push_back(
-                                                chunk.event.clone().unwrap_or(
-                                                    StreamEvent::ServerToolStart {
-                                                        name: "web_search".to_string(),
-                                                    },
-                                                ),
-                                            );
-                                            return Some((
-                                                StreamEvent::ServerToolStart {
-                                                    name: "web_search".to_string(),
-                                                },
-                                                (sse_stream, st),
-                                            ));
                                         }
-                                        Some(query) if st.grounding_state < 2 => {
-                                            // Non-empty metadata — search done.
-                                            let prev = st.grounding_state;
-                                            st.grounding_state = 2;
-                                            if prev == 0 {
-                                                // Never started — emit start first.
-                                                st.pending.push_back(
-                                                    StreamEvent::ServerToolDone {
-                                                        name: "web_search".to_string(),
-                                                        query: Some(query),
-                                                    },
-                                                );
-                                                if let Some(ev) = chunk.event {
-                                                    st.pending.push_back(ev);
-                                                }
-                                                return Some((
-                                                    StreamEvent::ServerToolStart {
-                                                        name: "web_search".to_string(),
-                                                    },
-                                                    (sse_stream, st),
-                                                ));
-                                            }
-                                            // Already started — just emit done.
-                                            if let Some(ev) = chunk.event {
-                                                st.pending.push_back(ev);
-                                            }
-                                            return Some((
-                                                StreamEvent::ServerToolDone {
-                                                    name: "web_search".to_string(),
-                                                    query: Some(query),
-                                                },
-                                                (sse_stream, st),
-                                            ));
+                                        // Fall through to process any event/delta normally.
+                                    }
+                                    Some(query) if st.grounding_state < 2 => {
+                                        // Non-empty metadata — search actually happened.
+                                        st.grounding_state = 2;
+                                        // Emit start + done together.
+                                        st.pending.push_back(StreamEvent::ServerToolDone {
+                                            name: "web_search".to_string(),
+                                            query: Some(query),
+                                        });
+                                        if let Some(ev) = chunk.event {
+                                            st.pending.push_back(ev);
                                         }
-                                        _ => {
-                                            // Already handled or no-op — fall through.
-                                        }
+                                        return Some((
+                                            StreamEvent::ServerToolStart {
+                                                name: "web_search".to_string(),
+                                            },
+                                            (sse_stream, st),
+                                        ));
+                                    }
+                                    _ => {
+                                        // Already handled or no-op — fall through.
                                     }
                                 }
+                            }
 
-                                // Handle tool call deltas.
-                                if let Some(delta) = chunk.tool_call_delta {
-                                    // Check if this is a server-side tool.
-                                    let is_server_tool = (!delta.name.is_empty()
-                                        && SERVER_TOOL_NAMES.contains(&delta.name.as_str()))
-                                        || st.server_tool.is_some();
+                            // Handle tool call deltas.
+                            if let Some(delta) = chunk.tool_call_delta {
+                                // Check if this is a server-side tool.
+                                let is_server_tool = (!delta.name.is_empty()
+                                    && SERVER_TOOL_NAMES.contains(&delta.name.as_str()))
+                                    || st.server_tool.is_some();
 
-                                    if is_server_tool {
-                                        if st.server_tool.is_none() {
-                                            // First chunk of a server tool — emit start.
-                                            st.server_tool = Some((
-                                                delta.name.clone(),
-                                                delta.arguments.clone(),
-                                            ));
-                                            return Some((
-                                                StreamEvent::ServerToolStart {
-                                                    name: delta.name,
-                                                },
-                                                (sse_stream, st),
-                                            ));
-                                        }
-                                        // Continuation chunk — accumulate arguments.
-                                        if let Some((_, ref mut args)) = st.server_tool {
-                                            args.push_str(&delta.arguments);
-                                        }
-                                        continue;
+                                if is_server_tool {
+                                    if st.server_tool.is_none() {
+                                        // First chunk of a server tool — emit start.
+                                        st.server_tool =
+                                            Some((delta.name.clone(), delta.arguments.clone()));
+                                        return Some((
+                                            StreamEvent::ServerToolStart { name: delta.name },
+                                            (sse_stream, st),
+                                        ));
                                     }
-
-                                    // Regular client-side tool call — accumulate.
-                                    let idx = delta.index as usize;
-                                    if idx >= st.tool_calls_accum.len() {
-                                        st.tool_calls_accum.resize(
-                                            idx + 1,
-                                            (String::new(), String::new(), String::new()),
-                                        );
+                                    // Continuation chunk — accumulate arguments.
+                                    if let Some((_, ref mut args)) = st.server_tool {
+                                        args.push_str(&delta.arguments);
                                     }
-                                    let entry = &mut st.tool_calls_accum[idx];
-                                    if !delta.id.is_empty() {
-                                        entry.0 = delta.id;
-                                    }
-                                    if !delta.name.is_empty() {
-                                        entry.1 = delta.name;
-                                    }
-                                    entry.2.push_str(&delta.arguments);
                                     continue;
                                 }
 
-                                // Before emitting text/thinking, flush pending server tool.
-                                if let Some(ev) = &chunk.event
-                                    && matches!(
-                                        ev,
-                                        StreamEvent::TextDelta(_) | StreamEvent::ThinkingDelta(_)
-                                    )
-                                    && let Some((name, args)) = st.server_tool.take()
-                                {
-                                    let query = extract_server_tool_query(&args);
-                                    st.pending.push_back(ev.clone());
-                                    return Some((
-                                        StreamEvent::ServerToolDone { name, query },
-                                        (sse_stream, st),
-                                    ));
+                                // Regular client-side tool call — accumulate.
+                                let idx = delta.index as usize;
+                                if idx >= st.tool_calls_accum.len() {
+                                    st.tool_calls_accum.resize(
+                                        idx + 1,
+                                        (String::new(), String::new(), String::new()),
+                                    );
                                 }
-
-                                // Emit stream event if present.
-                                if let Some(event) = chunk.event {
-                                    return Some((event, (sse_stream, st)));
+                                let entry = &mut st.tool_calls_accum[idx];
+                                if !delta.id.is_empty() {
+                                    entry.0 = delta.id;
                                 }
-                                // No event (e.g. usage-only chunk) — continue.
+                                if !delta.name.is_empty() {
+                                    entry.1 = delta.name;
+                                }
+                                entry.2.push_str(&delta.arguments);
                                 continue;
                             }
+
+                            // Before emitting text/thinking, flush pending server tool.
+                            if let Some(ev) = &chunk.event
+                                && matches!(
+                                    ev,
+                                    StreamEvent::TextDelta(_) | StreamEvent::ThinkingDelta(_)
+                                )
+                                && let Some((name, args)) = st.server_tool.take()
+                            {
+                                let query = extract_server_tool_query(&args);
+                                st.pending.push_back(ev.clone());
+                                return Some((
+                                    StreamEvent::ServerToolDone { name, query },
+                                    (sse_stream, st),
+                                ));
+                            }
+
+                            // Emit stream event if present.
+                            if let Some(event) = chunk.event {
+                                return Some((event, (sse_stream, st)));
+                            }
+                            // No event (e.g. usage-only chunk) — continue.
+                            continue;
                         }
                     }
-                    Some(Err(e)) => {
-                        st.done = true;
-                        return Some((
-                            StreamEvent::Error(format!("SSE stream error: {e}")),
-                            (sse_stream, st),
-                        ));
-                    }
-                    None => {
-                        st.done = true;
-                        return Some((
-                            StreamEvent::Error("stream interrupted".into()),
-                            (sse_stream, st),
-                        ));
-                    }
+                }
+                Some(Err(e)) => {
+                    st.done = true;
+                    return Some((
+                        StreamEvent::Error(format!("SSE stream error: {e}")),
+                        (sse_stream, st),
+                    ));
+                }
+                None => {
+                    st.done = true;
+                    return Some((
+                        StreamEvent::Error("stream interrupted".into()),
+                        (sse_stream, st),
+                    ));
                 }
             }
-        },
-    )
+        }
+    })
 }
 
 /// Internal state for the chat completions SSE stream processor.
