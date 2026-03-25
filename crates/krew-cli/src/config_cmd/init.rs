@@ -179,16 +179,22 @@ pub fn collect_provider_data(existing_names: &[String]) -> anyhow::Result<Provid
         (Some(key), None)
     };
 
-    // 4. Base URL — required for OpenAI-Compatible, optional for others.
+    // 4. Base URL — required for OpenAI-Compatible, with defaults for others.
     let base_url = if is_compatible {
         let url: String = Input::new().with_prompt("Base URL").interact_text()?;
         Some(url)
     } else {
+        let default_url = match type_idx {
+            0 => "https://api.anthropic.com",
+            1 => "https://api.openai.com",
+            2 => "https://generativelanguage.googleapis.com/v1beta",
+            _ => "",
+        };
         let url: String = Input::new()
-            .with_prompt("Base URL (press Enter to skip)")
-            .default(String::new())
+            .with_prompt("Base URL")
+            .default(default_url.to_string())
             .interact_text()?;
-        if url.is_empty() { None } else { Some(url) }
+        if url == default_url { None } else { Some(url) }
     };
 
     // 5. Google: Gemini API vs Vertex AI.
