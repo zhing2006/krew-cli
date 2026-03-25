@@ -4,6 +4,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod app;
 mod completion;
+mod config_cmd;
 mod custom_terminal;
 mod frame_scheduler;
 mod prompt_mode;
@@ -54,6 +55,81 @@ struct Cli {
     /// Enable verbose output.
     #[arg(short, long)]
     verbose: bool,
+
+    /// Subcommand.
+    #[command(subcommand)]
+    command: Option<CliCommand>,
+}
+
+/// Top-level subcommands.
+#[derive(clap::Subcommand, Debug)]
+enum CliCommand {
+    /// Configuration management.
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+}
+
+/// Config subcommand actions.
+#[derive(clap::Subcommand, Debug)]
+#[command(disable_help_subcommand = true)]
+enum ConfigAction {
+    /// Interactive configuration initialization.
+    Init {
+        /// Initialize only user-level config (~/.krew/settings.toml).
+        #[arg(long, conflicts_with = "project")]
+        user: bool,
+        /// Initialize only project-level config (.krew/settings.toml).
+        #[arg(long)]
+        project: bool,
+    },
+    /// Add a provider or agent.
+    Add {
+        #[command(subcommand)]
+        target: AddTarget,
+    },
+    /// Delete a provider or agent.
+    Del {
+        #[command(subcommand)]
+        target: DelTarget,
+    },
+    /// List providers or agents.
+    List {
+        #[command(subcommand)]
+        target: ListTarget,
+    },
+    /// Diagnose configuration completeness.
+    Doctor,
+    /// Print the full configuration manual.
+    Help,
+}
+
+/// Targets for `config add`.
+#[derive(clap::Subcommand, Debug)]
+enum AddTarget {
+    /// Add a provider to user config.
+    Provider,
+    /// Add an agent to project config.
+    Agent,
+}
+
+/// Targets for `config del`.
+#[derive(clap::Subcommand, Debug)]
+enum DelTarget {
+    /// Delete a provider from user config.
+    Provider,
+    /// Delete an agent from project config.
+    Agent,
+}
+
+/// Targets for `config list`.
+#[derive(clap::Subcommand, Debug)]
+enum ListTarget {
+    /// List configured providers.
+    Providers,
+    /// List configured agents.
+    Agents,
 }
 
 /// Default number of days to retain log files.
@@ -230,6 +306,21 @@ fn main() {
 
 fn run() -> i32 {
     let cli = Cli::parse();
+
+    // Handle config subcommands early — no TUI, no full config load.
+    if let Some(CliCommand::Config { action }) = cli.command {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(e) => {
+                eprintln!("Error: failed to create runtime: {e}");
+                return 1;
+            }
+        };
+        return rt.block_on(config_cmd::dispatch(action));
+    }
 
     // Validate: -p and --resume are mutually exclusive.
     if cli.prompt.is_some() && cli.resume.is_some() {

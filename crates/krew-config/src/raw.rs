@@ -246,6 +246,13 @@ impl UserConfig {
     }
 }
 
+/// Return the path to the user-level config file (`~/.krew/settings.toml`).
+///
+/// Returns `None` when the home directory cannot be determined.
+pub fn user_config_path() -> Option<PathBuf> {
+    dirs_home().map(|h| h.join(USER_CONFIG_DIR).join("settings.toml"))
+}
+
 /// Get the user's home directory.
 fn dirs_home() -> Option<PathBuf> {
     std::env::var_os("HOME")

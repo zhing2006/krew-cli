@@ -3,12 +3,14 @@ pub mod types;
 pub mod anthropic;
 pub mod common;
 pub mod google;
+pub mod list_models;
 pub mod openai_chat;
 pub mod openai_responses;
 
 pub use anthropic::AnthropicClient;
 pub use google::GoogleClient;
 pub use krew_config::OtherAgentRole;
+pub use list_models::{ListModelsConfig, ModelInfo, fallback_models, list_models};
 pub use openai_chat::OpenAiChatClient;
 pub use openai_responses::OpenAiResponsesClient;
 pub use types::*;

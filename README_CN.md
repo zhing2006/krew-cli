@@ -34,6 +34,7 @@
 - **MCP 集成** — 通过 Model Context Protocol 服务器扩展 Agent 能力（stdio + HTTP）
 - **Skill 系统** — 可发现、可激活的技能，通过 `SKILL.md` 定义专业指令
 - **自定义命令** — 通过 Markdown 文件定义自定义 Slash 命令，支持参数替换和 Bash 预处理
+- **配置向导** — 交互式 `krew config init` 配置、`config doctor` 诊断、Provider/Agent 增删管理
 - **会话持久化** — 随时保存和恢复对话；`/rewind` 可从任意历史点分叉
 - **Token 追踪与自动压缩** — 实时 token 用量显示；超过阈值自动压缩上下文，保留密语消息
 - **Prompt 模式（`-p`）** — 非交互模式，适用于脚本和 CI/CD，支持 text/JSON 输出和 stdin 管道
@@ -76,14 +77,21 @@ cargo install --path crates/krew-cli
 | Provider | 模型（示例） | API |
 | -------- | ------------ | --- |
 | OpenAI | GPT-5.2 | Responses / Chat Completions |
-| Azure OpenAI | GPT-5.2 (Azure) | Responses / Chat Completions |
 | Anthropic | Claude Opus 4.6, Sonnet 4.6 | Messages |
 | Google | Gemini 3.1 Pro | generateContent（+ Vertex AI） |
 | OpenAI 兼容 | 豆包、LiteLLM 等 | Responses / Chat Completions |
 
 ## 快速开始
 
-### 1. 创建配置文件
+### 方式 A：交互式配置（推荐）
+
+```bash
+krew config init
+```
+
+配置向导会引导你设置 Provider（API Key）和 Agent。
+
+### 方式 B：手动创建配置文件
 
 在项目目录下创建 `.krew/settings.toml`：
 
@@ -133,7 +141,7 @@ krew
 ## 使用方式
 
 ```
-krew [OPTIONS]
+krew [OPTIONS] [COMMAND]
 
 Options:
   -c, --config <PATH>           指定配置文件路径
@@ -145,6 +153,14 @@ Options:
   -v, --verbose                 详细输出
   -h, --help                    帮助
   -V, --version                 版本
+
+Commands:
+  config init [--user|--project]   交互式配置初始化
+  config add <provider|agent>      添加 Provider 或 Agent
+  config del <provider|agent>      删除 Provider 或 Agent
+  config list <providers|agents>   列出 Provider 或 Agent
+  config doctor                    诊断配置问题
+  config help                      打印完整配置手册
 ```
 
 ### 寻址语法

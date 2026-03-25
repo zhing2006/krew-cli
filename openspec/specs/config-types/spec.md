@@ -57,7 +57,7 @@
 - **THEN** 结构体 SHALL 有效，所有字段为 `None`
 
 ### Requirement: ProviderConfig 结构体
-`krew-config` SHALL 定义 `ProviderConfig` 结构体，包含可选字段：`api_key`、`api_key_env`、`base_url`、`azure_endpoint`、`azure_api_version`（均为 `Option<String>`）、`vertex_project: Option<String>`、`vertex_location: Option<String>`。
+`krew-config` SHALL 定义 `ProviderConfig` 结构体，包含必需字段 `provider_type: ProviderType`（TOML 中键名为 `type`），以及可选字段：`api_key`、`api_key_env`、`base_url`（均为 `Option<String>`）、`vertex_project: Option<String>`、`vertex_location: Option<String>`。
 
 #### Scenario: ProviderConfig 字段
 - **WHEN** 反序列化 provider TOML 块
@@ -68,7 +68,7 @@
 - **THEN** 正确反序列化两个字段
 
 ### Requirement: McpServerConfig 结构体
-`krew-config` SHALL 定义 `McpServerConfig` 结构体，包含字段：`name: String`、`command: String`、`args: Vec<String>`、`env: Option<HashMap<String, String>>`、`trust: Option<McpTrust>`。
+`krew-config` SHALL 定义 `McpServerConfig` 结构体，包含字段：`name: String`、`command: Option<String>`、`args: Vec<String>`、`env: Option<HashMap<String, String>>`、`url: Option<String>`、`headers: Option<HashMap<String, String>>`、`trust: Option<McpTrust>`。支持两种传输模式：stdio（设置 `command`）和 HTTP（设置 `url`）。
 
 #### Scenario: McpServerConfig 字段映射
 - **WHEN** 反序列化一个 MCP 服务器 TOML 块
