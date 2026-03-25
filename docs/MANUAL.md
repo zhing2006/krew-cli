@@ -1,6 +1,6 @@
 # krew-cli User Manual
 
-> Version: 0.5.4
+> Version: 0.6.0
 
 ---
 
@@ -11,18 +11,19 @@
 3. [Common Recipes](#3-common-recipes)
 4. [Command-Line Arguments](#4-command-line-arguments)
 5. [Configuration](#5-configuration)
-6. [Addressing & Routing](#6-addressing--routing)
-7. [Slash Commands](#7-slash-commands)
-8. [Custom Commands](#8-custom-commands)
-9. [Tool System](#9-tool-system)
-10. [MCP Integration](#10-mcp-integration)
-11. [Skill System](#11-skill-system)
-12. [Session Management](#12-session-management)
-13. [Prompt Mode](#13-prompt-mode)
-14. [Project Instructions (AGENTS.md)](#14-project-instructions-agentsmd)
-15. [File Paths & Load Priority](#15-file-paths--load-priority)
-16. [Keyboard Shortcuts](#16-keyboard-shortcuts)
-17. [Troubleshooting](#17-troubleshooting)
+6. [Config Management (`krew config`)](#6-config-management-krew-config)
+7. [Addressing & Routing](#7-addressing--routing)
+8. [Slash Commands](#8-slash-commands)
+9. [Custom Commands](#9-custom-commands)
+10. [Tool System](#10-tool-system)
+11. [MCP Integration](#11-mcp-integration)
+12. [Skill System](#12-skill-system)
+13. [Session Management](#13-session-management)
+14. [Prompt Mode](#14-prompt-mode)
+15. [Project Instructions (AGENTS.md)](#15-project-instructions-agentsmd)
+16. [File Paths & Load Priority](#16-file-paths--load-priority)
+17. [Keyboard Shortcuts](#17-keyboard-shortcuts)
+18. [Troubleshooting](#18-troubleshooting)
 
 ---
 
@@ -70,7 +71,24 @@ krew --version
 
 This section walks you through your very first session with krew.
 
-### Step 1: Create a config directory
+### Option A: Interactive setup (recommended)
+
+The fastest way to get started — the config wizard handles everything:
+
+```bash
+krew config init
+```
+
+The wizard will:
+1. Ask you to set up providers (choose type, enter API key)
+2. Ask you to define agents (pick a provider, select a model)
+3. Write `~/.krew/settings.toml` (user-level) and `.krew/settings.toml` (project-level)
+
+Then just run `krew` to start chatting!
+
+### Option B: Manual setup
+
+#### Step 1: Create a config directory
 
 **macOS / Linux:**
 ```bash
@@ -82,7 +100,7 @@ mkdir -p .krew
 mkdir .krew -Force
 ```
 
-### Step 2: Create `.krew/settings.toml`
+#### Step 2: Create `.krew/settings.toml`
 
 Create a file called `.krew/settings.toml` in your project directory. Here is the simplest possible config — one agent, one provider:
 
@@ -99,10 +117,11 @@ color = "magenta"
 tools = true
 
 [providers.anthropic]
+type = "anthropic"
 api_key_env = "ANTHROPIC_API_KEY"
 ```
 
-### Step 3: Set your API key
+#### Step 3: Set your API key
 
 **macOS / Linux:**
 ```bash
@@ -121,7 +140,7 @@ set ANTHROPIC_API_KEY=sk-ant-...
 
 > **Tip:** Add the export to your shell profile (`~/.bashrc`, `~/.zshrc`, or Windows System Environment Variables) so you don't have to set it every time.
 
-### Step 4: Run
+#### Step 4: Run
 
 ```bash
 krew
@@ -131,7 +150,7 @@ You should see a startup banner like this:
 
 ```
 ┌──────────────────────────────────────────────────┐
-│ Krew CLI v0.5.4                                  │
+│ Krew CLI v0.6.0                                  │
 │ Agents: [opus] Claude Opus                       │
 │ Directory: /path/to/project  Type /help for ...  │
 └──────────────────────────────────────────────────┘
@@ -142,9 +161,10 @@ Type a message (e.g. `@opus hello!`) and press Enter. You're chatting!
 
 ### What's next?
 
-- Add more agents → see [Recipe: Multi-provider setup](#recipe-1-multi-provider-setup-openai--anthropic)
+- Add more agents → `krew config add agent` or see [Recipe: Multi-provider setup](#recipe-1-multi-provider-setup-openai--anthropic)
 - Try whisper mode → type `#opus secret message`
 - Use tools → ask the agent to read a file or run a command
+- Diagnose config issues → `krew config doctor`
 - Learn all commands → type `/help` in the session
 
 ---
@@ -192,9 +212,11 @@ color = "magenta"
 tools = true
 
 [providers.openai]
+type = "openai"
 api_key_env = "OPENAI_API_KEY"
 
 [providers.anthropic]
+type = "anthropic"
 api_key_env = "ANTHROPIC_API_KEY"
 ```
 
@@ -208,18 +230,21 @@ Both agents respond in order. Later agents can see earlier agents' answers.
 
 ### Recipe 2: Share provider config across projects
 
-Put providers and API keys in user-level config so every project can use them.
+Put providers and API keys in user-level config so every project can use them. Or use `krew config init` to set this up interactively.
 
 **1. Create `~/.krew/settings.toml`:**
 
 ```toml
 [providers.openai]
+type = "openai"
 api_key_env = "OPENAI_API_KEY"
 
 [providers.anthropic]
+type = "anthropic"
 api_key_env = "ANTHROPIC_API_KEY"
 
 [providers.google]
+type = "google"
 api_key_env = "GOOGLE_API_KEY"
 ```
 
@@ -333,18 +358,26 @@ These prefixes are matched — `cargo build --release` is also auto-approved.
 ## 4. Command-Line Arguments
 
 ```
-krew [OPTIONS]
+krew [OPTIONS] [COMMAND]
 
 Options:
   -c, --config <PATH>           Path to settings.toml (default: .krew/settings.toml)
   -a, --agents <NAMES>          Enable only these agents (comma-separated, e.g. "gpt,opus")
       --approval-mode <MODE>    Override tool approval mode: suggest | auto-edit | full-auto
       --resume [ID]             Resume a previous session (interactive picker if no ID given)
-  -p, --prompt <PROMPT>         Non-interactive prompt mode (see §12)
+  -p, --prompt <PROMPT>         Non-interactive prompt mode (see §14)
       --format <FORMAT>         Output format for -p mode: text (default) | json
   -v, --verbose                 Enable debug-level logging
   -h, --help                    Show help
   -V, --version                 Show version
+
+Commands:
+  config init [--user|--project]   Interactive configuration setup
+  config add <provider|agent>      Add a provider or agent
+  config del <provider|agent>      Delete a provider or agent
+  config list <providers|agents>   List providers or agents
+  config doctor                    Diagnose configuration issues
+  config help                      Print full configuration manual
 ```
 
 ### Examples
@@ -364,6 +397,15 @@ krew --approval-mode full-auto
 
 # Non-interactive prompt
 krew -p "@opus explain Rust ownership"
+
+# Interactive configuration setup
+krew config init
+
+# Add a new provider
+krew config add provider
+
+# Diagnose configuration issues
+krew config doctor
 ```
 
 ---
@@ -463,35 +505,36 @@ enable_thinking = false          # Show model thinking/reasoning (default: false
 
 ### 5.4 Provider configuration
 
+Each provider requires a `type` field specifying the provider type: `"openai"`, `"anthropic"`, or `"google"`.
+
 ```toml
 # OpenAI
 [providers.openai]
+type = "openai"
 api_key_env = "OPENAI_API_KEY"       # Environment variable name (recommended)
 # api_key = "sk-..."                 # Direct key (not recommended)
 # base_url = "https://api.openai.com"
 
-# Azure OpenAI
-[providers.azure]
-api_key_env = "AZURE_API_KEY"
-azure_endpoint = "https://my-resource.openai.azure.com"
-azure_api_version = "2024-12-01-preview"
-
 # Anthropic
 [providers.anthropic]
+type = "anthropic"
 api_key_env = "ANTHROPIC_API_KEY"
 # base_url = "https://api.anthropic.com"
 
 # Google (API key mode)
 [providers.google]
+type = "google"
 api_key_env = "GOOGLE_API_KEY"
 
 # Google (Vertex AI mode)
 [providers.vertex]
+type = "google"
 vertex_project = "my-project"
 vertex_location = "us-central1"
 
 # OpenAI-Compatible (e.g. Doubao, LiteLLM)
 [providers.doubao]
+type = "openai"
 api_key_env = "DOUBAO_API_KEY"
 base_url = "https://ark.cn-beijing.volces.com/api/v3"
 ```
@@ -532,7 +575,101 @@ krew validates the configuration on startup. Common errors:
 
 ---
 
-## 6. Addressing & Routing
+## 6. Config Management (`krew config`)
+
+krew provides a suite of `config` subcommands for interactive configuration management. All config subcommands run in normal terminal mode (no TUI).
+
+### 6.1 `krew config init`
+
+Interactive wizard to set up configuration files from scratch.
+
+```bash
+krew config init              # Auto-detect what needs setup
+krew config init --user       # Only set up user-level config (~/.krew/settings.toml)
+krew config init --project    # Only set up project-level config (.krew/settings.toml)
+```
+
+**Smart routing** (no flags): the wizard checks which config files exist and only creates what's missing:
+- Both missing → set up user config first, then project config
+- User missing, project exists → set up user config only
+- User exists, project missing → set up project config only
+- Both exist → exit with message
+
+**User config setup** guides you through adding providers:
+1. Select provider type (Anthropic / OpenAI / Google / OpenAI-Compatible)
+2. Enter provider name (auto-suggested based on type)
+3. Choose API key method (environment variable or config file)
+4. Optionally set base_url (OpenAI-Compatible) or Vertex fields (Google)
+5. Loop — add more providers or finish
+
+**Project config setup** offers two modes:
+- **Smart Preset**: fetches available models from your providers, offers 1-agent or 3-agent presets, lets you pick models via fuzzy search
+- **Manual Setup**: loop-based agent creation — you pick provider, model, name, display name, color, thinking, and web search; `tools` is always enabled
+
+### 6.2 `krew config add`
+
+Add a single provider or agent to existing config.
+
+```bash
+krew config add provider    # Add a provider to user config
+krew config add agent       # Add an agent to project config
+```
+
+Uses the same interactive prompts as `init`. The new entry is appended to the appropriate config file with format-preserving writes (comments and formatting are retained).
+
+### 6.3 `krew config del`
+
+Delete a provider or agent.
+
+```bash
+krew config del provider    # Delete a provider from user config
+krew config del agent       # Delete an agent from project config
+```
+
+Shows a selection list, warns about dependencies (e.g. agents referencing a provider), and asks for confirmation before deleting.
+
+### 6.4 `krew config list`
+
+Display providers or agents in table format.
+
+```bash
+krew config list providers   # Show all providers with key status
+krew config list agents      # Show all agents with their settings
+```
+
+**Providers table** shows: Name, Type, Key Method (with ✅/❌ for env var status), Base URL.
+
+**Agents table** shows: Name, Display Name, Provider, Model, Color, Thinking, Web Search. Also displays `reply_order` below the table.
+
+### 6.5 `krew config doctor`
+
+Diagnose configuration completeness and validity.
+
+```bash
+krew config doctor
+```
+
+Checks:
+- Config file existence and syntax (user + project)
+- Provider API key availability (env var set? config file key present?)
+- Agent provider references (does the referenced provider exist?)
+- MCP server command availability (is the command in PATH?)
+
+Uses ✅/❌/⚠️ indicators. Reports explicit parse errors (does not silently fall back like runtime loading).
+
+### 6.6 `krew config help`
+
+Print the full configuration manual to stdout.
+
+```bash
+krew config help
+```
+
+Covers: file locations, merge rules, all fields with defaults, CLI command reference, and example configurations.
+
+---
+
+## 7. Addressing & Routing
 
 ### @ addressing
 
@@ -568,7 +705,7 @@ When an agent's reply `@mentions` another agent, that agent is automatically dis
 
 ---
 
-## 7. Slash Commands
+## 8. Slash Commands
 
 | Command | Description |
 | ------- | ----------- |
@@ -587,7 +724,7 @@ Built-in commands take priority over custom commands with the same name. Type `/
 
 ---
 
-## 8. Custom Commands
+## 9. Custom Commands
 
 Define custom slash commands as Markdown files.
 
@@ -633,7 +770,7 @@ The shell command runs in the session working directory. Failures are replaced w
 
 ---
 
-## 9. Tool System
+## 10. Tool System
 
 ### Built-in tools
 
@@ -681,13 +818,13 @@ All file tools enforce path boundaries: operations must be within the session wo
 
 ---
 
-## 10. MCP Integration
+## 11. MCP Integration
 
 krew supports extending agent capabilities through [Model Context Protocol](https://modelcontextprotocol.io) servers.
 
 ### Configuration
 
-See [§5.5](#55-mcp-server-configuration) for config syntax.
+See [§5.5](#55-mcp-server-configuration) for config syntax. Or run `krew config help` for a complete reference.
 
 ### Tool naming
 
@@ -704,7 +841,7 @@ MCP servers initialize at session startup. Use `/mcp` to list connected servers 
 
 ---
 
-## 11. Skill System
+## 12. Skill System
 
 Skills provide specialized instructions for specific tasks.
 
@@ -757,7 +894,7 @@ Use `/skills` to list available skills.
 
 ---
 
-## 12. Session Management
+## 13. Session Management
 
 ### Persistence
 
@@ -798,7 +935,7 @@ Use `/agents` to see per-agent token usage (input/output/total).
 
 ---
 
-## 13. Prompt Mode
+## 14. Prompt Mode
 
 Non-interactive mode for scripting and CI/CD.
 
@@ -889,7 +1026,7 @@ All events include `"agent"` (agent name). Whisper events additionally include `
 
 ---
 
-## 14. Project Instructions (AGENTS.md)
+## 15. Project Instructions (AGENTS.md)
 
 Place an `AGENTS.md` file in your project directory to provide all agents with project context (architecture, coding conventions, etc.).
 
@@ -908,7 +1045,7 @@ Content is wrapped in `<project-instructions>` tags and injected into every agen
 
 ---
 
-## 15. File Paths & Load Priority
+## 16. File Paths & Load Priority
 
 ### Configuration files
 
@@ -971,7 +1108,7 @@ All discovery uses **first-found wins** for same-name entries.
 
 ---
 
-## 16. Keyboard Shortcuts
+## 17. Keyboard Shortcuts
 
 ### Chat mode
 
@@ -1007,7 +1144,7 @@ All discovery uses **first-found wins** for same-name entries.
 
 ---
 
-## 17. Troubleshooting
+## 18. Troubleshooting
 
 ### "Git Bash not found" on Windows
 
@@ -1054,9 +1191,10 @@ After pressing `a` (approve for session), the same command prefix won't ask agai
 
 ### Config validation errors
 
-Run with `--verbose` to see detailed error messages:
+Run `krew config doctor` for a comprehensive diagnostic, or use `--verbose` to see detailed error messages:
 
 ```bash
+krew config doctor
 krew --verbose
 ```
 
@@ -1081,7 +1219,7 @@ Logs are written to `.krew/logs/` in the project directory. Files rotate daily a
 ### My custom command isn't showing up
 
 Check that:
-1. The `.md` file is in one of the [discovery paths](#15-file-paths--load-priority) (e.g. `.krew/commands/my-command.md`)
+1. The `.md` file is in one of the [discovery paths](#16-file-paths--load-priority) (e.g. `.krew/commands/my-command.md`)
 2. The file has valid YAML frontmatter (or no frontmatter at all — it's optional)
 3. There isn't a built-in command with the same name (built-in commands take priority)
 4. Restart krew after adding new command files

@@ -1,10 +1,13 @@
 mod defaults;
 pub mod instructions;
 mod raw;
+pub mod writer;
 
 pub use defaults::*;
 pub use instructions::load_project_instructions;
-pub use raw::{RawConfig, RawSettings, USER_CONFIG_DIR, UserConfig, UserSettings};
+pub use raw::{
+    RawConfig, RawSettings, USER_CONFIG_DIR, UserConfig, UserSettings, user_config_path,
+};
 
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -27,10 +30,16 @@ pub enum ConfigError {
     Io(#[from] std::io::Error),
     /// TOML parse/deserialization error.
     #[error("config parse error: {0}")]
-    Parse(#[from] toml::de::Error),
+    Parse(String),
     /// Validation error (invalid references, duplicates, etc.).
     #[error("config validation error: {0}")]
     Validation(String),
+}
+
+impl From<toml::de::Error> for ConfigError {
+    fn from(e: toml::de::Error) -> Self {
+        ConfigError::Parse(e.to_string())
+    }
 }
 
 /// Root configuration loaded from `.krew/settings.toml`.

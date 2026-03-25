@@ -1,6 +1,6 @@
 # krew-cli — 技术设计文档 (TDD)
 
-> 版本: 0.5.4 | 日期: 2026-03-21
+> 版本: 0.6.0 | 日期: 2026-03-25
 > 参考: [PDD](./PDD.md) | 参考项目: [codex CLI](https://github.com/openai/codex)
 
 ---
@@ -12,7 +12,7 @@
 ```txt
 ┌──────────────────────────────────────────────────┐
 │                    CLI Layer                     │
-│         (clap 命令解析 + TUI 交互渲染)             │
+│    (clap 命令解析 + TUI 交互渲染 + Config CLI)     │
 ├──────────────────────────────────────────────────┤
 │                  Session Layer                   │
 │       (会话管理 / 消息路由 / @ 寻址解析)           │
@@ -105,7 +105,9 @@
 | `eventsource-stream` | SSE 流式响应解析（从 reqwest bytes_stream 转换） | 0.2 |
 | `serde` | 序列化框架 | 1 |
 | `serde_json` | JSON 序列化 | 1 |
-| `toml` | TOML 配置/会话文件序列化 | 0.9 |
+| `toml` | TOML 配置/会话文件序列化 | 1.1 |
+| `toml_edit` | 格式保留 TOML 编辑（config writer） | 0.25 |
+| `dialoguer` | 交互式终端对话框（config wizard） | 0.12 |
 | `syntect` | 代码语法高亮 | 5 |
 | `anyhow` | 应用层错误处理 | 1 |
 | `thiserror` | 库层错误类型定义 | 2 |
@@ -198,7 +200,20 @@ for agent_name in &config.settings.reply_order {
 }
 ```
 
-#### 3.1.2 AgentEvent 通信协议
+#### 3.1.2 Agent Identity Prompt
+
+`build_identity_prompt()` 构建每个 Agent 的身份描述块，作为 system prompt 的一部分发送给 LLM。内容按顺序包含：
+
+1. **Agent 身份**：display_name、model、agent_name
+2. **krew-cli 简介**：说明 krew-cli 是一个多 AI Agent 协作 CLI 工具，用户在一个终端中同时与多个 LLM 对话
+3. **配置帮助提示**：告知 Agent 当需要帮助用户修改 krew 配置时，可执行 `krew config help` 获取完整配置手册
+4. **多 Agent 对话规则**：其他 Agent 消息前缀、不要模仿其他 Agent
+5. **当前日期时间**
+6. **语言指令**（如 `settings.language` 已配置）
+7. **Peer Agent 协作提示**（如有密语目标 Agent）
+8. **Whisper 隐私上下文**（如有密语）
+
+#### 3.1.3 AgentEvent 通信协议
 
 Agent Loop 通过 channel 发送 `AgentEvent` 与 TUI 层通信：
 
@@ -234,7 +249,7 @@ enum AgentEvent {
 }
 ```
 
-#### 3.1.3 工具调用循环
+#### 3.1.4 工具调用循环
 
 当 Agent 回复包含 ToolCall 时，进入工具调用循环：
 
@@ -378,8 +393,6 @@ struct Usage {
   - 响应事件: `response.output_item.added`, `response.output_text.delta`, `response.completed` 等
   - Web Search: tools 中添加 `{ type: "web_search" }`
   - Thinking: `reasoning` 字段 `{ effort: "low"|"medium"|"high", summary: "auto" }`
-  - **Azure 模式**：当 `azure_endpoint` 配置时激活，使用 `api-key` header 认证（非 Bearer）
-
 - **Chat Completions API** (`api_type = "chat"`)
   - API: `POST /v1/chat/completions` (stream=true, stream_options.include_usage=true)
   - 请求格式: `{ model, messages: [...], tools: [...], stream: true }`
@@ -1149,8 +1162,6 @@ struct ProviderConfig {
     api_key: Option<String>,            // 方式二：直接填写（不推荐）
     api_key_env: Option<String>,        // 方式一：环境变量名（优先）
     base_url: Option<String>,
-    azure_endpoint: Option<String>,     // Azure OpenAI 端点（设置时激活 Azure 模式）
-    azure_api_version: Option<String>,  // Azure API 版本
     vertex_project: Option<String>,     // Google Vertex AI 项目 ID
     vertex_location: Option<String>,    // Google Vertex AI 区域（如 "us-central1"）
 }
@@ -1239,6 +1250,121 @@ System Prompt 层级合并顺序：
 当无项目指令时跳过第 1 层；无可用 Skills 时跳过第 2 层。
 
 **加载时机：** `App::new()` 中一次性加载，结果存储在 `App.project_instructions` 字段，所有 Agent 共享。文件不存在时静默返回 `None`。
+
+#### 3.7.4 格式保留配置写入（Config Writer）
+
+`krew-config::writer` 模块使用 `toml_edit` crate 实现格式保留的 TOML 配置文件写入，供 `krew config` 子命令使用。
+
+```rust
+/// Provider data for writing to config file.
+struct ProviderWriteData {
+    name: String,
+    provider_type: ProviderType,        // openai | anthropic | google
+    api_key: Option<String>,
+    api_key_env: Option<String>,
+    base_url: Option<String>,
+    vertex_project: Option<String>,
+    vertex_location: Option<String>,
+}
+
+/// Agent data for writing to config file.
+struct AgentWriteData {
+    name: String,
+    display_name: String,
+    provider: String,
+    model: String,
+    color: String,
+    enable_thinking: bool,
+    enable_web_search: bool,
+    tools: bool,                        // config wizard 固定为 true
+    api_type: Option<String>,           // OpenAI 系: "responses" | "chat"
+    system_prompt: Option<String>,
+}
+```
+
+**核心函数：**
+
+| 函数 | 功能 |
+| ---- | ---- |
+| `add_provider(path, data)` | 追加 provider 到 `[providers]` 表 |
+| `remove_provider(path, name)` | 移除 `[providers.name]` |
+| `add_agent(path, data)` | 追加 `[[agents]]` 条目，同步更新 `reply_order` |
+| `remove_agent(path, name)` | 移除 `[[agents]]` 条目，同步更新 `reply_order` |
+| `batch_add_agents(path, agents)` | 批量添加 agents（用于 init 的 Smart Preset） |
+| `list_providers(path)` | 返回 `Vec<(String, ProviderConfig)>` |
+| `list_agents(path)` | 返回 `(Vec<AgentConfig>, Vec<String>)` |
+
+**关键特性：**
+- 使用 `toml_edit::DocumentMut` 保留注释、空行和格式
+- 写入前验证无重复条目
+- 添加/删除 Agent 时自动维护 `settings.reply_order`
+- 文件不存在时自动创建（含父目录）
+
+#### 3.7.5 List Models API
+
+`krew-llm::list_models` 模块提供从 LLM Provider API 获取可用模型列表的功能，供 config wizard 的 Smart Preset 模式使用。
+
+```rust
+struct ModelInfo {
+    id: String,
+}
+
+struct ListModelsConfig {
+    provider_type: ProviderType,
+    base_url: Option<String>,
+    api_key: String,
+    vertex_project: Option<String>,
+    vertex_location: Option<String>,
+}
+
+/// Fetch available models from provider API.
+async fn list_models(config: &ListModelsConfig) -> Result<Vec<ModelInfo>, LlmError>;
+
+/// Return hardcoded fallback model list for a provider type.
+fn fallback_models(provider_type: ProviderType) -> Vec<ModelInfo>;
+```
+
+**各 Provider API 端点：**
+
+| Provider | 端点 | 认证 | 过滤规则 |
+| -------- | ---- | ---- | -------- |
+| OpenAI | `GET {base_url}/v1/models` | Bearer token | `gpt`/`o`/`chatgpt` 前缀 |
+| Anthropic | `GET {base_url}/v1/models` | `x-api-key` + `anthropic-version` | `claude-` 前缀 |
+| Google Gemini | `GET generativelanguage.googleapis.com/v1beta/models?key=` | Query parameter | `gemini-` 前缀 |
+| Google Vertex | `GET {location}-aiplatform.googleapis.com/v1/...` | Bearer token | `gemini-` 前缀 |
+
+超时 5 秒，结果按 ID 字母排序。API 调用失败时回退到硬编码列表。
+
+#### 3.7.6 Config CLI 子命令
+
+`krew-cli::config_cmd` 模块实现 `krew config` 子命令系统。所有子命令使用 `tokio::runtime::Builder::new_current_thread()` 轻量 runtime，不初始化 TUI terminal。
+
+```rust
+/// Dispatch config subcommands.
+async fn dispatch(action: ConfigAction) -> i32;
+
+enum ConfigAction {
+    Init { user: bool, project: bool },
+    Add { target: AddTarget },
+    Del { target: DelTarget },
+    List { target: ListTarget },
+    Doctor,
+    Help,
+}
+```
+
+**模块结构：**
+
+| 模块 | 功能 |
+| ---- | ---- |
+| `init` | 交互式初始化（智能路由 + Provider/Agent 创建 + Smart Preset） |
+| `add` | 添加 Provider/Agent（复用 init 的交互逻辑） |
+| `del` | 删除 Provider/Agent（带引用检查和确认） |
+| `list` | 表格显示 Provider/Agent |
+| `doctor` | 配置诊断（手动 TOML 解析，不使用 UserConfig::load() 避免静默回退） |
+| `help` | 打印硬编码的配置手册 |
+
+**交互组件：** 使用 `dialoguer` crate 的 `Select`、`FuzzySelect`、`Input`、`Password`、`Confirm` 实现终端交互。
 
 ### 3.8 TUI 实现细节
 
@@ -1762,3 +1888,5 @@ krew-cli
 - ~~**v0.5.2**: LiteLLM 代理支持（OpenAI Responses API 自定义 base_url）~~ ✅ 已完成
 - ~~**v0.5.3**: Markdown 软换行处理、OpenAI Chat reasoning_effort 支持~~ ✅ 已完成
 - ~~**v0.5.4**: OpenAI Chat Web Search 支持~~ ✅ 已完成
+- ~~**v0.5.5**: `settings.language` 多语言响应指令、Gemini web_search 误报修复~~ ✅ 已完成
+- ~~**v0.6.0**: 配置管理子命令系统（`krew config init/add/del/list/doctor/help`），交互式配置向导、格式保留 TOML 写入、List Models API、配置诊断~~ ✅ 已完成

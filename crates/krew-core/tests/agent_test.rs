@@ -173,6 +173,19 @@ fn identity_language_before_whisper() {
 }
 
 #[test]
+fn identity_contains_krew_description_and_config_help() {
+    let result = build_identity_prompt("GPT-5", "gpt-5", "gpt", "2026-03-24", None, None, None);
+    assert!(
+        result.contains("multi-AI-agent collaborative CLI tool"),
+        "identity should contain krew description"
+    );
+    assert!(
+        result.contains("krew config help"),
+        "identity should contain config help hint"
+    );
+}
+
+#[test]
 fn identity_no_language_with_peers_and_whisper() {
     let targets = vec!["gpt".to_string()];
     let peers = [PeerAgent {

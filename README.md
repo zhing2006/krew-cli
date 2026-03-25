@@ -34,6 +34,7 @@ Run multiple AI models (GPT, Claude, Gemini, etc.) in a single terminal session 
 - **MCP Integration** — Extend agent capabilities via Model Context Protocol servers (stdio + HTTP)
 - **Skill System** — Discoverable, activatable skills with `SKILL.md` definitions for specialized instructions
 - **Custom Commands** — User-defined slash commands via Markdown files with argument substitution and bash preprocessing
+- **Config Wizard** — Interactive `krew config init` setup, `config doctor` diagnostics, CRUD management for providers/agents
 - **Session Persistence** — Save and resume conversations; `/rewind` to fork from any point in history
 - **Token Tracking & Auto-Compact** — Real-time token usage; automatic context compression with whisper message preservation
 - **Prompt Mode (`-p`)** — Non-interactive mode for scripts and CI/CD, with text/JSON output and stdin pipe support
@@ -76,14 +77,21 @@ cargo install --path crates/krew-cli
 | Provider | Models (examples) | API |
 | -------- | ----------------- | --- |
 | OpenAI | GPT-5.2 | Responses / Chat Completions |
-| Azure OpenAI | GPT-5.2 (Azure) | Responses / Chat Completions |
 | Anthropic | Claude Opus 4.6, Sonnet 4.6 | Messages |
 | Google | Gemini 3.1 Pro | generateContent (+ Vertex AI) |
 | OpenAI-Compatible | Doubao, LiteLLM, etc. | Responses / Chat Completions |
 
 ## Quick Start
 
-### 1. Create a config file
+### Option A: Interactive setup (recommended)
+
+```bash
+krew config init
+```
+
+The wizard walks you through setting up providers (API keys) and agents interactively.
+
+### Option B: Manual config file
 
 Create `.krew/settings.toml` in your project directory:
 
@@ -133,7 +141,7 @@ krew
 ## Usage
 
 ```
-krew [OPTIONS]
+krew [OPTIONS] [COMMAND]
 
 Options:
   -c, --config <PATH>           Config file path
@@ -145,6 +153,14 @@ Options:
   -v, --verbose                 Verbose output
   -h, --help                    Help
   -V, --version                 Version
+
+Commands:
+  config init [--user|--project]   Interactive configuration setup
+  config add <provider|agent>      Add a provider or agent
+  config del <provider|agent>      Delete a provider or agent
+  config list <providers|agents>   List providers or agents
+  config doctor                    Diagnose configuration issues
+  config help                      Print full configuration manual
 ```
 
 ### Addressing
