@@ -427,7 +427,8 @@ struct Usage {
 
 - 复用 OpenAI Chat Completions 实现，替换 base_url 和认证方式
 - 用于接入豆包（ByteDance）等第三方 OpenAI 兼容服务
-- 同样支持 `api_type` 配置（默认 `chat`）
+- 同样支持 `api_type` 配置（默认 `chat`）；config wizard 中 OpenAI 兼容 Provider 默认选择 Chat Completions API
+- 如果 `base_url` 以 `/v1` 结尾，自动去掉以避免请求路径出现 `/v1/v1/...`
 - Web Search: 取决于具体服务是否支持
 
 #### 3.3.3 消息格式转换
@@ -1328,12 +1329,13 @@ fn fallback_models(provider_type: ProviderType) -> Vec<ModelInfo>;
 
 | Provider | 端点 | 认证 | 过滤规则 |
 | -------- | ---- | ---- | -------- |
-| OpenAI | `GET {base_url}/v1/models` | Bearer token | `gpt`/`o`/`chatgpt` 前缀 |
+| OpenAI（官方） | `GET {base_url}/v1/models` | Bearer token | `gpt`/`o`/`chatgpt` 前缀 |
+| OpenAI（兼容，自定义 base_url） | `GET {base_url}/v1/models` | Bearer token | 不过滤，返回所有模型 |
 | Anthropic | `GET {base_url}/v1/models` | `x-api-key` + `anthropic-version` | `claude-` 前缀 |
 | Google Gemini | `GET generativelanguage.googleapis.com/v1beta/models?key=` | Query parameter | `gemini-` 前缀 |
 | Google Vertex | `GET {location}-aiplatform.googleapis.com/v1/...` | Bearer token | `gemini-` 前缀 |
 
-超时 5 秒，结果按 ID 字母排序。API 调用失败时回退到硬编码列表。
+超时：官方 OpenAI/Anthropic/Google 为 5 秒，OpenAI 兼容 Provider 为 15 秒（兼容服务可能返回大量模型）。结果按 ID 字母排序。API 调用失败时回退到硬编码列表。
 
 #### 3.7.6 Config CLI 子命令
 

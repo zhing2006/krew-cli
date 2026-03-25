@@ -35,6 +35,7 @@ impl OpenAiChatClient {
             .as_deref()
             .unwrap_or(DEFAULT_BASE_URL)
             .trim_end_matches('/')
+            .trim_end_matches("/v1")
             .to_string();
 
         Self {

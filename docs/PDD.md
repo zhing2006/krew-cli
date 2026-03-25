@@ -847,7 +847,7 @@ krew config init --user       # 仅设置用户级配置
 krew config init --project    # 仅设置项目级配置
 ```
 
-**用户配置初始化**：循环式 Provider 创建向导（选择类型 → 输入名称 → 选择 API Key 方式 → 可选参数）。
+**用户配置初始化**：循环式 Provider 创建向导（选择类型 → 输入名称 → 选择 API Key 方式 → 可选参数 → OpenAI 兼容 Provider 选择 API 类型：Chat Completions 或 Responses API）。如果 `base_url` 以 `/v1` 结尾，自动去掉以避免路径重复。
 
 **项目配置初始化**：提供两种模式：
 - **智能预设**：从已配置的 Provider 获取可用模型列表（调用 List Models API），提供单 Agent 或三 Agent 预设方案，通过模糊搜索选择模型

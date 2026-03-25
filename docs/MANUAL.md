@@ -600,7 +600,10 @@ krew config init --project    # Only set up project-level config (.krew/settings
 2. Enter provider name (auto-suggested based on type)
 3. Choose API key method (environment variable or config file)
 4. Optionally set base_url (OpenAI-Compatible) or Vertex fields (Google)
-5. Loop — add more providers or finish
+5. For OpenAI-Compatible providers: select API type — "Chat Completions (recommended)" (default) or "Responses API". Official OpenAI providers default to Responses API automatically without prompting.
+6. Loop — add more providers or finish
+
+> **Note:** If your `base_url` ends with `/v1` (e.g. `https://openrouter.ai/api/v1`), krew automatically strips the trailing `/v1` to avoid duplicate path segments in API requests.
 
 **Project config setup** offers two modes:
 - **Smart Preset**: fetches available models from your providers, offers 1-agent or 3-agent presets, lets you pick models via fuzzy search
