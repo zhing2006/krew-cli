@@ -309,6 +309,21 @@ fn run() -> i32 {
 
     // Handle config subcommands early — no TUI, no full config load.
     if let Some(CliCommand::Config { action }) = cli.command {
+        // Install Ctrl-C handler so the default OS handler doesn't kill the
+        // process with an ugly STATUS_CONTROL_C_EXIT on Windows.
+        #[cfg(windows)]
+        {
+            use std::os::raw::c_ulong;
+            type HandlerRoutine = unsafe extern "system" fn(c_ulong) -> i32;
+            unsafe extern "system" {
+                fn SetConsoleCtrlHandler(handler: Option<HandlerRoutine>, add: i32) -> i32;
+            }
+            unsafe extern "system" fn handler(_ctrl_type: c_ulong) -> i32 {
+                eprintln!();
+                std::process::exit(130);
+            }
+            unsafe { SetConsoleCtrlHandler(Some(handler), 1) };
+        }
         let rt = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

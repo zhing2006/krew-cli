@@ -85,21 +85,85 @@ cargo install --path crates/krew-cli
 
 ### Option A: Interactive setup (recommended)
 
+**1. Install**
+
+```bash
+npm install -g @zhing2026/krew
+```
+
+**2. Run the config wizard**
+
 ```bash
 krew config init
 ```
 
-The wizard walks you through setting up providers (API keys) and agents interactively.
+The wizard walks you through everything step by step:
+
+```
+=== User Configuration (Providers) ===
+
+Add provider [1]
+Select provider type:
+> Anthropic
+  OpenAI
+  Google
+  OpenAI-Compatible
+Provider name [anthropic]: ↵
+API key storage method:
+> Environment variable
+  Store in config file
+Environment variable name [ANTHROPIC_API_KEY]: ↵
+Base URL [https://api.anthropic.com]: ↵
+Added provider "anthropic" (Anthropic)
+Add another provider? (y/N): N
+
+=== Project Configuration (Agents) ===
+
+Select setup mode:
+> Smart Preset
+  Manual Setup
+Fetching available models...
+Select preset:
+> Single Agent
+  Three Agents
+Select model: claude-sonnet-4-6 (anthropic)
+Enable thinking for claude? (Y/n): Y
+Write this configuration? (Y/n): Y
+```
+
+> **Tip:** You can choose "Store in config file" instead of "Environment variable" — the wizard will prompt for your API key directly and save it to the config file, no env var needed.
+
+**3. Run**
+
+```bash
+krew
+```
 
 ### Option B: Manual config file
 
-Create `.krew/settings.toml` in your project directory:
+```bash
+npm install -g @zhing2026/krew
+export OPENAI_API_KEY="sk-..."
+export ANTHROPIC_API_KEY="sk-ant-..."
+```
+
+Create `~/.krew/settings.toml` (user-level — shared across all projects):
+
+```toml
+[providers.openai]
+type = "openai"
+api_key_env = "OPENAI_API_KEY"
+
+[providers.anthropic]
+type = "anthropic"
+api_key_env = "ANTHROPIC_API_KEY"
+```
+
+Create `.krew/settings.toml` in your project directory (project-level — agents):
 
 ```toml
 [settings]
-approval_mode = "suggest"
 reply_order = ["gpt", "opus"]
-auto_compact_threshold = 120000
 
 [[agents]]
 name = "gpt"
@@ -117,22 +181,7 @@ provider = "anthropic"
 model = "claude-opus-4-6"
 color = "magenta"
 tools = true
-
-[providers.openai]
-api_key_env = "OPENAI_API_KEY"
-
-[providers.anthropic]
-api_key_env = "ANTHROPIC_API_KEY"
 ```
-
-### 2. Set your API keys
-
-```bash
-export OPENAI_API_KEY="sk-..."
-export ANTHROPIC_API_KEY="sk-ant-..."
-```
-
-### 3. Run
 
 ```bash
 krew
