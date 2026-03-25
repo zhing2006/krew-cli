@@ -85,21 +85,85 @@ cargo install --path crates/krew-cli
 
 ### 方式 A：交互式配置（推荐）
 
+**1. 安装**
+
+```bash
+npm install -g @zhing2026/krew
+```
+
+**2. 运行配置向导**
+
 ```bash
 krew config init
 ```
 
-配置向导会引导你设置 Provider（API Key）和 Agent。
+向导会一步一步引导你完成配置：
+
+```
+=== User Configuration (Providers) ===
+
+Add provider [1]
+Select provider type:
+> Anthropic
+  OpenAI
+  Google
+  OpenAI-Compatible
+Provider name [anthropic]: ↵
+API key storage method:
+> Environment variable
+  Store in config file
+Environment variable name [ANTHROPIC_API_KEY]: ↵
+Base URL [https://api.anthropic.com]: ↵
+Added provider "anthropic" (Anthropic)
+Add another provider? (y/N): N
+
+=== Project Configuration (Agents) ===
+
+Select setup mode:
+> Smart Preset
+  Manual Setup
+Fetching available models...
+Select preset:
+> Single Agent
+  Three Agents
+Select model: claude-sonnet-4-6 (anthropic)
+Enable thinking for claude? (Y/n): Y
+Write this configuration? (Y/n): Y
+```
+
+> **提示：** 你可以选择 "Store in config file" 而不是 "Environment variable"——向导会直接提示你输入 API Key 并保存到配置文件中，无需设置环境变量。
+
+**3. 启动**
+
+```bash
+krew
+```
 
 ### 方式 B：手动创建配置文件
 
-在项目目录下创建 `.krew/settings.toml`：
+```bash
+npm install -g @zhing2026/krew
+export OPENAI_API_KEY="sk-..."
+export ANTHROPIC_API_KEY="sk-ant-..."
+```
+
+创建 `~/.krew/settings.toml`（用户级——跨项目共享）：
+
+```toml
+[providers.openai]
+type = "openai"
+api_key_env = "OPENAI_API_KEY"
+
+[providers.anthropic]
+type = "anthropic"
+api_key_env = "ANTHROPIC_API_KEY"
+```
+
+在项目目录下创建 `.krew/settings.toml`（项目级——Agent 定义）：
 
 ```toml
 [settings]
-approval_mode = "suggest"
 reply_order = ["gpt", "opus"]
-auto_compact_threshold = 120000
 
 [[agents]]
 name = "gpt"
@@ -117,22 +181,7 @@ provider = "anthropic"
 model = "claude-opus-4-6"
 color = "magenta"
 tools = true
-
-[providers.openai]
-api_key_env = "OPENAI_API_KEY"
-
-[providers.anthropic]
-api_key_env = "ANTHROPIC_API_KEY"
 ```
-
-### 2. 设置 API Key
-
-```bash
-export OPENAI_API_KEY="sk-..."
-export ANTHROPIC_API_KEY="sk-ant-..."
-```
-
-### 3. 启动
 
 ```bash
 krew
