@@ -24,8 +24,7 @@ target
 Cargo.lock
 
 # .claude
-.claude/*
-!.claude/settings.json
+.claude/
 
 # .codex
 .codex/*
