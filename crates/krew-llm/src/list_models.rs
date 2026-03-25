@@ -8,7 +8,7 @@ use serde::Deserialize;
 use crate::LlmError;
 
 /// Timeout for list models HTTP requests.
-const LIST_MODELS_TIMEOUT: Duration = Duration::from_secs(5);
+const LIST_MODELS_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Information about a single model.
 #[derive(Debug, Clone)]
@@ -26,16 +26,32 @@ pub struct ListModelsConfig {
     pub vertex_location: Option<String>,
 }
 
+impl ListModelsConfig {
+    /// Whether this is an OpenAI-compatible provider with a custom base URL
+    /// (i.e. not the official OpenAI API).
+    fn is_openai_compatible(&self) -> bool {
+        self.provider_type == ProviderType::OpenAI
+            && self
+                .base_url
+                .as_deref()
+                .is_some_and(|u| !u.contains("api.openai.com"))
+    }
+}
+
 /// Fetch available models from the given provider.
 pub async fn list_models(config: &ListModelsConfig) -> Result<Vec<ModelInfo>, LlmError> {
-    let mut models = match config.provider_type {
-        ProviderType::OpenAI => list_openai(config).await?,
-        ProviderType::Anthropic => list_anthropic(config).await?,
-        ProviderType::Google => {
-            if config.vertex_project.is_some() && config.vertex_location.is_some() {
-                list_vertex(config).await?
-            } else {
-                list_google_gemini(config).await?
+    let mut models = if config.is_openai_compatible() {
+        list_openai_compatible(config).await?
+    } else {
+        match config.provider_type {
+            ProviderType::OpenAI => list_openai(config).await?,
+            ProviderType::Anthropic => list_anthropic(config).await?,
+            ProviderType::Google => {
+                if config.vertex_project.is_some() && config.vertex_location.is_some() {
+                    list_vertex(config).await?
+                } else {
+                    list_google_gemini(config).await?
+                }
             }
         }
     };
@@ -104,6 +120,49 @@ async fn list_openai(config: &ListModelsConfig) -> Result<Vec<ModelInfo>, LlmErr
         .data
         .into_iter()
         .filter(|m| m.id.starts_with("gpt") || m.id.starts_with("o") || m.id.starts_with("chatgpt"))
+        .map(|m| ModelInfo { id: m.id })
+        .collect())
+}
+
+// ── OpenAI-Compatible ──────────────────────────────────────────────
+
+/// Fetch models from an OpenAI-compatible provider without prefix filtering.
+async fn list_openai_compatible(config: &ListModelsConfig) -> Result<Vec<ModelInfo>, LlmError> {
+    let base = config
+        .base_url
+        .as_deref()
+        .unwrap_or("https://api.openai.com");
+    // Handle base URLs that already end with /v1.
+    let url = if base.trim_end_matches('/').ends_with("/v1") {
+        format!("{}/models", base.trim_end_matches('/'))
+    } else {
+        format!("{}/v1/models", base.trim_end_matches('/'))
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(LIST_MODELS_TIMEOUT)
+        .build()
+        .map_err(LlmError::Network)?;
+
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", config.api_key))
+        .send()
+        .await
+        .map_err(LlmError::Network)?;
+
+    if !resp.status().is_success() {
+        return Err(LlmError::Api(format!(
+            "OpenAI-compatible list models failed: {}",
+            resp.status()
+        )));
+    }
+
+    let body: OpenAiModelsResponse = resp.json().await.map_err(LlmError::Network)?;
+
+    Ok(body
+        .data
+        .into_iter()
         .map(|m| ModelInfo { id: m.id })
         .collect())
 }

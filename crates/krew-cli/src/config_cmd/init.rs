@@ -373,12 +373,15 @@ async fn run_smart_preset(
         selected_indices.push(actual_idx);
         let (provider_name, model_id) = &candidates[actual_idx];
 
-        // Look up provider type for api_type inference.
-        let prov_type = providers
+        // Look up provider config for api_type inference.
+        let prov_cfg = providers
             .iter()
             .find(|(n, _)| n == provider_name)
-            .map(|(_, c)| c.provider_type)
+            .map(|(_, c)| c);
+        let prov_type = prov_cfg
+            .map(|c| c.provider_type)
             .unwrap_or(ProviderType::OpenAI);
+        let prov_base_url = prov_cfg.and_then(|c| c.base_url.as_deref());
 
         let agent_name = derive_agent_name(model_id, &used_names);
         let display = capitalize_first(&agent_name);
@@ -390,6 +393,9 @@ async fn run_smart_preset(
             .default(true)
             .interact()?;
 
+        // For OpenAI-Compatible providers, ask user to choose api_type.
+        let api_type = prompt_api_type_if_compatible(prov_type, prov_base_url)?;
+
         agents.push(AgentWriteData {
             name: agent_name.clone(),
             display_name: display,
@@ -399,7 +405,7 @@ async fn run_smart_preset(
             enable_thinking: thinking,
             enable_web_search: false,
             tools: true,
-            api_type: infer_api_type(prov_type, model_id),
+            api_type,
             system_prompt: None,
         });
         used_names.push(agent_name);
@@ -565,6 +571,12 @@ pub async fn collect_agent_data(
         .default(false)
         .interact()?;
 
+    // For OpenAI-Compatible providers, ask user to choose api_type.
+    let api_type = prompt_api_type_if_compatible(
+        provider_cfg.provider_type,
+        provider_cfg.base_url.as_deref(),
+    )?;
+
     Ok(AgentWriteData {
         name,
         display_name,
@@ -574,7 +586,7 @@ pub async fn collect_agent_data(
         enable_thinking: thinking,
         enable_web_search: web_search,
         tools: true,
-        api_type: infer_api_type(provider_cfg.provider_type, &model_id),
+        api_type,
         system_prompt: None,
     })
 }
@@ -651,13 +663,35 @@ fn capitalize_first(s: &str) -> String {
     }
 }
 
-/// Infer api_type for OpenAI providers based on model name.
-/// GPT models use Responses API; o-series reasoning models use Responses API too.
-fn infer_api_type(provider_type: ProviderType, _model: &str) -> Option<String> {
-    match provider_type {
-        ProviderType::OpenAI => Some("responses".to_string()),
-        _ => None,
+/// For OpenAI-Compatible providers (custom base_url), prompt the user to choose api_type.
+/// For official OpenAI, default to "responses". For non-OpenAI providers, return None.
+fn prompt_api_type_if_compatible(
+    provider_type: ProviderType,
+    base_url: Option<&str>,
+) -> anyhow::Result<Option<String>> {
+    if provider_type != ProviderType::OpenAI {
+        return Ok(None);
     }
+
+    let is_official = base_url
+        .map(|u| u.contains("api.openai.com"))
+        .unwrap_or(true);
+
+    if is_official {
+        return Ok(Some("responses".to_string()));
+    }
+
+    // OpenAI-Compatible: let user choose.
+    let options = &["Chat Completions (recommended)", "Responses API"];
+    let idx = Select::new()
+        .with_prompt("Select API type")
+        .items(options)
+        .default(0)
+        .interact()?;
+
+    Ok(Some(
+        if idx == 0 { "chat" } else { "responses" }.to_string(),
+    ))
 }
 
 fn provider_type_label(t: ProviderType) -> &'static str {
