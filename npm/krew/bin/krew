@@ -43,5 +43,9 @@ try {
   if (e.status !== null) {
     process.exit(e.status);
   }
+  // Child was killed by a signal (e.g. SIGINT from Ctrl-C) — exit quietly.
+  if (e.signal) {
+    process.exit(130);
+  }
   throw e;
 }
