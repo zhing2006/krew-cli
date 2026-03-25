@@ -179,12 +179,16 @@ pub fn collect_provider_data(existing_names: &[String]) -> anyhow::Result<Provid
         (Some(key), None)
     };
 
-    // 4. Base URL for OpenAI-Compatible.
+    // 4. Base URL — required for OpenAI-Compatible, optional for others.
     let base_url = if is_compatible {
         let url: String = Input::new().with_prompt("Base URL").interact_text()?;
         Some(url)
     } else {
-        None
+        let url: String = Input::new()
+            .with_prompt("Base URL (press Enter to skip)")
+            .default(String::new())
+            .interact_text()?;
+        if url.is_empty() { None } else { Some(url) }
     };
 
     // 5. Google: Gemini API vs Vertex AI.
@@ -363,6 +367,13 @@ async fn run_smart_preset(
         selected_indices.push(actual_idx);
         let (provider_name, model_id) = &candidates[actual_idx];
 
+        // Look up provider type for api_type inference.
+        let prov_type = providers
+            .iter()
+            .find(|(n, _)| n == provider_name)
+            .map(|(_, c)| c.provider_type)
+            .unwrap_or(ProviderType::OpenAI);
+
         let agent_name = derive_agent_name(model_id, &used_names);
         let display = capitalize_first(&agent_name);
         let color = AGENT_COLORS.get(i).copied().unwrap_or("white").to_string();
@@ -382,7 +393,7 @@ async fn run_smart_preset(
             enable_thinking: thinking,
             enable_web_search: false,
             tools: true,
-            api_type: None,
+            api_type: infer_api_type(prov_type, model_id),
             system_prompt: None,
         });
         used_names.push(agent_name);
@@ -552,12 +563,12 @@ pub async fn collect_agent_data(
         name,
         display_name,
         provider: provider_name.clone(),
-        model: model_id,
+        model: model_id.clone(),
         color,
         enable_thinking: thinking,
         enable_web_search: web_search,
         tools: true,
-        api_type: None,
+        api_type: infer_api_type(provider_cfg.provider_type, &model_id),
         system_prompt: None,
     })
 }
@@ -631,6 +642,15 @@ fn capitalize_first(s: &str) -> String {
     match chars.next() {
         None => String::new(),
         Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+    }
+}
+
+/// Infer api_type for OpenAI providers based on model name.
+/// GPT models use Responses API; o-series reasoning models use Responses API too.
+fn infer_api_type(provider_type: ProviderType, _model: &str) -> Option<String> {
+    match provider_type {
+        ProviderType::OpenAI => Some("responses".to_string()),
+        _ => None,
     }
 }
 
