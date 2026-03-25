@@ -464,12 +464,10 @@ impl App {
         .await
         {
             Ok(Some(result)) => {
+                let new_count = result.messages.len();
+
                 // Replace messages with compacted version.
-                self.messages = krew_core::compact::build_compacted_messages(
-                    &self.messages,
-                    keep_rounds,
-                    &result.summary,
-                );
+                self.messages = result.messages;
 
                 // Update token usage: clear old data since context changed.
                 self.agent_token_usage.clear();
@@ -490,7 +488,7 @@ impl App {
                     terminal,
                     &format!(
                         "\u{26A1} Session compacted ({} msgs \u{2192} {} msgs)\n  Backup: {}",
-                        result.original_count, result.new_count, backup_display
+                        result.original_count, new_count, backup_display
                     ),
                 )?;
             }
