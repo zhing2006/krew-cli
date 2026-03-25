@@ -9,12 +9,10 @@ use krew_storage::session_file::SessionFile;
 
 /// Result of a successful compaction.
 pub struct CompactResult {
-    /// The compressed summary text.
-    pub summary: String,
+    /// The compacted message list, ready to replace the original.
+    pub messages: Vec<ChatMessage>,
     /// Number of messages before compaction.
     pub original_count: usize,
-    /// Number of messages after compaction (summary + kept).
-    pub new_count: usize,
     /// Path to the backup file.
     pub backup_path: PathBuf,
     /// Token usage from the compression LLM call.
@@ -156,15 +154,11 @@ pub async fn compact_session(
     }
 
     let original_count = messages.len();
-
-    // Compute accurate new_count using the same function that builds
-    // the final message list (includes preserved skill messages).
-    let new_count = build_compacted_messages(messages, keep_rounds, &summary).len();
+    let compacted = build_compacted_messages(messages, keep_rounds, &summary);
 
     Ok(Some(CompactResult {
-        summary: summary.clone(),
+        messages: compacted,
         original_count,
-        new_count,
         backup_path,
         usage,
     }))
