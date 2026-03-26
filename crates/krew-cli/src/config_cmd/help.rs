@@ -108,6 +108,12 @@ Merge rules (project config takes precedence):
                              When set, a language instruction is injected into every
                              agent's system prompt.
 
+  restrict_workspace         Boolean
+                             Default: true
+                             Restrict built-in file tools (read_file, write_file,
+                             edit_file, glob, grep) to the workspace directory.
+                             When false, file tools can access any path on the system.
+
 ─── [settings.retry] ─────────────────────────────────────────────────────────
 
   max_retries_rate_limit     Integer

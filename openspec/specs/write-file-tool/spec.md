@@ -11,16 +11,17 @@
 - **WHEN** write_file is called on an existing file
 - **THEN** the file SHALL be overwritten with the new content, and ToolResult SHALL indicate the file was updated
 
-### Requirement: write_file path boundary enforcement
-write_file SHALL validate that the target path is within the session working directory using the shared `validate_path()` helper. Paths outside the boundary SHALL be rejected.
+### Requirement: write_file 路径验证
 
-#### Scenario: Path outside boundary
-- **WHEN** write_file is called with `file_path: "/etc/passwd"`
-- **THEN** ToolResult SHALL contain an error message and `is_error: true`
+WriteFileTool SHALL 根据 `restrict_workspace` 配置决定是否执行 workspace 边界检查。
 
-#### Scenario: Relative path resolution
-- **WHEN** write_file is called with a relative path like `"src/utils.rs"`
-- **THEN** the path SHALL be resolved relative to the session working directory
+#### Scenario: restrict_workspace = false 时允许写入外部文件
+- **WHEN** `restrict_workspace = false` 且 file_path 指向 workspace 外
+- **THEN** SHALL 正常创建/写入文件
+
+#### Scenario: restrict_workspace = true 时拒绝外部文件
+- **WHEN** `restrict_workspace = true` 且 file_path 指向 workspace 外
+- **THEN** SHALL 返回 "outside the workspace boundary" 错误
 
 ### Requirement: write_file creates parent directories
 write_file SHALL create any missing parent directories automatically (equivalent to `mkdir -p`).

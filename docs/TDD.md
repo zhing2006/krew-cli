@@ -610,10 +610,10 @@ struct ToolResult {
 ```rust
 impl ToolRegistry {
     /// Create registry with read-only tools (read_file, glob, grep).
-    fn create_readonly_registry(cwd: PathBuf) -> ToolRegistry;
+    fn create_readonly_registry(cwd: PathBuf, restrict_workspace: bool) -> ToolRegistry;
 
     /// Create registry with all 7 built-in tools + activate_skill (when skills non-empty).
-    fn create_full_registry(cwd: PathBuf, skills: HashMap<String, SkillInfo>) -> ToolRegistry;
+    fn create_full_registry(cwd: PathBuf, restrict_workspace: bool, skills: HashMap<String, SkillInfo>) -> ToolRegistry;
 
     /// Dynamically register a tool (used for MCP tools and activate_skill).
     fn register(&mut self, spec: ToolSpec, handler: Arc<dyn ToolHandler>);
@@ -1109,6 +1109,7 @@ struct Settings {
     fetch_allow_domains: Option<Vec<String>>,   // 免审批 fetch_url 域名白名单
     agent_to_agent_routing: Option<AgentToAgentRouting>,  // AI-to-AI 路由策略（默认 Immediate）
     agent_to_agent_max_rounds: Option<u32>,               // AI-to-AI 最大轮次（默认 10，0 = 禁用）
+    restrict_workspace: Option<bool>,                     // 限制内建文件工具只能访问工作区目录（默认 true）
 }
 
 enum AgentToAgentRouting {

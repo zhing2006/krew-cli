@@ -15,6 +15,7 @@ const MAX_LIMIT: usize = 2000;
 /// Built-in tool for finding files by glob pattern.
 pub struct GlobTool {
     cwd: PathBuf,
+    restrict_workspace: bool,
 }
 
 #[derive(Deserialize)]
@@ -31,8 +32,11 @@ fn default_limit() -> usize {
 }
 
 impl GlobTool {
-    pub fn new(cwd: PathBuf) -> Self {
-        Self { cwd }
+    pub fn new(cwd: PathBuf, restrict_workspace: bool) -> Self {
+        Self {
+            cwd,
+            restrict_workspace,
+        }
     }
 
     pub fn spec(&self) -> ToolSpec {
@@ -88,7 +92,7 @@ impl ToolHandler for GlobTool {
         let limit = args.limit.clamp(1, MAX_LIMIT);
 
         let search_dir = if let Some(ref path) = args.path {
-            validate_path(path, &self.cwd)?
+            validate_path(path, &self.cwd, self.restrict_workspace)?
         } else {
             self.cwd.clone()
         };
@@ -110,8 +114,13 @@ impl ToolHandler for GlobTool {
             .map_err(|e| ToolError::InvalidArgs(format!("failed to compile glob: {e}")))?;
 
         // Walk directory and collect matches.
-        let cwd_canonical = dunce::canonicalize(&self.cwd)
-            .map_err(|e| ToolError::Execution(format!("failed to resolve workspace path: {e}")))?;
+        let cwd_canonical = if self.restrict_workspace {
+            Some(dunce::canonicalize(&self.cwd).map_err(|e| {
+                ToolError::Execution(format!("failed to resolve workspace path: {e}"))
+            })?)
+        } else {
+            None
+        };
 
         let mut matches: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
 
@@ -133,14 +142,15 @@ impl ToolHandler for GlobTool {
                 continue;
             }
 
-            let full_path = match dunce::canonicalize(entry.path()) {
-                Ok(p) => p,
-                Err(_) => continue,
-            };
-
-            // Ensure within workspace boundary.
-            if !full_path.starts_with(&cwd_canonical) {
-                continue;
+            // Ensure within workspace boundary when restricted.
+            if let Some(ref cwd_canon) = cwd_canonical {
+                let full_path = match dunce::canonicalize(entry.path()) {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                };
+                if !full_path.starts_with(cwd_canon) {
+                    continue;
+                }
             }
 
             // Match against relative path from search_dir.

@@ -173,6 +173,7 @@ mod tests {
     fn test_registry() -> ToolRegistry {
         krew_tools::builtin::create_full_registry(
             PathBuf::from("/tmp"),
+            true,
             std::collections::HashMap::new(),
         )
     }

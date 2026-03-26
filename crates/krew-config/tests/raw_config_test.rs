@@ -487,6 +487,51 @@ fn merge_language_project_overrides_user() {
     assert_eq!(raw.settings.language.as_deref(), Some("中文"));
 }
 
+// ── restrict_workspace merge & resolve ───────────────────────────
+
+#[test]
+fn merge_restrict_workspace_project_true_wins_over_user_false() {
+    let user = UserConfig {
+        settings: UserSettings {
+            restrict_workspace: Some(false),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut raw = RawConfig {
+        settings: krew_config::RawSettings {
+            restrict_workspace: Some(true),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    raw.merge_user(&user);
+    let config = raw.resolve();
+    assert!(config.settings.restrict_workspace);
+}
+
+#[test]
+fn merge_restrict_workspace_project_none_inherits_user_false() {
+    let user = UserConfig {
+        settings: UserSettings {
+            restrict_workspace: Some(false),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut raw = RawConfig::default();
+    raw.merge_user(&user);
+    let config = raw.resolve();
+    assert!(!config.settings.restrict_workspace);
+}
+
+#[test]
+fn resolve_restrict_workspace_default_is_true() {
+    let raw = RawConfig::default();
+    let config = raw.resolve();
+    assert!(config.settings.restrict_workspace);
+}
+
 #[test]
 fn merge_language_project_none_inherits_user() {
     let user = UserConfig {

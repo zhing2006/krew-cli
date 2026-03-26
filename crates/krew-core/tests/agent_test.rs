@@ -173,6 +173,71 @@ fn identity_language_before_whisper() {
 }
 
 #[test]
+fn whisper_solo_includes_scope_and_confidentiality() {
+    let targets = vec!["gpt".to_string()];
+    let result = build_identity_prompt(
+        "GPT-5",
+        "gpt-5",
+        "gpt",
+        "2026-03-24",
+        None,
+        None,
+        Some(&targets),
+    );
+    // Scope: AI knows this round is whisper-scoped.
+    assert!(
+        result.contains("Everything in this conversation round"),
+        "should contain scope instruction"
+    );
+    // Confidentiality: AI must not leak in normal messages.
+    assert!(
+        result.contains("NEVER reveal"),
+        "should contain confidentiality instruction"
+    );
+    // Solo whisper: can reference previous whispers with the same user.
+    assert!(
+        result.contains("another whisper with you"),
+        "solo whisper should allow referencing previous whispers with the same user"
+    );
+}
+
+#[test]
+fn whisper_group_includes_scope_and_confidentiality() {
+    let targets = vec!["gpt".to_string(), "opus".to_string()];
+    let peers = [PeerAgent {
+        name: "opus".to_string(),
+        display_name: "Claude Opus".to_string(),
+    }];
+    let result = build_identity_prompt(
+        "GPT-5",
+        "gpt-5",
+        "gpt",
+        "2026-03-24",
+        None,
+        Some(&peers),
+        Some(&targets),
+    );
+    // Scope instruction present.
+    assert!(
+        result.contains("Everything in this conversation round"),
+        "should contain scope instruction"
+    );
+    // Confidentiality with group reconvene clause.
+    assert!(
+        result.contains("NEVER reveal"),
+        "should contain confidentiality instruction"
+    );
+    assert!(
+        result.contains("same whisper group"),
+        "group whisper should mention same group reconvening"
+    );
+    assert!(
+        result.contains("@opus"),
+        "confidentiality should list group members"
+    );
+}
+
+#[test]
 fn identity_contains_krew_description_and_config_help() {
     let result = build_identity_prompt("GPT-5", "gpt-5", "gpt", "2026-03-24", None, None, None);
     assert!(

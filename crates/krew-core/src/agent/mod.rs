@@ -277,7 +277,32 @@ pub fn build_identity_prompt(
             )
         };
 
-        // Layer 2: @mention collaboration (only when A2A enabled and multi-member group).
+        // Layer 2: Scope — clarify that everything in this round is whisper-scoped.
+        let scope = "Everything in this conversation round — your response, tool calls, \
+                     and tool results — is part of this whisper and only visible to \
+                     whisper group members.";
+
+        // Layer 3: Confidentiality — prevent leaking whisper content in normal messages.
+        let confidentiality = if other_members.is_empty() {
+            "IMPORTANT: In subsequent non-whisper (normal) messages, you must NEVER reveal, \
+             reference, quote, or summarize any content from whisper conversations. \
+             Treat all whisper content as strictly confidential. However, if the user \
+             starts another whisper with you, you may freely reference previous whisper \
+             content with them."
+                .to_string()
+        } else {
+            let member_list: Vec<String> = other_members.iter().map(|n| format!("@{n}")).collect();
+            format!(
+                "IMPORTANT: In subsequent non-whisper (normal) messages, you must NEVER reveal, \
+                 reference, quote, or summarize any content from whisper conversations. \
+                 Treat all whisper content as strictly confidential. However, if the same \
+                 whisper group ({}) reconvenes, you may freely reference previous whisper \
+                 content within that group.",
+                member_list.join(", ")
+            )
+        };
+
+        // Layer 4: @mention collaboration (only when A2A enabled and multi-member group).
         let a2a_hint = if !other_members.is_empty() && peer_agents.is_some_and(|p| !p.is_empty()) {
             format!(
                 "\nIn this whisper group, you may only @mention group members: {}. \
@@ -292,7 +317,7 @@ pub fn build_identity_prompt(
             String::new()
         };
 
-        format!("{identity}\n{privacy}{a2a_hint}")
+        format!("{identity}\n{privacy}\n{scope}\n{confidentiality}{a2a_hint}")
     } else {
         identity
     }

@@ -18,6 +18,7 @@ const DEFAULT_LIMIT: usize = 2000;
 /// Built-in tool for reading file contents with line numbers.
 pub struct ReadFileTool {
     cwd: PathBuf,
+    restrict_workspace: bool,
 }
 
 #[derive(Deserialize)]
@@ -37,8 +38,11 @@ fn default_limit() -> usize {
 }
 
 impl ReadFileTool {
-    pub fn new(cwd: PathBuf) -> Self {
-        Self { cwd }
+    pub fn new(cwd: PathBuf, restrict_workspace: bool) -> Self {
+        Self {
+            cwd,
+            restrict_workspace,
+        }
     }
 
     pub fn spec(&self) -> ToolSpec {
@@ -95,7 +99,7 @@ impl ToolHandler for ReadFileTool {
             ));
         }
 
-        let path = validate_path(&args.file_path, &self.cwd)?;
+        let path = validate_path(&args.file_path, &self.cwd, self.restrict_workspace)?;
 
         if let Some(result) = check_file_size(&path) {
             return Ok(result);

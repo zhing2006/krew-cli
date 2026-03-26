@@ -18,7 +18,7 @@ fn setup_test_file(content: &str) -> (TempDir, PathBuf) {
 #[tokio::test]
 async fn single_replacement() {
     let (dir, file_path) = setup_test_file("fn main() {\n    println!(\"hello\");\n}\n");
-    let tool = EditFileTool::new(dir.path().to_path_buf());
+    let tool = EditFileTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(
@@ -44,7 +44,7 @@ async fn single_replacement() {
 #[tokio::test]
 async fn old_string_not_found() {
     let (dir, file_path) = setup_test_file("fn main() {}\n");
-    let tool = EditFileTool::new(dir.path().to_path_buf());
+    let tool = EditFileTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(
@@ -65,7 +65,7 @@ async fn old_string_not_found() {
 #[tokio::test]
 async fn multiple_matches_error() {
     let (dir, file_path) = setup_test_file("aaa\nbbb\naaa\n");
-    let tool = EditFileTool::new(dir.path().to_path_buf());
+    let tool = EditFileTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(
@@ -86,7 +86,7 @@ async fn multiple_matches_error() {
 #[tokio::test]
 async fn file_not_found() {
     let dir = TempDir::new().unwrap();
-    let tool = EditFileTool::new(dir.path().to_path_buf());
+    let tool = EditFileTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(
@@ -105,7 +105,7 @@ async fn file_not_found() {
 #[tokio::test]
 async fn rejects_path_outside_workspace() {
     let dir = TempDir::new().unwrap();
-    let tool = EditFileTool::new(dir.path().to_path_buf());
+    let tool = EditFileTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(
@@ -124,7 +124,7 @@ async fn rejects_path_outside_workspace() {
 #[tokio::test]
 async fn diff_output_format() {
     let (dir, file_path) = setup_test_file("line1\nline2\nline3\n");
-    let tool = EditFileTool::new(dir.path().to_path_buf());
+    let tool = EditFileTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(

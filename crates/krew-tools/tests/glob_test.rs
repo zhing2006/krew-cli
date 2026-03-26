@@ -18,7 +18,7 @@ fn setup_test_tree() -> TempDir {
 #[tokio::test]
 async fn matches_rust_files() {
     let dir = setup_test_tree();
-    let tool = GlobTool::new(dir.path().to_path_buf());
+    let tool = GlobTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(json!({ "pattern": "**/*.rs" }), &ToolContext::default())
@@ -35,7 +35,7 @@ async fn matches_rust_files() {
 #[tokio::test]
 async fn matches_specific_directory() {
     let dir = setup_test_tree();
-    let tool = GlobTool::new(dir.path().to_path_buf());
+    let tool = GlobTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(
@@ -52,7 +52,7 @@ async fn matches_specific_directory() {
 #[tokio::test]
 async fn no_matches() {
     let dir = setup_test_tree();
-    let tool = GlobTool::new(dir.path().to_path_buf());
+    let tool = GlobTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(json!({ "pattern": "**/*.py" }), &ToolContext::default())
@@ -66,7 +66,7 @@ async fn no_matches() {
 #[tokio::test]
 async fn invalid_pattern() {
     let dir = setup_test_tree();
-    let tool = GlobTool::new(dir.path().to_path_buf());
+    let tool = GlobTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(json!({ "pattern": "[invalid" }), &ToolContext::default())
@@ -77,7 +77,7 @@ async fn invalid_pattern() {
 #[tokio::test]
 async fn respects_limit() {
     let dir = setup_test_tree();
-    let tool = GlobTool::new(dir.path().to_path_buf());
+    let tool = GlobTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(

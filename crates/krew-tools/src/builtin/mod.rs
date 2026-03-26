@@ -28,16 +28,17 @@ pub use write_file::WriteFileTool;
 /// Create a tool registry with all readonly built-in tools.
 ///
 /// The `cwd` path is used as the workspace boundary for path validation.
-pub fn create_readonly_registry(cwd: PathBuf) -> ToolRegistry {
+/// When `restrict_workspace` is `false`, file tools can access any path.
+pub fn create_readonly_registry(cwd: PathBuf, restrict_workspace: bool) -> ToolRegistry {
     let mut registry = ToolRegistry::empty();
 
-    let read_file = ReadFileTool::new(cwd.clone());
+    let read_file = ReadFileTool::new(cwd.clone(), restrict_workspace);
     registry.register(read_file.spec(), Box::new(read_file));
 
-    let glob_tool = GlobTool::new(cwd.clone());
+    let glob_tool = GlobTool::new(cwd.clone(), restrict_workspace);
     registry.register(glob_tool.spec(), Box::new(glob_tool));
 
-    let grep_tool = GrepTool::new(cwd);
+    let grep_tool = GrepTool::new(cwd, restrict_workspace);
     registry.register(grep_tool.spec(), Box::new(grep_tool));
 
     registry
@@ -46,25 +47,30 @@ pub fn create_readonly_registry(cwd: PathBuf) -> ToolRegistry {
 /// Create a tool registry with all built-in tools (read + write + shell + fetch).
 ///
 /// The `cwd` path is used as the workspace boundary for path validation.
+/// When `restrict_workspace` is `false`, file tools can access any path.
 /// When `skills` is non-empty, an `activate_skill` tool is also registered.
-pub fn create_full_registry(cwd: PathBuf, skills: HashMap<String, SkillInfo>) -> ToolRegistry {
+pub fn create_full_registry(
+    cwd: PathBuf,
+    restrict_workspace: bool,
+    skills: HashMap<String, SkillInfo>,
+) -> ToolRegistry {
     let mut registry = ToolRegistry::empty();
 
     // Readonly tools.
-    let read_file = ReadFileTool::new(cwd.clone());
+    let read_file = ReadFileTool::new(cwd.clone(), restrict_workspace);
     registry.register(read_file.spec(), Box::new(read_file));
 
-    let glob_tool = GlobTool::new(cwd.clone());
+    let glob_tool = GlobTool::new(cwd.clone(), restrict_workspace);
     registry.register(glob_tool.spec(), Box::new(glob_tool));
 
-    let grep_tool = GrepTool::new(cwd.clone());
+    let grep_tool = GrepTool::new(cwd.clone(), restrict_workspace);
     registry.register(grep_tool.spec(), Box::new(grep_tool));
 
     // Write tools.
-    let write_file = WriteFileTool::new(cwd.clone());
+    let write_file = WriteFileTool::new(cwd.clone(), restrict_workspace);
     registry.register(write_file.spec(), Box::new(write_file));
 
-    let edit_file = EditFileTool::new(cwd.clone());
+    let edit_file = EditFileTool::new(cwd.clone(), restrict_workspace);
     registry.register(edit_file.spec(), Box::new(edit_file));
 
     // Shell tool.

@@ -23,6 +23,7 @@ const MAX_LINE_LENGTH: usize = 500;
 /// Built-in tool for searching file contents with regex.
 pub struct GrepTool {
     cwd: PathBuf,
+    restrict_workspace: bool,
 }
 
 #[derive(Deserialize)]
@@ -41,8 +42,11 @@ fn default_limit() -> usize {
 }
 
 impl GrepTool {
-    pub fn new(cwd: PathBuf) -> Self {
-        Self { cwd }
+    pub fn new(cwd: PathBuf, restrict_workspace: bool) -> Self {
+        Self {
+            cwd,
+            restrict_workspace,
+        }
     }
 
     pub fn spec(&self) -> ToolSpec {
@@ -105,7 +109,7 @@ impl ToolHandler for GrepTool {
             .map_err(|e| ToolError::InvalidArgs(format!("invalid regex pattern: {e}")))?;
 
         let search_path = if let Some(ref path) = args.path {
-            validate_path(path, &self.cwd)?
+            validate_path(path, &self.cwd, self.restrict_workspace)?
         } else {
             self.cwd.clone()
         };
@@ -125,8 +129,13 @@ impl ToolHandler for GrepTool {
             None
         };
 
-        let cwd_canonical = dunce::canonicalize(&self.cwd)
-            .map_err(|e| ToolError::Execution(format!("failed to resolve workspace path: {e}")))?;
+        let cwd_canonical = if self.restrict_workspace {
+            Some(dunce::canonicalize(&self.cwd).map_err(|e| {
+                ToolError::Execution(format!("failed to resolve workspace path: {e}"))
+            })?)
+        } else {
+            None
+        };
 
         // Collect files to search.
         let files: Vec<PathBuf> = if search_path.is_file() {
@@ -163,8 +172,10 @@ impl ToolHandler for GrepTool {
                     Err(_) => continue,
                 };
 
-                // Ensure within workspace boundary.
-                if !full_path.starts_with(&cwd_canonical) {
+                // Ensure within workspace boundary when restricted.
+                if let Some(ref cwd_canon) = cwd_canonical
+                    && !full_path.starts_with(cwd_canon)
+                {
                     continue;
                 }
 
@@ -189,7 +200,11 @@ impl ToolHandler for GrepTool {
             };
 
             let reader = BufReader::new(file);
-            let relative_path = file_path.strip_prefix(&cwd_canonical).unwrap_or(file_path);
+            let relative_path = if let Some(ref cwd_canon) = cwd_canonical {
+                file_path.strip_prefix(cwd_canon).unwrap_or(file_path)
+            } else {
+                file_path
+            };
 
             for (line_idx, line) in reader.lines().enumerate() {
                 let line = match line {
