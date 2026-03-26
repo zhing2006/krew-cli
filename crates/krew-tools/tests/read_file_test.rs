@@ -18,7 +18,7 @@ fn setup_test_file(content: &str) -> (TempDir, PathBuf) {
 #[tokio::test]
 async fn reads_full_file() {
     let (dir, file_path) = setup_test_file("alpha\nbeta\ngamma\n");
-    let tool = ReadFileTool::new(dir.path().to_path_buf());
+    let tool = ReadFileTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(
@@ -38,7 +38,7 @@ async fn reads_full_file() {
 #[tokio::test]
 async fn reads_with_offset_and_limit() {
     let (dir, file_path) = setup_test_file("first\nsecond\nthird\nfourth\n");
-    let tool = ReadFileTool::new(dir.path().to_path_buf());
+    let tool = ReadFileTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(
@@ -62,7 +62,7 @@ async fn reads_with_offset_and_limit() {
 #[tokio::test]
 async fn offset_exceeds_file_length() {
     let (dir, file_path) = setup_test_file("only\n");
-    let tool = ReadFileTool::new(dir.path().to_path_buf());
+    let tool = ReadFileTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(
@@ -82,7 +82,7 @@ async fn offset_exceeds_file_length() {
 #[tokio::test]
 async fn rejects_path_outside_workspace() {
     let dir = TempDir::new().unwrap();
-    let tool = ReadFileTool::new(dir.path().to_path_buf());
+    let tool = ReadFileTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(
@@ -97,7 +97,7 @@ async fn rejects_path_outside_workspace() {
 #[tokio::test]
 async fn handles_crlf_line_endings() {
     let (dir, file_path) = setup_test_file("one\r\ntwo\r\n");
-    let tool = ReadFileTool::new(dir.path().to_path_buf());
+    let tool = ReadFileTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(
@@ -117,7 +117,7 @@ async fn rejects_binary_file() {
     let file_path = dir.path().join("image.png");
     // Write bytes with NUL to simulate binary content.
     std::fs::write(&file_path, b"\x89PNG\r\n\x1a\n\x00\x00\x00").unwrap();
-    let tool = ReadFileTool::new(dir.path().to_path_buf());
+    let tool = ReadFileTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(
@@ -131,10 +131,32 @@ async fn rejects_binary_file() {
     assert!(result.content.contains("binary file"));
 }
 
+#[test]
+fn validate_path_unrestricted_allows_outside_workspace() {
+    let cwd = std::env::temp_dir().join("krew_vp_test");
+    std::fs::create_dir_all(&cwd).unwrap();
+    // Create a file outside workspace
+    let outside = std::env::temp_dir().join("krew_vp_outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    let outside_file = outside.join("test.txt");
+    std::fs::write(&outside_file, "hello").unwrap();
+
+    // With restrict=true, should fail
+    let result = krew_tools::validate_path(outside_file.to_str().unwrap(), &cwd, true);
+    assert!(result.is_err());
+
+    // With restrict=false, should succeed
+    let result = krew_tools::validate_path(outside_file.to_str().unwrap(), &cwd, false);
+    assert!(result.is_ok());
+
+    let _ = std::fs::remove_dir_all(&cwd);
+    let _ = std::fs::remove_dir_all(&outside);
+}
+
 #[tokio::test]
 async fn invalid_offset_zero() {
     let (dir, file_path) = setup_test_file("test\n");
-    let tool = ReadFileTool::new(dir.path().to_path_buf());
+    let tool = ReadFileTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(

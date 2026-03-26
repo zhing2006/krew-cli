@@ -22,12 +22,17 @@ edit_file SHALL generate a unified diff (using the `similar` crate) comparing th
 - **WHEN** edit_file successfully replaces text
 - **THEN** ToolResult SHALL contain a unified diff showing the changes with context lines
 
-### Requirement: edit_file path boundary enforcement
-edit_file SHALL validate that the target path is within the session working directory using the shared `validate_path()` helper.
+### Requirement: edit_file 路径验证
 
-#### Scenario: Path outside boundary
-- **WHEN** edit_file is called with a path outside the working directory
-- **THEN** ToolResult SHALL contain an error message and `is_error: true`
+EditFileTool SHALL 根据 `restrict_workspace` 配置决定是否执行 workspace 边界检查。
+
+#### Scenario: restrict_workspace = false 时允许编辑外部文件
+- **WHEN** `restrict_workspace = false` 且 file_path 指向 workspace 外
+- **THEN** SHALL 正常执行编辑操作
+
+#### Scenario: restrict_workspace = true 时拒绝外部文件
+- **WHEN** `restrict_workspace = true` 且 file_path 指向 workspace 外
+- **THEN** SHALL 返回 "outside the workspace boundary" 错误
 
 ### Requirement: edit_file requires approval
 `EditFileTool::requires_approval()` SHALL return `true`.

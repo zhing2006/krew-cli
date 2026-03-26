@@ -25,7 +25,7 @@ fn setup_test_files() -> TempDir {
 #[tokio::test]
 async fn finds_matching_lines() {
     let dir = setup_test_files();
-    let tool = GrepTool::new(dir.path().to_path_buf());
+    let tool = GrepTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(json!({ "pattern": "TODO" }), &ToolContext::default())
@@ -40,7 +40,7 @@ async fn finds_matching_lines() {
 #[tokio::test]
 async fn filters_by_include_glob() {
     let dir = setup_test_files();
-    let tool = GrepTool::new(dir.path().to_path_buf());
+    let tool = GrepTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(
@@ -58,7 +58,7 @@ async fn filters_by_include_glob() {
 #[tokio::test]
 async fn respects_limit() {
     let dir = setup_test_files();
-    let tool = GrepTool::new(dir.path().to_path_buf());
+    let tool = GrepTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(
@@ -75,7 +75,7 @@ async fn respects_limit() {
 #[tokio::test]
 async fn no_matches() {
     let dir = setup_test_files();
-    let tool = GrepTool::new(dir.path().to_path_buf());
+    let tool = GrepTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(
@@ -92,7 +92,7 @@ async fn no_matches() {
 #[tokio::test]
 async fn invalid_regex() {
     let dir = setup_test_files();
-    let tool = GrepTool::new(dir.path().to_path_buf());
+    let tool = GrepTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(json!({ "pattern": "[invalid" }), &ToolContext::default())
@@ -103,7 +103,7 @@ async fn invalid_regex() {
 #[tokio::test]
 async fn searches_specific_path() {
     let dir = setup_test_files();
-    let tool = GrepTool::new(dir.path().to_path_buf());
+    let tool = GrepTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(
@@ -115,4 +115,35 @@ async fn searches_specific_path() {
 
     assert!(!result.is_error);
     assert!(result.content.contains("fn main"));
+}
+
+#[tokio::test]
+async fn allows_search_outside_workspace_when_unrestricted() {
+    // Create workspace and an outside directory with a searchable file.
+    let workspace = TempDir::new().unwrap();
+    let outside = TempDir::new().unwrap();
+    std::fs::write(outside.path().join("target.txt"), "findme_unique_marker\n").unwrap();
+
+    // With restrict_workspace=true, searching outside should find nothing.
+    let tool_restricted = GrepTool::new(workspace.path().to_path_buf(), true);
+    let result = tool_restricted
+        .execute(
+            json!({ "pattern": "findme_unique_marker", "path": outside.path().to_str().unwrap() }),
+            &ToolContext::default(),
+        )
+        .await;
+    // Should fail because path is outside workspace.
+    assert!(result.is_err());
+
+    // With restrict_workspace=false, searching outside should work.
+    let tool_unrestricted = GrepTool::new(workspace.path().to_path_buf(), false);
+    let result = tool_unrestricted
+        .execute(
+            json!({ "pattern": "findme_unique_marker", "path": outside.path().to_str().unwrap() }),
+            &ToolContext::default(),
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error);
+    assert!(result.content.contains("findme_unique_marker"));
 }

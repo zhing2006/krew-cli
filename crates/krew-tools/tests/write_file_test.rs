@@ -7,7 +7,7 @@ use tempfile::TempDir;
 #[tokio::test]
 async fn creates_new_file() {
     let dir = TempDir::new().unwrap();
-    let tool = WriteFileTool::new(dir.path().to_path_buf());
+    let tool = WriteFileTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(
@@ -28,7 +28,7 @@ async fn creates_new_file() {
 #[tokio::test]
 async fn creates_parent_directories() {
     let dir = TempDir::new().unwrap();
-    let tool = WriteFileTool::new(dir.path().to_path_buf());
+    let tool = WriteFileTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(
@@ -49,7 +49,7 @@ async fn creates_parent_directories() {
 async fn overwrites_existing_file() {
     let dir = TempDir::new().unwrap();
     std::fs::write(dir.path().join("existing.txt"), "old content").unwrap();
-    let tool = WriteFileTool::new(dir.path().to_path_buf());
+    let tool = WriteFileTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(
@@ -70,7 +70,7 @@ async fn overwrites_existing_file() {
 #[tokio::test]
 async fn rejects_path_outside_workspace() {
     let dir = TempDir::new().unwrap();
-    let tool = WriteFileTool::new(dir.path().to_path_buf());
+    let tool = WriteFileTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
         .execute(
@@ -86,8 +86,30 @@ async fn rejects_path_outside_workspace() {
 }
 
 #[tokio::test]
+async fn allows_path_outside_workspace_when_unrestricted() {
+    let workspace = std::env::temp_dir().join("krew_write_unrestricted_ws");
+    let _ = tokio::fs::create_dir_all(&workspace).await;
+    let outside = std::env::temp_dir().join("krew_write_unrestricted_out");
+    let _ = tokio::fs::create_dir_all(&outside).await;
+
+    let tool = WriteFileTool::new(workspace.clone(), false);
+    let target = outside.join("test.txt");
+    let args = serde_json::json!({
+        "file_path": target.to_str().unwrap(),
+        "content": "hello from outside"
+    });
+    let ctx = krew_tools::ToolContext::default();
+    let result = tool.execute(args, &ctx).await;
+    assert!(result.is_ok());
+    assert!(!result.unwrap().is_error);
+
+    let _ = tokio::fs::remove_dir_all(&workspace).await;
+    let _ = tokio::fs::remove_dir_all(&outside).await;
+}
+
+#[tokio::test]
 async fn requires_approval_returns_true() {
     let dir = TempDir::new().unwrap();
-    let tool = WriteFileTool::new(dir.path().to_path_buf());
+    let tool = WriteFileTool::new(dir.path().to_path_buf(), true);
     assert!(tool.requires_approval());
 }

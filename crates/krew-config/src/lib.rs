@@ -116,6 +116,11 @@ pub struct Settings {
     /// Language for agent responses (e.g. "中文", "English", "日本語").
     /// When set, a language instruction is injected into every agent's system prompt.
     pub language: Option<String>,
+    /// Whether to restrict file tool access to the workspace directory.
+    /// When false, built-in file tools (read_file, write_file, edit_file, glob, grep)
+    /// can access any path on the system.
+    #[serde(default = "default_true")]
+    pub restrict_workspace: bool,
 }
 
 /// Retry configuration for LLM API requests.

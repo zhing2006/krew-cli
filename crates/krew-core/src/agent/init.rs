@@ -155,6 +155,7 @@ pub fn init_agents(config: &Config, cwd: Option<PathBuf>) -> InitAgentsResult {
             if let Some(ref cwd) = cwd {
                 Arc::new(krew_tools::builtin::create_full_registry(
                     cwd.clone(),
+                    config.settings.restrict_workspace,
                     skill_infos.clone(),
                 ))
             } else {

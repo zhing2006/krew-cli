@@ -14,6 +14,7 @@ use crate::{
 /// Built-in tool for editing files via search-and-replace.
 pub struct EditFileTool {
     cwd: PathBuf,
+    restrict_workspace: bool,
 }
 
 #[derive(Deserialize)]
@@ -24,8 +25,11 @@ struct EditFileArgs {
 }
 
 impl EditFileTool {
-    pub fn new(cwd: PathBuf) -> Self {
-        Self { cwd }
+    pub fn new(cwd: PathBuf, restrict_workspace: bool) -> Self {
+        Self {
+            cwd,
+            restrict_workspace,
+        }
     }
 
     pub fn spec(&self) -> ToolSpec {
@@ -72,7 +76,7 @@ impl ToolHandler for EditFileTool {
         let args: EditFileArgs =
             serde_json::from_value(args).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
 
-        let path = validate_path(&args.file_path, &self.cwd)?;
+        let path = validate_path(&args.file_path, &self.cwd, self.restrict_workspace)?;
 
         if let Some(result) = check_file_size(&path) {
             return Ok(result);

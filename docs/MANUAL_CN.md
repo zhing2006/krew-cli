@@ -466,6 +466,10 @@ compact_keep_rounds = 10
 # AI-to-AI 最大轮次（默认 10，0 = 禁用）
 # agent_to_agent_max_rounds = 10
 
+# 限制内建文件工具只能访问工作区目录（默认 true）
+# 设为 false 时，文件工具可访问系统上的任意路径
+# restrict_workspace = true
+
 # Agent 回复语言（不设置 = 不注入语言指令）
 # 设置后会在每个 Agent 的 system prompt 中注入：
 # "Always respond in {language}. Use {language} for all explanations,

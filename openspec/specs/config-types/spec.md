@@ -11,28 +11,17 @@
 - **WHEN** TOML 配置中不包含 `[skills]` 节
 - **THEN** `Config::skills` SHALL 使用 `SkillsConfig::default()`（enabled=true, extra_paths=[]）
 
-### Requirement: Settings 结构体
-`krew-config` SHALL 定义 `Settings` 结构体，包含字段：`approval_mode: ApprovalMode`、`reply_order: Vec<String>`、`auto_compact_threshold: Option<u32>`、`other_agent_role: OtherAgentRole`（默认 `User`）、`agent_to_agent_routing: AgentToAgentRouting`（默认 `Immediate`）、`agent_to_agent_max_rounds: u32`（默认 `10`）。
+### Requirement: Settings 结构体字段
 
-#### Scenario: Settings 字段齐全
-- **WHEN** 构造 `Settings` 值
-- **THEN** 所有字段 SHALL 存在且类型正确
+`Settings` 结构体 SHALL 包含 `restrict_workspace: bool` 字段，默认值为 `true`。该字段 SHALL 可从 TOML 配置文件的 `[settings]` 段反序列化。
 
-#### Scenario: other_agent_role 默认值
-- **WHEN** settings TOML 块未包含 `other_agent_role` 字段
-- **THEN** 默认值 SHALL 为 `OtherAgentRole::User`
+#### Scenario: 从 TOML 反序列化 restrict_workspace
+- **WHEN** 配置文件包含 `restrict_workspace = false`
+- **THEN** `Settings.restrict_workspace` SHALL 为 `false`
 
-#### Scenario: other_agent_role 配置为 assistant
-- **WHEN** settings TOML 块包含 `other_agent_role = "assistant"`
-- **THEN** SHALL 反序列化为 `OtherAgentRole::Assistant`
-
-#### Scenario: agent_to_agent_routing 默认值
-- **WHEN** settings TOML 块未包含 `agent_to_agent_routing` 字段
-- **THEN** 默认值 SHALL 为 `AgentToAgentRouting::Immediate`
-
-#### Scenario: agent_to_agent_max_rounds 默认值
-- **WHEN** settings TOML 块未包含 `agent_to_agent_max_rounds` 字段
-- **THEN** 默认值 SHALL 为 `10`
+#### Scenario: 缺省时使用默认值
+- **WHEN** 配置文件中未设置 `restrict_workspace`
+- **THEN** `Settings.restrict_workspace` SHALL 为 `true`
 
 ### Requirement: AgentConfig 结构体
 `krew-config` SHALL 定义 `AgentConfig` 结构体，包含字段：`name`、`display_name`、`provider`、`model`（均为 `String`）、`api_type: Option<ApiType>`、`color: String`、`system_prompt: Option<String>`、`tools: bool`、`enable_web_search: bool`、`sampling: Option<SamplingConfig>`、`enable_thinking: bool`（默认 false）、`thinking_effort: Option<ThinkingEffort>`。

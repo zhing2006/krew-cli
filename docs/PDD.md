@@ -621,6 +621,7 @@ compact_keep_rounds = 10               # 压缩时保留最近 N 轮对话（默
 # fetch_allow_domains = ["docs.rs"]    # 免审批 fetch_url 域名白名单
 # agent_to_agent_routing = "immediate" # AI-to-AI 路由策略: immediate | queued（默认 immediate）
 # agent_to_agent_max_rounds = 10       # AI-to-AI 最大轮次（0 = 禁用，默认 10）
+# restrict_workspace = true            # 限制内建文件工具只能访问工作区目录（默认 true）
 
 # Agent 定义
 [[agents]]

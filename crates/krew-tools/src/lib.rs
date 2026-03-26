@@ -169,7 +169,10 @@ impl ToolRegistry {
 ///
 /// Resolves the path relative to `cwd`, then verifies the canonical path
 /// falls within `cwd`. Rejects `..` traversal and symlink escapes.
-pub fn validate_path(path: &str, cwd: &Path) -> Result<PathBuf, ToolError> {
+///
+/// When `restrict` is `false`, the workspace boundary check is skipped
+/// and only path resolution is performed.
+pub fn validate_path(path: &str, cwd: &Path, restrict: bool) -> Result<PathBuf, ToolError> {
     let target = if Path::new(path).is_absolute() {
         PathBuf::from(path)
     } else {
@@ -184,18 +187,20 @@ pub fn validate_path(path: &str, cwd: &Path) -> Result<PathBuf, ToolError> {
         ))
     })?;
 
-    let cwd_canonical = dunce::canonicalize(cwd).map_err(|e| {
-        ToolError::Execution(format!(
-            "failed to resolve workspace path '{}': {e}",
-            cwd.display()
-        ))
-    })?;
+    if restrict {
+        let cwd_canonical = dunce::canonicalize(cwd).map_err(|e| {
+            ToolError::Execution(format!(
+                "failed to resolve workspace path '{}': {e}",
+                cwd.display()
+            ))
+        })?;
 
-    if !resolved.starts_with(&cwd_canonical) {
-        return Err(ToolError::Execution(format!(
-            "path '{}' is outside the workspace boundary",
-            resolved.display()
-        )));
+        if !resolved.starts_with(&cwd_canonical) {
+            return Err(ToolError::Execution(format!(
+                "path '{}' is outside the workspace boundary",
+                resolved.display()
+            )));
+        }
     }
 
     Ok(resolved)

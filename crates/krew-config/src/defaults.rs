@@ -30,6 +30,7 @@ impl Default for Config {
                 agent_to_agent_routing: AgentToAgentRouting::Immediate,
                 agent_to_agent_max_rounds: DEFAULT_AGENT_TO_AGENT_MAX_ROUNDS,
                 language: None,
+                restrict_workspace: true,
             },
             agents: Vec::new(),
             providers: HashMap::new(),

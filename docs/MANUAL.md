@@ -466,6 +466,10 @@ compact_keep_rounds = 10
 # Max AI-to-AI rounds (default: 10, 0 = disable)
 # agent_to_agent_max_rounds = 10
 
+# Restrict built-in file tools to the workspace directory (default: true)
+# When false, file tools can access any path on the system.
+# restrict_workspace = true
+
 # Language for agent responses (unset = no instruction injected)
 # Injects: "Always respond in {language}. Use {language} for all explanations,
 # comments, and communications with the user. Technical terms and code

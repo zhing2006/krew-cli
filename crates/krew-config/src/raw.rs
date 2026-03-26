@@ -39,6 +39,7 @@ pub struct RawSettings {
     pub agent_to_agent_routing: Option<AgentToAgentRouting>,
     pub agent_to_agent_max_rounds: Option<u32>,
     pub language: Option<String>,
+    pub restrict_workspace: Option<bool>,
 }
 
 // ── RawConfig ───────────────────────────────────────────────────────
@@ -116,6 +117,7 @@ impl RawConfig {
         merge_option!(agent_to_agent_routing);
         merge_option!(agent_to_agent_max_rounds);
         merge_option!(language);
+        merge_option!(restrict_workspace);
 
         // ── skills: project Some wins, else inherit user ──
         if self.skills.is_none() {
@@ -160,6 +162,7 @@ impl RawConfig {
                     .agent_to_agent_max_rounds
                     .unwrap_or(DEFAULT_AGENT_TO_AGENT_MAX_ROUNDS),
                 language: self.settings.language,
+                restrict_workspace: self.settings.restrict_workspace.unwrap_or(true),
             },
             agents: self.agents,
             providers: self.providers,
@@ -187,6 +190,7 @@ pub struct UserSettings {
     pub agent_to_agent_routing: Option<AgentToAgentRouting>,
     pub agent_to_agent_max_rounds: Option<u32>,
     pub language: Option<String>,
+    pub restrict_workspace: Option<bool>,
 }
 
 // ── UserConfig ──────────────────────────────────────────────────────

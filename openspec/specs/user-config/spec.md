@@ -12,10 +12,10 @@
 - **THEN** `raw.settings.approval_mode` SHALL 为 `Some(FullAuto)`，其余标量字段 SHALL 为 `None`
 
 ### Requirement: RawSettings 结构体
-`krew-config` SHALL 定义 `RawSettings` 结构体，所有标量字段均为 `Option`：`approval_mode`、`auto_compact_threshold`、`compact_keep_rounds`、`input_history_limit`、`paste_burst_detection`、`worker_threads`、`other_agent_role`、`retry`、`shell_allow_commands`、`fetch_allow_domains`、`agent_to_agent_routing`、`agent_to_agent_max_rounds`。`reply_order` SHALL 为 `Vec<String>`（非 Option，project-only）。该结构体 SHALL 派生 `Deserialize`、`Clone`、`Debug`、`Default`。
+`krew-config` SHALL 定义 `RawSettings` 结构体，所有标量字段均为 `Option`：`approval_mode`、`auto_compact_threshold`、`compact_keep_rounds`、`input_history_limit`、`paste_burst_detection`、`worker_threads`、`other_agent_role`、`retry`、`shell_allow_commands`、`fetch_allow_domains`、`agent_to_agent_routing`、`agent_to_agent_max_rounds`、`language`、`restrict_workspace`。`reply_order` SHALL 为 `Vec<String>`（非 Option，project-only）。该结构体 SHALL 派生 `Deserialize`、`Clone`、`Debug`、`Default`。
 
 #### Scenario: RawSettings 部分字段设置
-- **WHEN** TOML 中 `[settings]` 包含 `approval_mode = "full-auto"` 和 `worker_threads = 8`
+- **WHEN** TOML 中 `[settings]` 包含 `approval_mode = "full-auto"` 和 `restrict_workspace = false`
 - **THEN** 这两个字段 SHALL 为 `Some`，其余 SHALL 为 `None`
 
 #### Scenario: RawSettings reply_order 默认空
@@ -34,11 +34,11 @@
 - **THEN** SHALL 返回 `UserConfig::default()`，所有字段为空/None
 
 ### Requirement: UserSettings 结构体
-`krew-config` SHALL 定义 `UserSettings` 结构体，字段与 `RawSettings` 相同但不含 `reply_order`，所有字段均为 `Option`。该结构体 SHALL 派生 `Deserialize`、`Clone`、`Debug`、`Default`。
+`krew-config` SHALL 定义 `UserSettings` 结构体，字段与 `RawSettings` 相同但不含 `reply_order`，所有字段均为 `Option`（包括 `restrict_workspace: Option<bool>`）。该结构体 SHALL 派生 `Deserialize`、`Clone`、`Debug`、`Default`。
 
-#### Scenario: UserSettings 部分字段设置
-- **WHEN** TOML 中 `[settings]` 只包含 `approval_mode = "full-auto"`
-- **THEN** SHALL 反序列化为 `UserSettings`，`approval_mode` 为 `Some(FullAuto)`，其余字段为 `None`
+#### Scenario: UserSettings 设置 restrict_workspace
+- **WHEN** user config TOML 中 `[settings]` 包含 `restrict_workspace = false`
+- **THEN** SHALL 反序列化为 `UserSettings`，`restrict_workspace` 为 `Some(false)`
 
 ### Requirement: UserConfig 加载
 `krew-config` SHALL 提供 `UserConfig::load() -> UserConfig` 静态方法，从 `~/.krew/settings.toml` 加载 user 级配置。
@@ -60,7 +60,7 @@
 
 - **`providers`**: user 的 providers 作为 base，project 的同名 key 整项替换 user 的
 - **`mcp_servers`**: user 的 MCP servers 在前，project 的追加在后；同名 server（by name）中 project 的替换 user 的
-- **`settings` 标量字段**: project `Some` 优先；project `None` 时使用 user 的值
+- **`settings` 标量字段**: project `Some` 优先；project `None` 时使用 user 的值（包括 `restrict_workspace`）
 - **`skills`**: project `Some` 时用 project 的；project `None` 时用 user 的
 
 #### Scenario: providers 合并——project 覆盖
@@ -91,6 +91,18 @@
 - **WHEN** user config 和 project config 均未设置 `worker_threads`
 - **THEN** 合并后 `worker_threads` SHALL 为 `None`（由 resolve 填充默认值）
 
+#### Scenario: settings restrict_workspace——project 优先
+- **WHEN** user config 设置 `restrict_workspace = false`，project config 设置 `restrict_workspace = true`
+- **THEN** 合并后 `restrict_workspace` SHALL 为 `Some(true)`
+
+#### Scenario: settings restrict_workspace——user 补充
+- **WHEN** user config 设置 `restrict_workspace = false`，project config 未设置（`None`）
+- **THEN** 合并后 `restrict_workspace` SHALL 为 `Some(false)`
+
+#### Scenario: settings restrict_workspace——双方均未设置
+- **WHEN** user config 和 project config 均未设置 `restrict_workspace`
+- **THEN** 合并后 `restrict_workspace` SHALL 为 `None`（由 resolve 填充默认值 `true`）
+
 #### Scenario: skills 合并——project 优先
 - **WHEN** project config 定义 `[skills]`，user config 也定义 `[skills]`
 - **THEN** 合并后 SHALL 使用 project 的 `skills` 配置
@@ -109,6 +121,14 @@
 #### Scenario: 字段为 None
 - **WHEN** 合并后 `approval_mode` 为 `None`
 - **THEN** resolve SHALL 使用 `ApprovalMode::default()`（即 `Suggest`）
+
+#### Scenario: restrict_workspace 为 None
+- **WHEN** 合并后 `restrict_workspace` 为 `None`
+- **THEN** resolve SHALL 使用默认值 `true`
+
+#### Scenario: restrict_workspace 为 Some(false)
+- **WHEN** 合并后 `restrict_workspace` 为 `Some(false)`
+- **THEN** resolve SHALL 使用 `false`
 
 #### Scenario: skills 为 None
 - **WHEN** 合并后 `skills` 为 `None`

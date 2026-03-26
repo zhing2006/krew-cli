@@ -10,6 +10,7 @@ use crate::{ToolContext, ToolError, ToolHandler, ToolResult, ToolSpec};
 /// Built-in tool for writing or creating files.
 pub struct WriteFileTool {
     cwd: PathBuf,
+    restrict_workspace: bool,
 }
 
 #[derive(Deserialize)]
@@ -19,8 +20,11 @@ struct WriteFileArgs {
 }
 
 impl WriteFileTool {
-    pub fn new(cwd: PathBuf) -> Self {
-        Self { cwd }
+    pub fn new(cwd: PathBuf, restrict_workspace: bool) -> Self {
+        Self {
+            cwd,
+            restrict_workspace,
+        }
     }
 
     pub fn spec(&self) -> ToolSpec {
@@ -84,7 +88,7 @@ impl ToolHandler for WriteFileTool {
 
         // Validate the normalized target is within the workspace boundary
         // BEFORE creating any directories or files.
-        if !normalized.starts_with(&cwd_canonical) {
+        if self.restrict_workspace && !normalized.starts_with(&cwd_canonical) {
             return Err(ToolError::Execution(format!(
                 "path '{}' is outside the workspace boundary",
                 target.display()
@@ -153,7 +157,7 @@ mod tests {
     async fn rejects_path_outside_workspace() {
         let tmp = std::env::temp_dir().join("krew_write_test");
         let _ = tokio::fs::create_dir_all(&tmp).await;
-        let tool = WriteFileTool::new(tmp.clone());
+        let tool = WriteFileTool::new(tmp.clone(), true);
 
         let args = serde_json::json!({
             "file_path": "../../../outside/evil.txt",
@@ -174,7 +178,7 @@ mod tests {
     async fn allows_path_inside_workspace() {
         let tmp = std::env::temp_dir().join("krew_write_test_ok");
         let _ = tokio::fs::create_dir_all(&tmp).await;
-        let tool = WriteFileTool::new(tmp.clone());
+        let tool = WriteFileTool::new(tmp.clone(), true);
 
         let args = serde_json::json!({
             "file_path": "sub/dir/test.txt",

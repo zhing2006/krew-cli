@@ -484,7 +484,13 @@ fn create_tool_context(
 /// Generate a short summary string for TUI display of a tool result.
 fn generate_tool_summary(tool_name: &str, result: &krew_tools::ToolResult) -> String {
     if result.is_error {
-        return "error".to_string();
+        // Show a concise error message instead of just "error".
+        let msg = result.content.lines().next().unwrap_or("error");
+        const MAX_ERROR_LEN: usize = 120;
+        if msg.len() > MAX_ERROR_LEN {
+            return format!("error: {}…", &msg[..MAX_ERROR_LEN]);
+        }
+        return format!("error: {msg}");
     }
 
     // Extract the summary from the content's trailing "(N <unit>)" pattern.
