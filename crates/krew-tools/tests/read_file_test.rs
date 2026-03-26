@@ -114,9 +114,9 @@ async fn handles_crlf_line_endings() {
 #[tokio::test]
 async fn rejects_binary_file() {
     let dir = TempDir::new().unwrap();
-    let file_path = dir.path().join("image.png");
+    let file_path = dir.path().join("binary.dat");
     // Write bytes with NUL to simulate binary content.
-    std::fs::write(&file_path, b"\x89PNG\r\n\x1a\n\x00\x00\x00").unwrap();
+    std::fs::write(&file_path, b"\x00\x01\x02\x03\x04\x05").unwrap();
     let tool = ReadFileTool::new(dir.path().to_path_buf(), true);
 
     let result = tool
@@ -151,6 +151,107 @@ fn validate_path_unrestricted_allows_outside_workspace() {
 
     let _ = std::fs::remove_dir_all(&cwd);
     let _ = std::fs::remove_dir_all(&outside);
+}
+
+#[tokio::test]
+async fn reads_png_image() {
+    let dir = TempDir::new().unwrap();
+    let file_path = dir.path().join("test.png");
+    let fake_png = b"\x89PNG\r\n\x1a\nfake image data";
+    std::fs::write(&file_path, fake_png).unwrap();
+    let tool = ReadFileTool::new(dir.path().to_path_buf(), true);
+
+    let result = tool
+        .execute(
+            json!({ "file_path": file_path.to_str().unwrap() }),
+            &ToolContext::default(),
+        )
+        .await
+        .unwrap();
+
+    assert!(!result.is_error);
+    assert_eq!(result.content, "[Image: test.png]");
+    assert_eq!(result.images.len(), 1);
+    assert_eq!(result.images[0].media_type, "image/png");
+    assert_eq!(result.images[0].data, fake_png);
+}
+
+#[tokio::test]
+async fn reads_jpeg_image() {
+    let dir = TempDir::new().unwrap();
+    let file_path = dir.path().join("photo.jpg");
+    let fake_jpg = b"\xff\xd8\xff\xe0fake jpeg";
+    std::fs::write(&file_path, fake_jpg).unwrap();
+    let tool = ReadFileTool::new(dir.path().to_path_buf(), true);
+
+    let result = tool
+        .execute(
+            json!({ "file_path": file_path.to_str().unwrap() }),
+            &ToolContext::default(),
+        )
+        .await
+        .unwrap();
+
+    assert!(!result.is_error);
+    assert_eq!(result.content, "[Image: photo.jpg]");
+    assert_eq!(result.images.len(), 1);
+    assert_eq!(result.images[0].media_type, "image/jpeg");
+}
+
+#[tokio::test]
+async fn reads_webp_image() {
+    let dir = TempDir::new().unwrap();
+    let file_path = dir.path().join("pic.webp");
+    std::fs::write(&file_path, b"RIFF\x00\x00\x00\x00WEBP").unwrap();
+    let tool = ReadFileTool::new(dir.path().to_path_buf(), true);
+
+    let result = tool
+        .execute(
+            json!({ "file_path": file_path.to_str().unwrap() }),
+            &ToolContext::default(),
+        )
+        .await
+        .unwrap();
+
+    assert!(!result.is_error);
+    assert_eq!(result.images[0].media_type, "image/webp");
+}
+
+#[tokio::test]
+async fn image_not_found() {
+    let dir = TempDir::new().unwrap();
+    let tool = ReadFileTool::new(dir.path().to_path_buf(), true);
+
+    let result = tool
+        .execute(
+            json!({ "file_path": "missing.png" }),
+            &ToolContext::default(),
+        )
+        .await;
+
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn non_image_extension_uses_text_path() {
+    let dir = TempDir::new().unwrap();
+    let file_path = dir.path().join("data.bmp");
+    // BMP is not a supported image format, so it should go through text path.
+    // Write text content (no NUL bytes) so it passes binary check.
+    std::fs::write(&file_path, b"plain text content").unwrap();
+    let tool = ReadFileTool::new(dir.path().to_path_buf(), true);
+
+    let result = tool
+        .execute(
+            json!({ "file_path": file_path.to_str().unwrap() }),
+            &ToolContext::default(),
+        )
+        .await
+        .unwrap();
+
+    assert!(!result.is_error);
+    assert!(result.images.is_empty());
+    assert!(result.content.contains("L1:"));
 }
 
 #[tokio::test]

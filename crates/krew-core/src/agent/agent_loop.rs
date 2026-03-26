@@ -130,6 +130,7 @@ pub(super) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
             whisper_targets: ctx.whisper_targets.clone(),
             created_at: chrono::Utc::now(),
             usage: None,
+            images: Vec::new(),
         };
         tool_round_messages.push(assistant_msg.clone());
         messages.push(assistant_msg);
@@ -272,6 +273,7 @@ pub(super) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
                     let result = krew_tools::ToolResult {
                         content: format!("User denied execution of {name}."),
                         is_error: true,
+                        images: vec![],
                     };
                     approval_results.push((id, name, args_str, result));
                 }
@@ -327,6 +329,16 @@ pub(super) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
                 result_summary: summary,
             });
 
+            let images = result
+                .images
+                .into_iter()
+                .map(|img| krew_llm::ImageContent {
+                    data: img.data,
+                    media_type: img.media_type,
+                    filename: img.filename,
+                })
+                .collect();
+
             let tool_msg = ChatMessage {
                 role: ChatRole::Tool,
                 content: result.content,
@@ -338,6 +350,7 @@ pub(super) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
                 whisper_targets: ctx.whisper_targets.clone(),
                 created_at: chrono::Utc::now(),
                 usage: None,
+                images,
             };
             tool_round_messages.push(tool_msg.clone());
             messages.push(tool_msg);

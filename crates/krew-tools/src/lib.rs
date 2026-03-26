@@ -8,8 +8,21 @@ use serde_json::Value;
 
 /// Maximum file size allowed for reading (100 MB).
 pub const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024;
+/// Maximum image file size allowed for reading (20 MB).
+pub const MAX_IMAGE_SIZE: u64 = 20 * 1024 * 1024;
 /// Number of bytes to probe for binary detection.
 const BINARY_PROBE_SIZE: usize = 8192;
+
+/// Image content returned by a tool (e.g. read_file on an image file).
+#[derive(Debug, Clone)]
+pub struct ImageContent {
+    /// Raw image bytes.
+    pub data: Vec<u8>,
+    /// MIME type (e.g. "image/png", "image/jpeg").
+    pub media_type: String,
+    /// Original filename (e.g. "screenshot.png").
+    pub filename: Option<String>,
+}
 
 /// Result returned by a tool after execution.
 #[derive(Debug, Clone)]
@@ -18,6 +31,8 @@ pub struct ToolResult {
     pub content: String,
     /// Whether the tool execution resulted in an error.
     pub is_error: bool,
+    /// Image data returned by the tool (empty for non-image results).
+    pub images: Vec<ImageContent>,
 }
 
 /// Errors that can occur during tool execution.
@@ -151,6 +166,7 @@ impl ToolRegistry {
                 return ToolResult {
                     content: format!("Unknown tool: {name}"),
                     is_error: true,
+                    images: vec![],
                 };
             }
         };
@@ -160,6 +176,7 @@ impl ToolRegistry {
             Err(e) => ToolResult {
                 content: e.to_string(),
                 is_error: true,
+                images: vec![],
             },
         }
     }
@@ -224,6 +241,7 @@ pub fn check_file_size(path: &Path) -> Option<ToolResult> {
                 MAX_FILE_SIZE / (1024 * 1024)
             ),
             is_error: true,
+            images: vec![],
         })
     } else {
         None
@@ -251,6 +269,7 @@ pub fn check_binary(path: &Path) -> Option<ToolResult> {
                 path.display()
             ),
             is_error: true,
+            images: vec![],
         })
     } else {
         None

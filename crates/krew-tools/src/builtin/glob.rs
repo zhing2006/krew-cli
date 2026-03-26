@@ -101,6 +101,7 @@ impl ToolHandler for GlobTool {
             return Ok(ToolResult {
                 content: format!("'{}' is not a directory", search_dir.display()),
                 is_error: true,
+                images: vec![],
             });
         }
 
@@ -177,6 +178,7 @@ impl ToolHandler for GlobTool {
             return Ok(ToolResult {
                 content: "No files matched the pattern.".to_string(),
                 is_error: false,
+                images: vec![],
             });
         }
 
@@ -189,6 +191,7 @@ impl ToolHandler for GlobTool {
         Ok(ToolResult {
             content: format!("{}\n\n({file_count} files)", content.join("\n")),
             is_error: false,
+            images: vec![],
         })
     }
 }

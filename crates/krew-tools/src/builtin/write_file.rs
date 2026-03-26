@@ -126,6 +126,7 @@ impl ToolHandler for WriteFileTool {
                 args.file_path
             ),
             is_error: false,
+            images: vec![],
         })
     }
 }

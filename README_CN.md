@@ -30,7 +30,7 @@
 - **# 密语** — `#name` 发送私密消息，其他 Agent 不可见；支持多目标密语组
 - **共享上下文** — 普通消息全员共享，密语消息按可见性过滤，确保讨论全貌与隐私兼顾
 - **AI 间路由** — Agent 可以 `@mention` 其他 Agent，自动调度（支持 immediate/queued 策略）
-- **内置工具** — 文件读写编辑、Shell 执行、glob/grep 搜索、URL 抓取、Skill 激活
+- **内置工具** — 文件读写编辑、图片查看、Shell 执行、glob/grep 搜索、URL 抓取、Skill 激活
 - **MCP 集成** — 通过 Model Context Protocol 服务器扩展 Agent 能力（stdio + HTTP）
 - **Skill 系统** — 可发现、可激活的技能，通过 `SKILL.md` 定义专业指令
 - **自定义命令** — 通过 Markdown 文件定义自定义 Slash 命令，支持参数替换和 Bash 预处理

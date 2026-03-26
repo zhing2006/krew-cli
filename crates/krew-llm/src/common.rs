@@ -279,6 +279,16 @@ pub fn merge_consecutive_same_role(messages: Vec<RoleContent>) -> Vec<RoleConten
 }
 
 // ---------------------------------------------------------------------------
+// Base64 encoding helper
+// ---------------------------------------------------------------------------
+
+/// Encode raw bytes as a base64 string (standard alphabet, with padding).
+pub fn encode_base64(data: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(data)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

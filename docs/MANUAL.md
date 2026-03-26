@@ -1,6 +1,6 @@
 # krew-cli User Manual
 
-> Version: 0.6.0
+> Version: 0.7.0
 
 ---
 
@@ -783,7 +783,7 @@ The shell command runs in the session working directory. Failures are replaced w
 
 | Tool | Description | Approval |
 | ---- | ----------- | -------- |
-| `read_file` | Read file content (with line numbers, offset/limit) | Auto |
+| `read_file` | Read file content (with line numbers, offset/limit); also reads image files (png/jpg/jpeg/gif/webp) for AI vision | Auto |
 | `glob` | File pattern matching | Auto |
 | `grep` | Content search (regex, include filter) | Auto |
 | `write_file` | Create/overwrite file (auto-creates parent dirs) | Configurable |

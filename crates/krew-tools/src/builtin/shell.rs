@@ -268,6 +268,7 @@ impl ToolHandler for ShellTool {
                         args.timeout_seconds
                     ),
                     is_error: true,
+                    images: vec![],
                 });
             }
         };
@@ -307,6 +308,7 @@ impl ToolHandler for ShellTool {
         Ok(ToolResult {
             content: combined,
             is_error,
+            images: vec![],
         })
     }
 }

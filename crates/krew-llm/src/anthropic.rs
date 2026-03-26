@@ -121,9 +121,35 @@ pub fn convert_messages(
         if msg.role == ChatRole::Tool {
             flush_pending_anthropic(&mut pending, &mut result);
 
+            let tool_content = if msg.images.is_empty() {
+                // Plain text content.
+                serde_json::json!(msg.content)
+            } else {
+                // Multimodal: image blocks + text block.
+                let mut blocks: Vec<serde_json::Value> = msg
+                    .images
+                    .iter()
+                    .map(|img| {
+                        serde_json::json!({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": img.media_type,
+                                "data": common::encode_base64(&img.data),
+                            }
+                        })
+                    })
+                    .collect();
+                blocks.push(serde_json::json!({
+                    "type": "text",
+                    "text": msg.content,
+                }));
+                serde_json::json!(blocks)
+            };
+
             let mut content_block = serde_json::json!({
                 "type": "tool_result",
-                "content": msg.content,
+                "content": tool_content,
             });
             if let Some(ref id) = msg.tool_call_id {
                 content_block["tool_use_id"] = serde_json::json!(id);
@@ -1242,5 +1268,63 @@ mod tests {
         }));
         assert_eq!(tool_list.len(), 1);
         assert_eq!(tool_list[0]["type"], "web_search_20250305");
+    }
+
+    #[test]
+    fn convert_tool_result_with_image() {
+        use crate::ImageContent;
+        let msg = ChatMessage {
+            role: ChatRole::Tool,
+            content: "[Image: test.png]".to_string(),
+            name: Some("read_file".to_string()),
+            tool_calls: None,
+            tool_call_id: Some("call_1".to_string()),
+            server_tool_uses: Vec::new(),
+            addressee: None,
+            whisper_targets: None,
+            created_at: chrono::Utc::now(),
+            usage: None,
+            images: vec![ImageContent {
+                data: b"fake_png_data".to_vec(),
+                media_type: "image/png".to_string(),
+                filename: Some("test.png".to_string()),
+            }],
+        };
+        let converted = convert_messages(&[msg], "agent", &OtherAgentRole::User);
+        let tool_result = &converted.messages[0]["content"][0];
+        assert_eq!(tool_result["type"], "tool_result");
+        assert_eq!(tool_result["tool_use_id"], "call_1");
+        // content should be an array with image + text blocks
+        let content = &tool_result["content"];
+        assert!(content.is_array());
+        let blocks = content.as_array().unwrap();
+        assert_eq!(blocks[0]["type"], "image");
+        assert_eq!(blocks[0]["source"]["type"], "base64");
+        assert_eq!(blocks[0]["source"]["media_type"], "image/png");
+        assert_eq!(blocks[1]["type"], "text");
+        assert_eq!(blocks[1]["text"], "[Image: test.png]");
+    }
+
+    #[test]
+    fn convert_tool_result_without_image() {
+        let msg = ChatMessage {
+            role: ChatRole::Tool,
+            content: "file content here".to_string(),
+            name: Some("read_file".to_string()),
+            tool_calls: None,
+            tool_call_id: Some("call_2".to_string()),
+            server_tool_uses: Vec::new(),
+            addressee: None,
+            whisper_targets: None,
+            created_at: chrono::Utc::now(),
+            usage: None,
+            images: vec![],
+        };
+        let converted = convert_messages(&[msg], "agent", &OtherAgentRole::User);
+        let tool_result = &converted.messages[0]["content"][0];
+        assert_eq!(tool_result["type"], "tool_result");
+        // content should be a plain string, not an array
+        assert!(tool_result["content"].is_string());
+        assert_eq!(tool_result["content"], "file content here");
     }
 }

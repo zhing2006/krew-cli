@@ -853,4 +853,32 @@ mod tests {
         assert!(delta.name.is_empty());
         assert_eq!(delta.arguments, "more_args");
     }
+
+    #[test]
+    fn convert_tool_result_with_image_degrades() {
+        use crate::ImageContent;
+        let msg = ChatMessage {
+            role: ChatRole::Tool,
+            content: "[Image: test.png]".to_string(),
+            name: Some("read_file".to_string()),
+            tool_calls: None,
+            tool_call_id: Some("call_1".to_string()),
+            server_tool_uses: Vec::new(),
+            addressee: None,
+            whisper_targets: None,
+            created_at: chrono::Utc::now(),
+            usage: None,
+            images: vec![ImageContent {
+                data: b"fake_png_data".to_vec(),
+                media_type: "image/png".to_string(),
+                filename: Some("test.png".to_string()),
+            }],
+        };
+        let converted = convert_messages(&[msg], "agent", &OtherAgentRole::User);
+        let obj = &converted[0];
+        assert_eq!(obj["role"], "tool");
+        // Should degrade to text only, ignoring images
+        assert_eq!(obj["content"], "[Image: test.png]");
+        assert_eq!(obj["tool_call_id"], "call_1");
+    }
 }

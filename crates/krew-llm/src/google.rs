@@ -25,6 +25,8 @@ pub struct GoogleClient {
     vertex_project: Option<String>,
     vertex_location: Option<String>,
     base_url: Option<String>,
+    /// Whether the API endpoint supports v1beta features (id, nested parts in functionResponse).
+    use_beta_features: bool,
     enable_thinking: bool,
     thinking_effort: Option<ThinkingEffort>,
     enable_web_search: bool,
@@ -43,6 +45,13 @@ impl GoogleClient {
         vertex_location: Option<&str>,
     ) -> Self {
         let vertex_mode = vertex_project.is_some() && vertex_location.is_some();
+        let base_url = config.base_url.map(|s| s.trim_end_matches('/').to_string());
+
+        // Detect v1beta API: default URL is v1beta, or explicit base_url containing "v1beta".
+        let use_beta_features = match &base_url {
+            None => true, // default is v1beta
+            Some(url) => url.contains("v1beta"),
+        };
 
         Self {
             http: reqwest::Client::new(),
@@ -52,7 +61,8 @@ impl GoogleClient {
             vertex_mode,
             vertex_project: vertex_project.map(|s| s.to_string()),
             vertex_location: vertex_location.map(|s| s.to_string()),
-            base_url: config.base_url.map(|s| s.trim_end_matches('/').to_string()),
+            base_url,
+            use_beta_features,
             enable_thinking: config.enable_thinking,
             thinking_effort: config.thinking_effort,
             enable_web_search: config.enable_web_search,
@@ -109,6 +119,7 @@ pub fn convert_messages(
     messages: &[ChatMessage],
     self_agent_name: &str,
     other_agent_role: &OtherAgentRole,
+    use_beta_features: bool,
 ) -> ConvertedMessages {
     // Collect system messages.
     let system_texts: Vec<&str> = messages
@@ -130,20 +141,77 @@ pub fn convert_messages(
         if msg.role == ChatRole::Tool {
             flush_pending_google(&mut pending, &mut result);
 
+            let tool_name = msg.name.as_deref().unwrap_or("unknown");
+
             let response: serde_json::Value = serde_json::from_str(&msg.content)
                 .unwrap_or_else(|_| serde_json::json!({ "result": msg.content }));
 
-            let tool_name = msg.name.as_deref().unwrap_or("unknown");
+            if msg.images.is_empty() {
+                // Plain text tool result.
+                let mut fr = serde_json::json!({
+                    "name": tool_name,
+                    "response": response,
+                });
+                if let Some(id) = msg.tool_call_id.as_ref().filter(|_| use_beta_features) {
+                    fr["id"] = serde_json::json!(id);
+                }
+                result.push(serde_json::json!({
+                    "role": "user",
+                    "parts": [{ "functionResponse": fr }],
+                }));
+            } else if use_beta_features {
+                // v1beta: embed inlineData inside functionResponse.parts
+                // with $ref/displayName linking.
+                let inline_parts: Vec<serde_json::Value> = msg
+                    .images
+                    .iter()
+                    .map(|img| {
+                        let display_name = img.filename.as_deref().unwrap_or("image");
+                        serde_json::json!({
+                            "inlineData": {
+                                "displayName": display_name,
+                                "mimeType": img.media_type,
+                                "data": common::encode_base64(&img.data),
+                            }
+                        })
+                    })
+                    .collect();
 
-            result.push(serde_json::json!({
-                "role": "user",
-                "parts": [{
+                let ref_name = msg.images[0].filename.as_deref().unwrap_or("image");
+
+                let mut fr = serde_json::json!({
+                    "name": tool_name,
+                    "response": { "image_ref": { "$ref": ref_name } },
+                    "parts": inline_parts,
+                });
+                if let Some(ref id) = msg.tool_call_id {
+                    fr["id"] = serde_json::json!(id);
+                }
+                result.push(serde_json::json!({
+                    "role": "user",
+                    "parts": [{ "functionResponse": fr }],
+                }));
+            } else {
+                // v1: inlineData as sibling parts alongside functionResponse.
+                let mut parts = vec![serde_json::json!({
                     "functionResponse": {
                         "name": tool_name,
                         "response": response,
                     }
-                }],
-            }));
+                })];
+                for img in &msg.images {
+                    parts.push(serde_json::json!({
+                        "inlineData": {
+                            "mimeType": img.media_type,
+                            "data": common::encode_base64(&img.data),
+                        }
+                    }));
+                }
+                result.push(serde_json::json!({
+                    "role": "user",
+                    "parts": parts,
+                }));
+            }
             continue;
         }
 
@@ -441,7 +509,9 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                         // Extract candidates.
                         let candidates = match v.get("candidates").and_then(|c| c.as_array()) {
                             Some(c) if !c.is_empty() => c,
-                            _ => continue,
+                            _ => {
+                                continue;
+                            }
                         };
 
                         let candidate = &candidates[0];
@@ -450,62 +520,20 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                         let finish_reason =
                             candidate.get("finishReason").and_then(|fr| fr.as_str());
 
-                        // Detect grounding (google_search) metadata.
-                        // Empty `{}` → emit ServerToolStart (search beginning).
-                        // Non-empty (with queries) → emit ServerToolDone.
-                        if grounding_state < 2
-                            && let Some(gm) = candidate.get("groundingMetadata")
-                        {
-                            let is_empty = gm.as_object().is_some_and(|m| m.is_empty());
-                            if is_empty && grounding_state == 0 {
-                                // Early empty metadata = search started.
-                                grounding_state = 1;
-                                let pend = finish_reason.is_some();
-                                return Some((
-                                    StreamEvent::ServerToolStart {
-                                        name: "google_search".to_string(),
-                                    },
-                                    (
-                                        sse_stream,
-                                        usage_state,
-                                        call_counter,
-                                        done,
-                                        pend,
-                                        grounding_state,
-                                    ),
-                                ));
-                            } else if !is_empty {
-                                // Non-empty metadata = search done with results.
-                                grounding_state = 2;
-                                let query = gm
-                                    .get("webSearchQueries")
-                                    .or_else(|| gm.get("retrievalQueries"))
-                                    .and_then(|q| q.as_array())
-                                    .and_then(|arr| arr.first())
-                                    .and_then(|q| q.as_str())
-                                    .map(|s| s.to_string());
-                                let pend = finish_reason.is_some();
-                                return Some((
-                                    StreamEvent::ServerToolDone {
-                                        name: "google_search".to_string(),
-                                        query,
-                                    },
-                                    (
-                                        sse_stream,
-                                        usage_state,
-                                        call_counter,
-                                        done,
-                                        pend,
-                                        grounding_state,
-                                    ),
-                                ));
-                            }
-                        }
-
-                        // Process parts.
+                        // Process content parts first (text, functionCall).
+                        // This must happen before grounding detection because
+                        // Gemini 3.x includes empty `groundingMetadata: {}` even
+                        // on non-search responses (e.g. functionCall).
+                        let has_content_parts;
                         if let Some(content) = candidate.get("content")
                             && let Some(parts) = content.get("parts").and_then(|p| p.as_array())
                         {
+                            has_content_parts = parts.iter().any(|p| {
+                                p.get("functionCall").is_some()
+                                    || p.get("text")
+                                        .and_then(|t| t.as_str())
+                                        .is_some_and(|t| !t.is_empty())
+                            });
                             // Collect events from parts.
                             let mut events: Vec<StreamEvent> = Vec::new();
 
@@ -575,6 +603,62 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                                     ),
                                 ));
                             }
+                        } else {
+                            has_content_parts = false;
+                        }
+
+                        // Detect grounding (google_search) metadata.
+                        // Only process grounding when there are no content parts
+                        // (text/functionCall), because Gemini 3.x includes empty
+                        // `groundingMetadata: {}` even on non-search responses.
+                        if !has_content_parts
+                            && grounding_state < 2
+                            && let Some(gm) = candidate.get("groundingMetadata")
+                        {
+                            let is_empty = gm.as_object().is_some_and(|m| m.is_empty());
+                            if is_empty && grounding_state == 0 {
+                                // Early empty metadata = search started.
+                                grounding_state = 1;
+                                let pend = finish_reason.is_some();
+                                return Some((
+                                    StreamEvent::ServerToolStart {
+                                        name: "google_search".to_string(),
+                                    },
+                                    (
+                                        sse_stream,
+                                        usage_state,
+                                        call_counter,
+                                        done,
+                                        pend,
+                                        grounding_state,
+                                    ),
+                                ));
+                            } else if !is_empty {
+                                // Non-empty metadata = search done with results.
+                                grounding_state = 2;
+                                let query = gm
+                                    .get("webSearchQueries")
+                                    .or_else(|| gm.get("retrievalQueries"))
+                                    .and_then(|q| q.as_array())
+                                    .and_then(|arr| arr.first())
+                                    .and_then(|q| q.as_str())
+                                    .map(|s| s.to_string());
+                                let pend = finish_reason.is_some();
+                                return Some((
+                                    StreamEvent::ServerToolDone {
+                                        name: "google_search".to_string(),
+                                        query,
+                                    },
+                                    (
+                                        sse_stream,
+                                        usage_state,
+                                        call_counter,
+                                        done,
+                                        pend,
+                                        grounding_state,
+                                    ),
+                                ));
+                            }
                         }
 
                         // Check if stream is done (any finishReason is terminal).
@@ -597,6 +681,7 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                         continue;
                     }
                     Some(Err(e)) => {
+                        tracing::debug!(%e, "Gemini SSE stream error");
                         done = true;
                         return Some((
                             StreamEvent::Error(format!("SSE stream error: {e}")),
@@ -612,6 +697,7 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                     }
                     None => {
                         // Stream ended without finishReason.
+                        tracing::debug!("Gemini SSE stream ended without finishReason");
                         done = true;
                         return Some((
                             StreamEvent::Error("stream interrupted".into()),
@@ -647,7 +733,12 @@ impl LlmClient for GoogleClient {
         let url = self.build_url();
 
         // Convert messages.
-        let converted = convert_messages(messages, &self.agent_name, &self.other_agent_role);
+        let converted = convert_messages(
+            messages,
+            &self.agent_name,
+            &self.other_agent_role,
+            self.use_beta_features,
+        );
 
         // Build request body.
         let mut body = serde_json::json!({
@@ -807,7 +898,7 @@ mod tests {
     #[test]
     fn convert_user_message() {
         let messages = vec![ChatMessage::text(ChatRole::User, "hello".to_string(), None)];
-        let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
+        let result = convert_messages(&messages, "agent1", &OtherAgentRole::User, true);
         assert!(result.system_instruction.is_none());
         assert_eq!(result.contents.len(), 1);
         assert_eq!(result.contents[0]["role"], "user");
@@ -821,7 +912,7 @@ mod tests {
             "you are helpful".to_string(),
             None,
         )];
-        let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
+        let result = convert_messages(&messages, "agent1", &OtherAgentRole::User, true);
         assert_eq!(
             result.system_instruction.as_deref(),
             Some("you are helpful")
@@ -835,7 +926,7 @@ mod tests {
             ChatMessage::text(ChatRole::System, "part 1".to_string(), None),
             ChatMessage::text(ChatRole::System, "part 2".to_string(), None),
         ];
-        let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
+        let result = convert_messages(&messages, "agent1", &OtherAgentRole::User, true);
         assert_eq!(
             result.system_instruction.as_deref(),
             Some("part 1\n\npart 2")
@@ -849,7 +940,7 @@ mod tests {
             "my reply".to_string(),
             Some("agent1".to_string()),
         )];
-        let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
+        let result = convert_messages(&messages, "agent1", &OtherAgentRole::User, true);
         assert_eq!(result.contents[0]["role"], "model");
     }
 
@@ -860,7 +951,7 @@ mod tests {
             "other reply".to_string(),
             Some("agent2".to_string()),
         )];
-        let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
+        let result = convert_messages(&messages, "agent1", &OtherAgentRole::User, true);
         assert_eq!(result.contents[0]["role"], "user");
         assert_eq!(
             result.contents[0]["parts"][0]["text"],
@@ -875,7 +966,7 @@ mod tests {
             "other reply".to_string(),
             Some("agent2".to_string()),
         )];
-        let result = convert_messages(&messages, "agent1", &OtherAgentRole::Assistant);
+        let result = convert_messages(&messages, "agent1", &OtherAgentRole::Assistant, true);
         // Google uses "model" instead of "assistant".
         assert_eq!(result.contents[0]["role"], "model");
         assert_eq!(
@@ -898,7 +989,7 @@ mod tests {
                 Some("agentB".to_string()),
             ),
         ];
-        let result = convert_messages(&messages, "agentC", &OtherAgentRole::User);
+        let result = convert_messages(&messages, "agentC", &OtherAgentRole::User, true);
         assert_eq!(result.contents.len(), 1);
         assert_eq!(result.contents[0]["role"], "user");
         assert_eq!(
@@ -914,7 +1005,7 @@ mod tests {
             ChatMessage::text(ChatRole::Assistant, "b".to_string(), Some("a2".to_string())),
             ChatMessage::text(ChatRole::Assistant, "c".to_string(), Some("a3".to_string())),
         ];
-        let result = convert_messages(&messages, "me", &OtherAgentRole::User);
+        let result = convert_messages(&messages, "me", &OtherAgentRole::User, true);
         assert_eq!(result.contents.len(), 1);
     }
 
@@ -928,13 +1019,13 @@ mod tests {
                 Some("agent1".to_string()),
             ),
         ];
-        let result = convert_messages(&messages, "agent1", &OtherAgentRole::User);
+        let result = convert_messages(&messages, "agent1", &OtherAgentRole::User, true);
         assert_eq!(result.contents.len(), 2);
     }
 
     #[test]
     fn convert_empty_messages() {
-        let result = convert_messages(&[], "agent1", &OtherAgentRole::User);
+        let result = convert_messages(&[], "agent1", &OtherAgentRole::User, true);
         assert!(result.system_instruction.is_none());
         assert!(result.contents.is_empty());
     }
@@ -1191,5 +1282,114 @@ mod tests {
         assert_eq!(tool_array.len(), 2);
         assert!(tool_array[0].get("functionDeclarations").is_some());
         assert!(tool_array[1].get("google_search").is_some());
+    }
+
+    #[test]
+    fn convert_tool_result_with_image() {
+        use crate::ImageContent;
+        let msg = ChatMessage {
+            role: ChatRole::Tool,
+            content: "[Image: test.png]".to_string(),
+            name: Some("read_file".to_string()),
+            tool_calls: None,
+            tool_call_id: Some("call_1".to_string()),
+            server_tool_uses: Vec::new(),
+            addressee: None,
+            whisper_targets: None,
+            created_at: chrono::Utc::now(),
+            usage: None,
+            images: vec![ImageContent {
+                data: b"fake_png_data".to_vec(),
+                media_type: "image/png".to_string(),
+                filename: Some("test.png".to_string()),
+            }],
+        };
+        let converted = convert_messages(&[msg], "agent", &OtherAgentRole::User, true);
+        let part = &converted.contents[0]["parts"][0];
+        let fr = &part["functionResponse"];
+        assert_eq!(fr["name"], "read_file");
+        assert_eq!(fr["id"], "call_1");
+        // response should use $ref to reference the displayName
+        assert_eq!(fr["response"]["image_ref"]["$ref"], "test.png");
+        // Should have inlineData in parts with matching displayName
+        let inline_parts = fr["parts"].as_array().unwrap();
+        assert_eq!(inline_parts[0]["inlineData"]["mimeType"], "image/png");
+        assert_eq!(inline_parts[0]["inlineData"]["displayName"], "test.png");
+    }
+
+    #[test]
+    fn convert_tool_result_without_image_has_id() {
+        let msg = ChatMessage {
+            role: ChatRole::Tool,
+            content: "file content".to_string(),
+            name: Some("read_file".to_string()),
+            tool_calls: None,
+            tool_call_id: Some("call_2".to_string()),
+            server_tool_uses: Vec::new(),
+            addressee: None,
+            whisper_targets: None,
+            created_at: chrono::Utc::now(),
+            usage: None,
+            images: vec![],
+        };
+        let converted = convert_messages(&[msg], "agent", &OtherAgentRole::User, true);
+        let fr = &converted.contents[0]["parts"][0]["functionResponse"];
+        assert_eq!(fr["name"], "read_file");
+        assert_eq!(fr["id"], "call_2");
+        // No parts array for plain text
+        assert!(fr.get("parts").is_none());
+    }
+
+    #[test]
+    fn convert_tool_result_with_image_v1() {
+        use crate::ImageContent;
+        let msg = ChatMessage {
+            role: ChatRole::Tool,
+            content: "[Image: test.png]".to_string(),
+            name: Some("read_file".to_string()),
+            tool_calls: None,
+            tool_call_id: Some("call_1".to_string()),
+            server_tool_uses: Vec::new(),
+            addressee: None,
+            whisper_targets: None,
+            created_at: chrono::Utc::now(),
+            usage: None,
+            images: vec![ImageContent {
+                data: b"fake_png_data".to_vec(),
+                media_type: "image/png".to_string(),
+                filename: Some("test.png".to_string()),
+            }],
+        };
+        // v1 mode: inlineData as sibling, no id
+        let converted = convert_messages(&[msg], "agent", &OtherAgentRole::User, false);
+        let parts = converted.contents[0]["parts"].as_array().unwrap();
+        // First part: functionResponse (no id)
+        let fr = &parts[0]["functionResponse"];
+        assert_eq!(fr["name"], "read_file");
+        assert!(fr.get("id").is_none());
+        // Second part: sibling inlineData
+        assert_eq!(parts[1]["inlineData"]["mimeType"], "image/png");
+    }
+
+    #[test]
+    fn convert_tool_result_without_image_v1_no_id() {
+        let msg = ChatMessage {
+            role: ChatRole::Tool,
+            content: "file content".to_string(),
+            name: Some("read_file".to_string()),
+            tool_calls: None,
+            tool_call_id: Some("call_2".to_string()),
+            server_tool_uses: Vec::new(),
+            addressee: None,
+            whisper_targets: None,
+            created_at: chrono::Utc::now(),
+            usage: None,
+            images: vec![],
+        };
+        // v1 mode: no id field
+        let converted = convert_messages(&[msg], "agent", &OtherAgentRole::User, false);
+        let fr = &converted.contents[0]["parts"][0]["functionResponse"];
+        assert_eq!(fr["name"], "read_file");
+        assert!(fr.get("id").is_none());
     }
 }

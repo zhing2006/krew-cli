@@ -99,6 +99,7 @@ impl ToolHandler for EditFileTool {
                     args.file_path
                 ),
                 is_error: true,
+                images: vec![],
             });
         }
         if match_count > 1 {
@@ -109,6 +110,7 @@ impl ToolHandler for EditFileTool {
                     args.file_path
                 ),
                 is_error: true,
+                images: vec![],
             });
         }
 
@@ -131,6 +133,7 @@ impl ToolHandler for EditFileTool {
         Ok(ToolResult {
             content: unified,
             is_error: false,
+            images: vec![],
         })
     }
 }

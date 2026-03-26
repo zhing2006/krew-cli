@@ -1,6 +1,6 @@
 # krew-cli 使用手册
 
-> 版本: 0.6.0
+> 版本: 0.7.0
 
 ---
 
@@ -782,7 +782,7 @@ argument-hint: <文件路径>
 
 | 工具 | 描述 | 审批 |
 | ---- | ---- | ---- |
-| `read_file` | 读取文件（带行号，支持 offset/limit） | 自动 |
+| `read_file` | 读取文件（带行号，支持 offset/limit）；支持读取图片文件（png/jpg/jpeg/gif/webp）供 AI 查看 | 自动 |
 | `glob` | 文件模式匹配 | 自动 |
 | `grep` | 内容搜索（正则，支持 include 过滤） | 自动 |
 | `write_file` | 创建/覆写文件（自动创建父目录） | 可配 |
