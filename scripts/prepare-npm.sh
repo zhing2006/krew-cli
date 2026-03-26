@@ -5,15 +5,16 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 if [ -n "${1:-}" ]; then
   VERSION="$1"
 else
-  VERSION="$(grep '^version' "$SCRIPT_DIR/../crates/krew-cli/Cargo.toml" | head -1 | sed 's/.*"\(.*\)"/\1/')"
+  VERSION="$(grep '^version' "$ROOT_DIR/crates/krew-cli/Cargo.toml" | head -1 | sed 's/.*"\(.*\)"/\1/')"
   echo "Auto-detected version: $VERSION"
 fi
 TAG="v${VERSION}"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 NPM_DIR="$ROOT_DIR/npm"
 
 echo "Downloading release binaries for $TAG..."
