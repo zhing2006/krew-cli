@@ -30,7 +30,7 @@ Run multiple AI models (GPT, Claude, Gemini, etc.) in a single terminal session 
 - **# Whisper** — `#name` for private messages invisible to other agents, multi-target whisper groups
 - **Shared Context** — All agents share conversation history (whisper messages are filtered by visibility), enabling cross-agent collaboration
 - **AI-to-AI Routing** — Agents can `@mention` each other, triggering automatic dispatch (immediate/queued strategies)
-- **Built-in Tools** — File read/write/edit, shell execution, glob/grep search, URL fetch, skill activation
+- **Built-in Tools** — File read/write/edit, image viewing, shell execution, glob/grep search, URL fetch, skill activation
 - **MCP Integration** — Extend agent capabilities via Model Context Protocol servers (stdio + HTTP)
 - **Skill System** — Discoverable, activatable skills with `SKILL.md` definitions for specialized instructions
 - **Custom Commands** — User-defined slash commands via Markdown files with argument substitution and bash preprocessing

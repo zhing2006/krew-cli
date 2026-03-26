@@ -221,6 +221,7 @@ pub(super) fn prune_stale_tool_calls(messages: Vec<ChatMessage>) -> Vec<ChatMess
                 whisper_targets: msg.whisper_targets,
                 created_at: msg.created_at,
                 usage: msg.usage,
+                images: Vec::new(),
             });
             continue;
         }
@@ -282,6 +283,7 @@ mod tests {
             whisper_targets: None,
             created_at: chrono::Utc::now(),
             usage: None,
+            images: Vec::new(),
         }
     }
 
@@ -297,6 +299,7 @@ mod tests {
             whisper_targets: None,
             created_at: chrono::Utc::now(),
             usage: None,
+            images: Vec::new(),
         }
     }
 

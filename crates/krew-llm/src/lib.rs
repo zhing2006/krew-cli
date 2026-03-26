@@ -80,6 +80,17 @@ pub trait LlmClient: Send + Sync {
     ) -> Result<Pin<Box<dyn Stream<Item = StreamEvent> + Send>>, LlmError>;
 }
 
+/// Image content attached to a message (e.g. from read_file on an image).
+#[derive(Debug, Clone)]
+pub struct ImageContent {
+    /// Raw image bytes.
+    pub data: Vec<u8>,
+    /// MIME type (e.g. "image/png", "image/jpeg").
+    pub media_type: String,
+    /// Original filename (e.g. "screenshot.png").
+    pub filename: Option<String>,
+}
+
 /// Unified message format used when communicating with LLM providers.
 #[derive(Debug, Clone)]
 pub struct ChatMessage {
@@ -104,6 +115,8 @@ pub struct ChatMessage {
     pub created_at: DateTime<Utc>,
     /// Per-message token usage (assistant messages only).
     pub usage: Option<Usage>,
+    /// Image data attached to this message (not persisted to session files).
+    pub images: Vec<ImageContent>,
 }
 
 /// Information about a server-side tool use (e.g. web_search, google_search).
@@ -142,6 +155,7 @@ impl ChatMessage {
             whisper_targets: None,
             created_at: Utc::now(),
             usage: None,
+            images: Vec::new(),
         }
     }
 
@@ -158,6 +172,7 @@ impl ChatMessage {
             whisper_targets: None,
             created_at: Utc::now(),
             usage: None,
+            images: Vec::new(),
         }
     }
 

@@ -7,8 +7,8 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::{
-    ToolContext, ToolError, ToolHandler, ToolResult, ToolSpec, check_binary, check_file_size,
-    validate_path,
+    ImageContent, MAX_IMAGE_SIZE, ToolContext, ToolError, ToolHandler, ToolResult, ToolSpec,
+    check_binary, check_file_size, validate_path,
 };
 
 const MAX_LINE_LENGTH: usize = 2000;
@@ -37,6 +37,18 @@ fn default_limit() -> usize {
     DEFAULT_LIMIT
 }
 
+/// Return the MIME type for supported image extensions, or None.
+fn image_media_type(path: &std::path::Path) -> Option<String> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => Some("image/png".to_string()),
+        "jpg" | "jpeg" => Some("image/jpeg".to_string()),
+        "gif" => Some("image/gif".to_string()),
+        "webp" => Some("image/webp".to_string()),
+        _ => None,
+    }
+}
+
 impl ReadFileTool {
     pub fn new(cwd: PathBuf, restrict_workspace: bool) -> Self {
         Self {
@@ -45,11 +57,61 @@ impl ReadFileTool {
         }
     }
 
+    /// Read an image file and return its bytes as ImageContent.
+    async fn read_image(
+        &self,
+        path: &std::path::Path,
+        media_type: &str,
+    ) -> Result<ToolResult, ToolError> {
+        let size = std::fs::metadata(path)
+            .map_err(|e| {
+                ToolError::Execution(format!(
+                    "failed to read metadata for '{}': {e}",
+                    path.display()
+                ))
+            })?
+            .len();
+
+        if size > MAX_IMAGE_SIZE {
+            let size_mb = size / (1024 * 1024);
+            return Ok(ToolResult {
+                content: format!(
+                    "Image file '{}' is too large ({size_mb} MB). Maximum allowed size for images is {} MB.",
+                    path.display(),
+                    MAX_IMAGE_SIZE / (1024 * 1024)
+                ),
+                is_error: true,
+                images: vec![],
+            });
+        }
+
+        let data = tokio::fs::read(path).await.map_err(|e| {
+            ToolError::Execution(format!("failed to read image '{}': {e}", path.display()))
+        })?;
+
+        let filename = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        Ok(ToolResult {
+            content: format!("[Image: {filename}]"),
+            images: vec![ImageContent {
+                data,
+                media_type: media_type.to_string(),
+                filename: Some(filename.clone()),
+            }],
+            is_error: false,
+        })
+    }
+
     pub fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "read_file".to_string(),
             description: "Read file contents. Output includes line numbers prefixed with 'L'. \
-                          Use offset and limit for partial reads on large files."
+                          Use offset and limit for partial reads on large files. \
+                          Also supports reading image files (png, jpg, jpeg, gif, webp) — \
+                          use this tool to view image contents."
                 .to_string(),
             parameters: json!({
                 "type": "object",
@@ -100,6 +162,11 @@ impl ToolHandler for ReadFileTool {
         }
 
         let path = validate_path(&args.file_path, &self.cwd, self.restrict_workspace)?;
+
+        // Check for image files before binary detection (images are binary).
+        if let Some(media_type) = image_media_type(&path) {
+            return self.read_image(&path, &media_type).await;
+        }
 
         if let Some(result) = check_file_size(&path) {
             return Ok(result);
@@ -161,6 +228,7 @@ impl ToolHandler for ReadFileTool {
                     offset = args.offset
                 ),
                 is_error: true,
+                images: vec![],
             });
         }
 
@@ -170,6 +238,7 @@ impl ToolHandler for ReadFileTool {
         Ok(ToolResult {
             content: format!("{content}\n\n({num_lines} lines)"),
             is_error: false,
+            images: vec![],
         })
     }
 }

@@ -147,6 +147,7 @@ impl ToolHandler for FetchUrlTool {
             return Ok(ToolResult {
                 content: format!("HTTP {status} when fetching '{url}'"),
                 is_error: true,
+                images: vec![],
             });
         }
 
@@ -176,6 +177,7 @@ impl ToolHandler for FetchUrlTool {
         Ok(ToolResult {
             content: markdown,
             is_error: false,
+            images: vec![],
         })
     }
 }

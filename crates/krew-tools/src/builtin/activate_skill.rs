@@ -108,6 +108,7 @@ impl ToolHandler for ActivateSkillTool {
                         self.skills.keys().cloned().collect::<Vec<_>>().join(", ")
                     ),
                     is_error: true,
+                    images: vec![],
                 });
             }
         };
@@ -123,6 +124,7 @@ impl ToolHandler for ActivateSkillTool {
                         args.name
                     ),
                     is_error: false,
+                    images: vec![],
                 });
             }
             activated.insert(args.name.clone());
@@ -164,6 +166,7 @@ impl ToolHandler for ActivateSkillTool {
         Ok(ToolResult {
             content: result,
             is_error: false,
+            images: vec![],
         })
     }
 }

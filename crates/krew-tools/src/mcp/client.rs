@@ -188,7 +188,11 @@ impl McpClient {
             .collect::<Vec<_>>()
             .join("\n");
 
-        Ok(ToolResult { content, is_error })
+        Ok(ToolResult {
+            content,
+            is_error,
+            images: vec![],
+        })
     }
 }
 

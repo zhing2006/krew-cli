@@ -1,6 +1,6 @@
 # krew-cli — 技术设计文档 (TDD)
 
-> 版本: 0.6.0 | 日期: 2026-03-25
+> 版本: 0.7.0 | 日期: 2026-03-26
 > 参考: [PDD](./PDD.md) | 参考项目: [codex CLI](https://github.com/openai/codex)
 
 ---
@@ -600,6 +600,13 @@ struct ToolSpec {
 struct ToolResult {
     content: String,
     is_error: bool,
+    images: Vec<ImageContent>,  // image data from read_file on image files
+}
+
+struct ImageContent {
+    data: Vec<u8>,              // raw image bytes
+    media_type: String,         // MIME type (e.g. "image/png")
+    filename: Option<String>,   // original filename
 }
 ```
 
@@ -627,7 +634,7 @@ impl ToolRegistry {
 
 | 工具名 | 功能 | 类别 | suggest 下 | auto-edit 下 | full-auto 下 |
 | ------ | ---- | ---- | --------- | ----------- | ----------- |
-| `read_file` | 读取文件内容（带行号，支持 offset/limit） | 读操作 | 自动 | 自动 | 自动 |
+| `read_file` | 读取文件内容（带行号，支持 offset/limit）；支持图片文件（png/jpg/jpeg/gif/webp），自动识别并返回图片数据，上限 20MB | 读操作 | 自动 | 自动 | 自动 |
 | `write_file` | 写入/创建文件（自动创建父目录） | 写操作 | 需确认 | 自动 | 自动 |
 | `edit_file` | 搜索替换编辑（验证唯一匹配，生成 unified diff） | 写操作 | 需确认 | 自动 | 自动 |
 | `shell` | 执行 Shell 命令（默认超时 120s，输出限制 100KB） | Shell | 需确认* | 需确认* | 自动 |
@@ -651,6 +658,21 @@ impl ToolRegistry {
 - 响应大小限制 1MB，超出截断
 - 域名白名单匹配：URL 域名以白名单项结尾即匹配（如 `docs.github.com` 匹配 `github.com`）
 - 跟随重定向，超时 30 秒
+
+**read_file 图片输入：**
+
+`read_file` 工具支持读取图片文件（png/jpg/jpeg/gif/webp），实现多模态输入：
+
+- **扩展名检测**：在 `check_binary()` 之前按扩展名判断，匹配到图片格式时跳过 binary 检测
+- **大小限制**：图片专用上限 `MAX_IMAGE_SIZE = 20MB`（低于文本文件的 100MB），因图片数据会常驻 messages 历史
+- **数据传递**：`ToolResult.images` → `agent_loop` 映射为 `ChatMessage.images`（`krew-tools` 与 `krew-llm` 各自定义 `ImageContent`，由 `krew-core` 逐字段映射）
+- **Provider 序列化**：各 provider 在 `convert_messages()` 中将图片 bytes 编码为 base64 并按各自 API 格式序列化
+  - Anthropic：`content` 数组中 `type: "image"` + `source.type: "base64"`
+  - Google Gemini：`functionResponse.parts[].inlineData`（含 `displayName` + `$ref` 引用）
+  - OpenAI Responses：`output` 数组中 `type: "input_image"` + data URI
+  - OpenAI Chat Completions：降级为纯文本（该 API 不支持 tool result 带图片）
+- **持久化**：`ChatMessage.images` 标记 `#[serde(skip)]`，不写入 session 文件
+- **跨 Agent 可见性**：仅调用 `read_file` 的 Agent 能看到图片数据；其他 Agent 看到的是折叠后的文本摘要 `[Image: filename]`
 
 #### 3.4.4 MCP 集成
 

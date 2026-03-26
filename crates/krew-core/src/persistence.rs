@@ -186,6 +186,7 @@ pub fn load_session_from_disk(session_path: &Path) -> anyhow::Result<RestoredSes
                 completion_tokens: u.completion_tokens,
                 total_tokens: u.total_tokens,
             }),
+            images: Vec::new(),
         });
     }
 

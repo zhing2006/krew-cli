@@ -380,6 +380,7 @@ mod tests {
             whisper_targets: None,
             created_at: chrono::Utc::now(),
             usage: None,
+            images: Vec::new(),
         }
     }
 
@@ -458,6 +459,7 @@ mod tests {
             whisper_targets: None,
             created_at: chrono::Utc::now(),
             usage: None,
+            images: Vec::new(),
         }
     }
 
@@ -475,6 +477,7 @@ mod tests {
             whisper_targets: None,
             created_at: chrono::Utc::now(),
             usage: None,
+            images: Vec::new(),
         }
     }
 
@@ -589,6 +592,7 @@ mod tests {
             whisper_targets: None,
             created_at: chrono::Utc::now(),
             usage: None,
+            images: Vec::new(),
         }
     }
 

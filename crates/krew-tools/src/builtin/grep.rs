@@ -239,6 +239,7 @@ impl ToolHandler for GrepTool {
             return Ok(ToolResult {
                 content: "No matches found.".to_string(),
                 is_error: false,
+                images: vec![],
             });
         }
 
@@ -246,6 +247,7 @@ impl ToolHandler for GrepTool {
         Ok(ToolResult {
             content: format!("{content}\n\n({match_count} matches)"),
             is_error: false,
+            images: vec![],
         })
     }
 }
