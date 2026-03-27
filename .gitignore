@@ -29,6 +29,9 @@ Cargo.lock
 # .codex
 .codex/*
 
+# .github copliot
+.github/*
+
 # Custom
 .vscode/*
 .krew/*
