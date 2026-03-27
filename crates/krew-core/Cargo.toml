@@ -1,6 +1,6 @@
 [package]
 name = "krew-core"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2024"
 
 [dependencies]
@@ -19,6 +19,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 serde_yaml = { workspace = true }
 walkdir = { workspace = true }
+async-trait = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

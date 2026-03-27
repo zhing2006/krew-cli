@@ -983,9 +983,63 @@ struct SkillsConfig {
 }
 ```
 
-### 3.6 会话持久化
+### 3.6 Sub-Agent 系统
 
-#### 3.6.1 TOML 文件存储
+Sub-Agent 提供上下文隔离的子代理执行机制，让 Agent 将专项任务委派给专注的 Sub-Agent 在独立上下文中执行。
+
+#### 3.6.1 发现机制
+
+复用 `discovery::discovery_paths(cwd, "agents")` 生成扫描路径，在每个目录下扫描顶层 `*.md` 文件（非递归）。解析 YAML frontmatter（`name` + `description` 必需，`color`/`maxTurns` 可选），body 作为 system_prompt。Claude Code 兼容字段（`tools`、`model` 等）通过 `#[serde(flatten)]` 捕获并忽略。first-found-wins 去重。
+
+代码位置：`krew-core::sub_agent::discovery`
+
+#### 3.6.2 RunAgentTool 实现
+
+`RunAgentTool` 在 `krew-core` 中实现 `krew_tools::ToolHandler` trait，注册到 `ToolRegistry` 中（与 MCP tool 注册方式一致）。
+
+**核心字段：**
+- `defs: HashMap<String, SubAgentDef>` — Sub-Agent 定义
+- `is_running: Arc<AtomicBool>` — depth guard 防嵌套
+- 父 Agent 运行时资源引用（`client`、`tools`、`approval_cache` 等全部共享）
+
+**执行流程：**
+1. CAS `is_running`（嵌套则报错 `"Sub-agent nesting is not allowed"`）
+2. 从 `ctx.parent_event_tx` downcast 取得父 Agent event sender
+3. 构建隔离 messages `[system_prompt, user(task)]`
+4. 构建 `tool_defs` 时过滤掉 `run_agent`（LLM 看不到）
+5. 调用 `run_agent_loop` 启动 Sub-Agent 循环
+6. 通过 spawned consumer task 消费 sub_rx 事件：
+   - `ToolCallStart/Output/Done` → 通过 `ctx.output_tx` 转发
+   - `ApprovalRequest` → 通过 parent sender 转发到 TUI
+   - `TextDelta` → 累积到 final_text（不转发）
+7. Done 时返回 final_text 作为 tool result
+
+代码位置：`krew-core::sub_agent::run_agent_tool`
+
+#### 3.6.3 事件转发
+
+```txt
+Sub-Agent agent_loop
+  │ (sub_tx) → AgentEvent
+  ▼
+RunAgentTool::execute() 消费 sub_rx
+  │
+  ├── ToolCallStart/Output/Done → ctx.output_tx (ToolCallOutput 管线)
+  ├── ApprovalRequest           → parent_event_tx (downcast, 转发到父 channel)
+  ├── TextDelta                 → 累积到 final_text (不转发)
+  └── Done/Error                → return ToolResult
+```
+
+`parent_event_tx` 通过 `ToolContext` 的 `Option<Box<dyn Any + Send + Sync>>` 字段传递，由 `create_tool_context()` 在处理 `run_agent` tool 时设置为父 Agent 当前 turn 的 `UnboundedSender<AgentEvent>` clone。
+
+#### 3.6.4 防嵌套双重保障
+
+1. **tool_defs 过滤**: Sub-Agent 的 LLM 看不到 `run_agent` tool
+2. **execute() depth guard**: `Arc<AtomicBool>` CAS 硬保证，即使 prompt injection 触发也会拒绝
+
+### 3.7 会话持久化
+
+#### 3.7.1 TOML 文件存储
 
 每个会话存储为一个 TOML 文件，文件名为会话 ID：
 
@@ -1071,9 +1125,9 @@ total_tokens = 5642
 
 **Rewound 状态守卫**：`save_session()` 统一检查 `rewound` 标记，标记为 true 时拒绝保存（避免截断后的历史覆盖原始完整历史）。发送新消息时先生成新 session ID，清除 `rewound` 标记，然后正常保存。
 
-### 3.7 配置管理
+### 3.8 配置管理
 
-#### 3.7.1 配置加载优先级
+#### 3.8.1 配置加载优先级
 
 ```txt
 内置默认值
@@ -1104,7 +1158,7 @@ CLI 参数                      (命令行覆盖)
 - agent `name` 不可重复
 - `"all"` 为保留字，不可用作 agent 名称（大小写敏感，仅匹配全小写）
 
-#### 3.7.2 配置数据结构
+#### 3.8.2 配置数据结构
 
 ```rust
 #[derive(Deserialize)]
@@ -1222,7 +1276,7 @@ struct SkillsConfig {
 }
 ```
 
-#### 3.7.3 项目级指令文件（AGENTS.md）
+#### 3.8.3 项目级指令文件（AGENTS.md）
 
 krew 启动时自动扫描工作目录及其父目录链中的 `AGENTS.md` 文件，将内容注入到所有 Agent 的系统提示词中。
 
@@ -1275,7 +1329,7 @@ System Prompt 层级合并顺序：
 
 **加载时机：** `App::new()` 中一次性加载，结果存储在 `App.project_instructions` 字段，所有 Agent 共享。文件不存在时静默返回 `None`。
 
-#### 3.7.4 格式保留配置写入（Config Writer）
+#### 3.8.4 格式保留配置写入（Config Writer）
 
 `krew-config::writer` 模块使用 `toml_edit` crate 实现格式保留的 TOML 配置文件写入，供 `krew config` 子命令使用。
 
@@ -1324,7 +1378,7 @@ struct AgentWriteData {
 - 添加/删除 Agent 时自动维护 `settings.reply_order`
 - 文件不存在时自动创建（含父目录）
 
-#### 3.7.5 List Models API
+#### 3.8.5 List Models API
 
 `krew-llm::list_models` 模块提供从 LLM Provider API 获取可用模型列表的功能，供 config wizard 的 Smart Preset 模式使用。
 
@@ -1360,7 +1414,7 @@ fn fallback_models(provider_type: ProviderType) -> Vec<ModelInfo>;
 
 超时：官方 OpenAI/Anthropic/Google 为 5 秒，OpenAI 兼容 Provider 为 15 秒（兼容服务可能返回大量模型）。结果按 ID 字母排序。API 调用失败时回退到硬编码列表。
 
-#### 3.7.6 Config CLI 子命令
+#### 3.8.6 Config CLI 子命令
 
 `krew-cli::config_cmd` 模块实现 `krew config` 子命令系统。所有子命令使用 `tokio::runtime::Builder::new_current_thread()` 轻量 runtime，不初始化 TUI terminal。
 
@@ -1391,21 +1445,21 @@ enum ConfigAction {
 
 **交互组件：** 使用 `dialoguer` crate 的 `Select`、`FuzzySelect`、`Input`、`Password`、`Confirm` 实现终端交互。
 
-### 3.8 TUI 实现细节
+### 3.9 TUI 实现细节
 
-#### 3.8.1 Inline TUI 框架
+#### 3.9.1 Inline TUI 框架
 
 基于 ratatui + crossterm，不使用 alternate screen，而是使用 inline viewport（自定义 Terminal 实现）。消息通过 `insert_before` 插入到 viewport 上方，viewport 动态调整高度。支持 keyboard enhancement（静默降级）。
 
-#### 3.8.2 流式渲染管线
+#### 3.9.2 流式渲染管线
 
 以 ~60Hz 频率执行 commit tick，驱动 token 队列 drain 和行插入。使用 `AdaptiveChunkingPolicy::decide()` 决定每次 drain 的数量，平衡渲染流畅性与响应速度。
 
-#### 3.8.3 Agent 状态指示器
+#### 3.9.3 Agent 状态指示器
 
 Agent 生成回复期间，在 viewport 分隔线上方显示状态行：闪烁 spinner（`●`/`◦`，600ms 间隔）、Agent 显示名、"Working" 文字、已用时间（紧凑格式：`45s` / `1m 23s` / `1h 05m`）、中断提示 "ESC to interrupt"。`ResponseStart` 出现，`Done`/`Error` 消失。
 
-#### 3.8.4 Diff 渲染
+#### 3.9.4 Diff 渲染
 
 `edit_file` 工具的审批 overlay 显示 colored diff 预览：
 
@@ -1415,15 +1469,15 @@ Agent 生成回复期间，在 viewport 分隔线上方显示状态行：闪烁 
 - **语法高亮**：使用 syntect（超过 512KB 或 10,000 行跳过高亮）
 - **Unicode 感知**：CJK 字符宽度计算（unicode-width）
 
-#### 3.8.5 补全弹窗
+#### 3.9.5 补全弹窗
 
 输入 `/`、`@`、`#` 触发对应的补全弹窗，替换状态栏区域并扩展 viewport 高度。支持键盘导航（上下箭头、Tab/Enter 确认、Esc 关闭），同一时间只能显示一个弹窗。Slash 命令补全同时包含内置命令和自定义命令。
 
-### 3.9 日志系统
+### 3.10 日志系统
 
 使用 `tracing-subscriber` + `tracing-appender` 将日志写入 `.krew/logs/` 目录。按天滚动（daily rolling），默认保留 7 天，过期自动删除。日志不输出到 stdout/stderr（不干扰 TUI）。`--verbose` 参数切换 DEBUG/INFO 级别。
 
-### 3.10 进程统计
+### 3.11 进程统计
 
 `ProcessStats::collect()` 跨平台查询当前进程的物理内存占用（RSS）和线程数量：
 

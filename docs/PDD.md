@@ -578,9 +578,55 @@ git diff | krew -p "@claude summarize these changes"
 2. 清空上下文
 3. 开始全新会话
 
-### 4.9 配置系统
+### 4.9 Sub-Agent 系统（实验性）
 
-#### 4.9.1 配置文件位置
+Sub-Agent 是一种**上下文隔离**的子代理机制。当 Agent 需要执行专项任务（如 git 提交、代码调研）时，可以将任务委派给 Sub-Agent，在独立的上下文中执行，避免大量 tool call 消息污染主对话。
+
+#### 4.9.1 定义格式
+
+Sub-Agent 通过 Markdown 文件定义，格式兼容 Claude Code 的 `.claude/agents/*.md`：
+
+```markdown
+---
+name: git
+description: Git operations agent
+color: cyan        # 可选，TUI 显示颜色
+maxTurns: 50       # 可选，最大循环轮次（默认 30）
+---
+
+You are a git expert. Handle all git operations.
+```
+
+YAML frontmatter 中 `name` 和 `description` 为必需字段，body 作为 Sub-Agent 的 system prompt。Claude Code 的 `tools`、`model` 等字段会被解析但忽略。
+
+#### 4.9.2 发现机制
+
+系统从以下路径扫描 `*.md` 文件（按优先级从高到低，first-found-wins 去重）：
+
+1. `<cwd>/.krew/agents/` — 项目级，krew-specific
+2. `<cwd>/.agents/agents/` — 项目级，cross-client
+3. `<cwd>/.claude/agents/` — 项目级，Claude Code 兼容
+4. `<home>/.krew/agents/` — 用户级，krew-specific
+5. `<home>/.agents/agents/` — 用户级，cross-client
+6. `<home>/.claude/agents/` — 用户级，Claude Code 兼容
+
+#### 4.9.3 调用方式
+
+Agent 通过 `run_agent` tool 调用 Sub-Agent：
+
+- 同步阻塞执行，Sub-Agent 完成后返回结果
+- Sub-Agent 在完全隔离的上下文中运行（独立的消息历史）
+- Sub-Agent 使用父 Agent 的所有工具（含 MCP），但不能嵌套调用 `run_agent`
+- Sub-Agent 的 tool 调用过程实时流式展示给用户
+- Sub-Agent 遵守父 Agent 的审批配置
+
+#### 4.9.4 功能开关
+
+通过 `sub_agent_enabled = true` 启用（默认关闭）。关闭时完全不读取 agent 定义文件、不注册 tool、零开销。
+
+### 4.10 配置系统
+
+#### 4.10.1 配置文件位置
 
 | 位置 | 用途 |
 | ---- | ---- |

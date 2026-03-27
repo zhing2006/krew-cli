@@ -26,6 +26,7 @@ async fn echo_command_streams_output() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let ctx = ToolContext {
         output_tx: Some(tx),
+        parent_event_tx: None,
     };
 
     let result = tool
