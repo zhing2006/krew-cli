@@ -11,3 +11,4 @@ pub mod persistence;
 pub mod process_stats;
 pub mod router;
 pub mod skill;
+pub mod sub_agent;

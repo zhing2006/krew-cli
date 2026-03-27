@@ -7,6 +7,7 @@ fn instructions_and_system_prompt() {
     let result = build_system_prompt(
         Some("Use Rust conventions"),
         None,
+        None,
         Some("You are a helpful assistant"),
     );
     assert_eq!(
@@ -17,7 +18,7 @@ fn instructions_and_system_prompt() {
 
 #[test]
 fn instructions_without_system_prompt() {
-    let result = build_system_prompt(Some("Use Rust conventions"), None, None);
+    let result = build_system_prompt(Some("Use Rust conventions"), None, None, None);
     assert_eq!(
         result.unwrap(),
         "<project-instructions>\nUse Rust conventions\n</project-instructions>"
@@ -26,7 +27,7 @@ fn instructions_without_system_prompt() {
 
 #[test]
 fn instructions_with_empty_system_prompt() {
-    let result = build_system_prompt(Some("Use Rust conventions"), None, Some(""));
+    let result = build_system_prompt(Some("Use Rust conventions"), None, None, Some(""));
     assert_eq!(
         result.unwrap(),
         "<project-instructions>\nUse Rust conventions\n</project-instructions>"
@@ -35,13 +36,13 @@ fn instructions_with_empty_system_prompt() {
 
 #[test]
 fn no_instructions_with_system_prompt() {
-    let result = build_system_prompt(None, None, Some("You are a helpful assistant"));
+    let result = build_system_prompt(None, None, None, Some("You are a helpful assistant"));
     assert_eq!(result.unwrap(), "You are a helpful assistant");
 }
 
 #[test]
 fn no_instructions_no_system_prompt() {
-    let result = build_system_prompt(None, None, None);
+    let result = build_system_prompt(None, None, None, None);
     assert!(result.is_none());
 }
 
@@ -49,7 +50,12 @@ fn no_instructions_no_system_prompt() {
 fn instructions_skills_and_system_prompt() {
     let catalog =
         "<available-skills>\n  <skill name=\"review\">Review code.</skill>\n</available-skills>";
-    let result = build_system_prompt(Some("Use Rust"), Some(catalog), Some("You are helpful"));
+    let result = build_system_prompt(
+        Some("Use Rust"),
+        Some(catalog),
+        None,
+        Some("You are helpful"),
+    );
     let output = result.unwrap();
     assert!(output.starts_with("<project-instructions>"));
     assert!(output.contains("<available-skills>"));
@@ -66,7 +72,7 @@ fn instructions_skills_and_system_prompt() {
 fn skills_without_instructions() {
     let catalog =
         "<available-skills>\n  <skill name=\"test\">Test skill.</skill>\n</available-skills>";
-    let result = build_system_prompt(None, Some(catalog), Some("Agent prompt"));
+    let result = build_system_prompt(None, Some(catalog), None, Some("Agent prompt"));
     let output = result.unwrap();
     assert!(output.starts_with("<available-skills>"));
     assert!(output.contains("Agent prompt"));
@@ -74,7 +80,7 @@ fn skills_without_instructions() {
 
 #[test]
 fn empty_skill_catalog_ignored() {
-    let result = build_system_prompt(None, Some(""), Some("Agent prompt"));
+    let result = build_system_prompt(None, Some(""), None, Some("Agent prompt"));
     assert_eq!(result.unwrap(), "Agent prompt");
 }
 

@@ -13,9 +13,9 @@ use tokio::sync::mpsc;
 
 use crate::event::{AgentEvent, ApprovalCache};
 
-pub use init::{InitAgentsResult, init_agents};
+pub use init::{InitAgentsResult, init_agents, register_sub_agents};
 
-use agent_loop::{AgentLoopContext, run_agent_loop};
+pub(crate) use agent_loop::{AgentLoopContext, run_agent_loop};
 use prepare::prepare_messages_for_agent;
 
 /// Default maximum number of tool-call loop rounds per agent turn.
@@ -43,6 +43,8 @@ pub struct AgentRuntime {
     pub fetch_allow_domains: Vec<String>,
     /// Pre-built skill catalog XML for system prompt injection.
     pub skill_catalog: Option<String>,
+    /// Pre-built Sub-Agent catalog XML for system prompt injection.
+    pub sub_agent_catalog: Option<String>,
     /// Language for agent responses (injected into system prompt when set).
     pub language: Option<String>,
 }
@@ -66,6 +68,7 @@ impl AgentRuntime {
         max_tool_rounds: Option<u32>,
         peer_agents: Option<&[PeerAgent]>,
         whisper_targets: Option<Vec<String>>,
+        exclude_tools: Option<&[&str]>,
     ) -> mpsc::UnboundedReceiver<AgentEvent> {
         let (tx, rx) = mpsc::unbounded_channel();
 
@@ -97,6 +100,7 @@ impl AgentRuntime {
         let system_prompt = build_system_prompt(
             project_instructions,
             self.skill_catalog.as_deref(),
+            self.sub_agent_catalog.as_deref(),
             Some(&agent_prompt),
         );
         let mut full_messages = Vec::with_capacity(messages.len() + 1);
@@ -114,6 +118,11 @@ impl AgentRuntime {
         let approval_cache = self.approval_cache.clone();
         let shell_allow_commands = self.shell_allow_commands.clone();
         let fetch_allow_domains = self.fetch_allow_domains.clone();
+        let exclude: Vec<String> = exclude_tools
+            .unwrap_or(&[])
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
 
         // Spawn the HTTP request + stream consumption + tool loop so the
         // event loop is free to redraw immediately.
@@ -129,10 +138,12 @@ impl AgentRuntime {
                 });
             };
 
-            // Convert ToolSpec -> ToolDefinition for the LLM API.
+            // Convert ToolSpec -> ToolDefinition for the LLM API,
+            // skipping any tools listed in exclude_tools.
             let tool_defs: Vec<ToolDefinition> = tools
                 .specs()
                 .iter()
+                .filter(|spec| !exclude.contains(&spec.name))
                 .map(|spec| ToolDefinition {
                     name: spec.name.clone(),
                     description: spec.description.clone(),
@@ -163,15 +174,17 @@ impl AgentRuntime {
 }
 
 /// Build the final system prompt by merging project instructions, skill
-/// catalog, and the agent's configured system_prompt.
+/// catalog, sub-agent catalog, and the agent's configured system_prompt.
 ///
 /// Assembly order:
 /// 1. `<project-instructions>` (if present)
 /// 2. Skill catalog XML (if present)
-/// 3. Agent system prompt
+/// 3. Sub-Agent catalog XML (if present)
+/// 4. Agent system prompt
 pub fn build_system_prompt(
     project_instructions: Option<&str>,
     skill_catalog: Option<&str>,
+    sub_agent_catalog: Option<&str>,
     agent_system_prompt: Option<&str>,
 ) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
@@ -183,6 +196,10 @@ pub fn build_system_prompt(
     }
 
     if let Some(catalog) = skill_catalog.filter(|c| !c.is_empty()) {
+        parts.push(catalog.to_string());
+    }
+
+    if let Some(catalog) = sub_agent_catalog.filter(|c| !c.is_empty()) {
         parts.push(catalog.to_string());
     }
 
