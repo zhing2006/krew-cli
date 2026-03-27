@@ -19,8 +19,8 @@
 
 - `docs/PDD.md`：产品设计文档，新增 Sub-Agent 功能说明
 - `docs/TDD.md`：技术设计文档，新增 Sub-Agent 架构说明
-- `README.md`（中文）和 `README_EN.md`（英文）：新增 Sub-Agent feature 描述
-- `docs/MANUAL.md`（中文）和 `docs/MANUAL_EN.md`（英文）：新增 Sub-Agent 使用指南
+- `README_CN.md`（中文）和 `README.md`（英文）：新增 Sub-Agent feature 描述
+- `docs/MANUAL_CN.md`（中文）和 `docs/MANUAL.md`（英文）：新增 Sub-Agent 使用指南
 
 #### Scenario: PDD 包含 Sub-Agent 功能
 - **WHEN** 查看 `docs/PDD.md`
@@ -31,9 +31,9 @@
 - **THEN** SHALL 包含 Sub-Agent 的技术设计——发现机制、`run_agent` tool 实现、事件转发
 
 #### Scenario: README 包含 Sub-Agent feature
-- **WHEN** 查看 `README.md` 和 `README_EN.md`
+- **WHEN** 查看 `README_CN.md` 和 `README.md`
 - **THEN** SHALL 在 feature 列表中提及 Sub-Agent 功能
 
 #### Scenario: MANUAL 包含使用指南
-- **WHEN** 查看 `docs/MANUAL.md` 和 `docs/MANUAL_EN.md`
+- **WHEN** 查看 `docs/MANUAL_CN.md` 和 `docs/MANUAL.md`
 - **THEN** SHALL 包含 Sub-Agent 的定义文件格式说明、使用示例、以及 `.claude/agents/` 兼容说明
