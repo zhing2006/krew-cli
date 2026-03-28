@@ -114,6 +114,14 @@ Merge rules (project config takes precedence):
                              edit_file, glob, grep) to the workspace directory.
                              When false, file tools can access any path on the system.
 
+  sub_agent_enabled          Boolean
+                             Default: false
+                             Enable the Sub-Agent feature (experimental).
+                             When true, discovers agent definitions from
+                             .krew/agents/, .agents/agents/, .claude/agents/
+                             and registers the run_agent tool for delegating
+                             tasks to isolated sub-agents.
+
 ─── [settings.retry] ─────────────────────────────────────────────────────────
 
   max_retries_rate_limit     Integer

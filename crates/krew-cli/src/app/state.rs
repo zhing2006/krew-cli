@@ -11,9 +11,10 @@ use tokio::sync::{Notify, mpsc};
 
 use chrono::{DateTime, Utc};
 use krew_config::Config;
-use krew_core::agent::{AgentRuntime, init_agents};
+use krew_core::agent::{AgentRuntime, init_agents, register_sub_agents};
 use krew_core::event::AgentEvent;
 use krew_core::skill::SkillRecord;
+use krew_core::sub_agent::SubAgentDef;
 use krew_llm::{ChatMessage, ChatRole};
 
 use krew_tools::mcp::McpManager;
@@ -130,6 +131,8 @@ pub struct App {
     pub(crate) mcp_manager: Option<McpManager>,
     /// Discovered Agent Skills.
     pub(crate) skills: Vec<SkillRecord>,
+    /// Discovered Sub-Agent definitions.
+    pub(crate) sub_agent_defs: Vec<SubAgentDef>,
     /// Custom slash command registry loaded from `.krew/commands/`.
     pub(crate) custom_commands: krew_core::custom_command::CustomCommandRegistry,
     /// Pending compact agent name (set by /compact, processed in event loop).
@@ -164,6 +167,7 @@ impl App {
         let init_result = init_agents(&config, Some(cwd.clone()));
         let agents = init_result.agents;
         let skills = init_result.skills;
+        let sub_agent_defs = init_result.sub_agent_defs;
         for w in &init_result.warnings {
             tracing::warn!("{}", w);
         }
@@ -237,6 +241,7 @@ impl App {
             text_after_server_tool: false,
             mcp_manager: None,
             skills,
+            sub_agent_defs,
             custom_commands,
             pending_compact_agent: None,
             needs_auto_compact: false,
@@ -254,6 +259,11 @@ impl App {
         // Initialize MCP servers (if configured) before the event loop.
         if !self.config.mcp_servers.is_empty() {
             self.init_mcp().await;
+        }
+
+        // Register Sub-Agent tool if enabled and definitions found.
+        if self.config.settings.sub_agent_enabled && !self.sub_agent_defs.is_empty() {
+            register_sub_agents(&mut self.agents, self.sub_agent_defs.clone());
         }
 
         // Print the header above the viewport (scrolls into scrollback).

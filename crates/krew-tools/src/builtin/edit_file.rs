@@ -89,8 +89,22 @@ impl ToolHandler for EditFileTool {
             ToolError::Execution(format!("failed to read file '{}': {e}", path.display()))
         })?;
 
+        // Normalize old_string/new_string line endings to match the file.
+        // LLMs always send \n in JSON, but the file may use \r\n (CRLF).
+        let uses_crlf = original.contains("\r\n");
+        let old_string = if uses_crlf {
+            args.old_string.replace("\r\n", "\n").replace('\n', "\r\n")
+        } else {
+            args.old_string.replace("\r\n", "\n")
+        };
+        let new_string = if uses_crlf {
+            args.new_string.replace("\r\n", "\n").replace('\n', "\r\n")
+        } else {
+            args.new_string.replace("\r\n", "\n")
+        };
+
         // Verify old_string appears exactly once.
-        let match_count = original.matches(&args.old_string).count();
+        let match_count = original.matches(&old_string).count();
         if match_count == 0 {
             return Ok(ToolResult {
                 content: format!(
@@ -115,7 +129,7 @@ impl ToolHandler for EditFileTool {
         }
 
         // Perform replacement.
-        let modified = original.replacen(&args.old_string, &args.new_string, 1);
+        let modified = original.replacen(&old_string, &new_string, 1);
 
         // Generate unified diff.
         let diff = TextDiff::from_lines(&original, &modified);

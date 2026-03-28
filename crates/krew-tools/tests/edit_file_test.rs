@@ -144,3 +144,54 @@ async fn diff_output_format() {
     assert!(result.content.contains("-line2"));
     assert!(result.content.contains("+modified"));
 }
+
+#[tokio::test]
+async fn crlf_line_endings() {
+    // File uses CRLF but LLM sends LF in old_string/new_string.
+    let (dir, file_path) = setup_test_file("line1\r\nline2\r\nline3\r\n");
+    let tool = EditFileTool::new(dir.path().to_path_buf(), true);
+
+    let result = tool
+        .execute(
+            json!({
+                "file_path": file_path.to_str().unwrap(),
+                "old_string": "line2",
+                "new_string": "modified"
+            }),
+            &ToolContext::default(),
+        )
+        .await
+        .unwrap();
+
+    assert!(!result.is_error);
+    let content = std::fs::read_to_string(&file_path).unwrap();
+    assert!(content.contains("modified"));
+    // CRLF should be preserved in the output file.
+    assert!(content.contains("\r\n"));
+    assert!(!content.contains("line2"));
+}
+
+#[tokio::test]
+async fn crlf_multiline_old_string() {
+    // File uses CRLF, LLM sends multiline old_string with LF.
+    let (dir, file_path) = setup_test_file("aaa\r\nbbb\r\nccc\r\n");
+    let tool = EditFileTool::new(dir.path().to_path_buf(), true);
+
+    let result = tool
+        .execute(
+            json!({
+                "file_path": file_path.to_str().unwrap(),
+                "old_string": "aaa\nbbb",
+                "new_string": "xxx\nyyy"
+            }),
+            &ToolContext::default(),
+        )
+        .await
+        .unwrap();
+
+    assert!(!result.is_error);
+    let content = std::fs::read_to_string(&file_path).unwrap();
+    // Replacement should use CRLF to match the file.
+    assert!(content.contains("xxx\r\nyyy"));
+    assert!(!content.contains("aaa"));
+}

@@ -12,6 +12,7 @@ use krew_tools::builtin::SkillInfo;
 
 use crate::event::ApprovalCache;
 use crate::skill::{self, SkillRecord};
+use crate::sub_agent::{self, SubAgentDef};
 
 use super::AgentRuntime;
 
@@ -23,6 +24,8 @@ pub struct InitAgentsResult {
     pub warnings: Vec<String>,
     /// Discovered Agent Skills.
     pub skills: Vec<SkillRecord>,
+    /// Discovered Sub-Agent definitions (empty when `sub_agent_enabled` is false).
+    pub sub_agent_defs: Vec<SubAgentDef>,
 }
 
 /// Build `AgentRuntime` instances from configuration.
@@ -58,11 +61,29 @@ pub fn init_agents(config: &Config, cwd: Option<PathBuf>) -> InitAgentsResult {
         Vec::new()
     };
 
+    // Discover Sub-Agent definitions if enabled.
+    let sub_agent_defs = if config.settings.sub_agent_enabled {
+        if let Some(ref cwd_path) = cwd {
+            sub_agent::discover_sub_agents(cwd_path)
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
     // Build skill catalog for system prompt injection.
     let skill_catalog = if skills.is_empty() {
         None
     } else {
         Some(skill::build_skill_catalog(&skills))
+    };
+
+    // Build sub-agent catalog for system prompt injection.
+    let sub_agent_catalog = if sub_agent_defs.is_empty() {
+        None
+    } else {
+        Some(sub_agent::build_sub_agent_catalog(&sub_agent_defs))
     };
 
     // Build SkillInfo map for the activate_skill tool.
@@ -176,6 +197,7 @@ pub fn init_agents(config: &Config, cwd: Option<PathBuf>) -> InitAgentsResult {
             shell_allow_commands: config.settings.shell_allow_commands.clone(),
             fetch_allow_domains: config.settings.fetch_allow_domains.clone(),
             skill_catalog: skill_catalog.clone(),
+            sub_agent_catalog: sub_agent_catalog.clone(),
             language: config.settings.language.clone(),
         };
 
@@ -186,5 +208,41 @@ pub fn init_agents(config: &Config, cwd: Option<PathBuf>) -> InitAgentsResult {
         agents,
         warnings,
         skills,
+        sub_agent_defs,
+    }
+}
+
+/// Register the `run_agent` tool into every agent that has tools enabled.
+///
+/// Must be called after MCP initialization (if any) so the tool registry
+/// is in its final mutable state.
+pub fn register_sub_agents(
+    agents: &mut HashMap<String, AgentRuntime>,
+    sub_agent_defs: Vec<SubAgentDef>,
+) {
+    if sub_agent_defs.is_empty() {
+        return;
+    }
+
+    for runtime in agents.values_mut() {
+        // Only register for agents that have tools enabled.
+        if runtime.tools.is_empty() {
+            continue;
+        }
+
+        let tool = sub_agent::RunAgentTool::new(
+            sub_agent_defs.clone(),
+            Arc::clone(&runtime.client),
+            runtime.approval_mode,
+            runtime.approval_cache.clone(),
+            runtime.config.sampling.clone().unwrap_or_default(),
+            runtime.shell_allow_commands.clone(),
+            runtime.fetch_allow_domains.clone(),
+        );
+
+        let spec = tool.spec();
+        if let Some(registry) = Arc::get_mut(&mut runtime.tools) {
+            registry.register(spec, Box::new(tool));
+        }
     }
 }

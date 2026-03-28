@@ -307,6 +307,7 @@ impl App {
                     None,
                     peers.as_deref(),
                     self.current_whisper_targets.clone(),
+                    None,
                 );
                 self.agent_event_rx = Some(rx);
                 return Ok(true);
