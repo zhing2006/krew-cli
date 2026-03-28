@@ -12,6 +12,8 @@ pub enum SlashCommand {
     Mcp,
     /// List available skills.
     Skills,
+    /// List available tools per agent.
+    Tools,
     /// Show process stats (memory, threads).
     Stats,
     /// Show available commands.
@@ -37,6 +39,7 @@ impl SlashCommand {
             "/compact" => Some(SlashCommand::Compact(arg)),
             "/mcp" => Some(SlashCommand::Mcp),
             "/skills" => Some(SlashCommand::Skills),
+            "/tools" => Some(SlashCommand::Tools),
             "/stats" => Some(SlashCommand::Stats),
             "/help" => Some(SlashCommand::Help),
             "/rewind" => Some(SlashCommand::Rewind),
@@ -54,6 +57,7 @@ impl SlashCommand {
             SlashCommand::Compact(_) => "/compact",
             SlashCommand::Mcp => "/mcp",
             SlashCommand::Skills => "/skills",
+            SlashCommand::Tools => "/tools",
             SlashCommand::Stats => "/stats",
             SlashCommand::Help => "/help",
             SlashCommand::Rewind => "/rewind",
@@ -70,6 +74,7 @@ impl SlashCommand {
             ("/compact", "Compact session context"),
             ("/mcp", "List MCP servers and tools"),
             ("/skills", "List available skills"),
+            ("/tools", "List available tools per agent"),
             ("/stats", "Show process stats (memory, threads)"),
             ("/help", "Show available commands"),
             ("/rewind", "Rewind to a previous message"),
@@ -86,6 +91,7 @@ impl SlashCommand {
             SlashCommand::Compact(_) => "Compact session context",
             SlashCommand::Mcp => "List MCP servers and tools",
             SlashCommand::Skills => "List available skills",
+            SlashCommand::Tools => "List available tools per agent",
             SlashCommand::Stats => "Show process stats (memory, threads)",
             SlashCommand::Help => "Show available commands",
             SlashCommand::Rewind => "Rewind to a previous message",

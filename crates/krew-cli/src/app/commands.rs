@@ -56,6 +56,9 @@ impl App {
             SlashCommand::Skills => {
                 self.execute_skills(terminal)?;
             }
+            SlashCommand::Tools => {
+                self.execute_tools(terminal)?;
+            }
             SlashCommand::Rewind => {
                 self.execute_rewind(terminal)?;
             }
@@ -340,6 +343,94 @@ impl App {
                 format!("    {location}"),
                 Style::default().fg(Color::DarkGray),
             )));
+        }
+
+        render::insert_lines(terminal, lines)
+    }
+
+    /// Execute /tools: display available tools per agent.
+    fn execute_tools(&self, terminal: &mut custom_terminal::Terminal) -> anyhow::Result<()> {
+        let mut lines: Vec<Line<'static>> = vec![Line::from(Span::styled(
+            "Tools:",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ))];
+
+        for (i, agent) in self.config.agents.iter().enumerate() {
+            if i > 0 {
+                lines.push(Line::default());
+            }
+
+            let color = render::parse_color(&agent.color);
+
+            match self.agents.get(&agent.name) {
+                None => {
+                    // Agent failed to initialize (provider/API key issue).
+                    lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(
+                            format!("[{}]", agent.name),
+                            Style::default().fg(color).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw(format!("  {} ─── ", agent.display_name)),
+                        Span::styled("unavailable", Style::default().fg(Color::Red)),
+                    ]));
+                }
+                Some(runtime) => {
+                    // Filter out MCP tools.
+                    let tools: Vec<_> = runtime
+                        .tools
+                        .specs()
+                        .iter()
+                        .filter(|s| !krew_tools::mcp::is_mcp_tool(&s.name))
+                        .collect();
+
+                    let server_tool_count = if agent.enable_web_search { 1 } else { 0 };
+                    let total = tools.len() + server_tool_count;
+                    let count_text = if total == 0 {
+                        "no tool(s)".to_string()
+                    } else {
+                        format!("{} tool(s)", total)
+                    };
+
+                    lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(
+                            format!("[{}]", agent.name),
+                            Style::default().fg(color).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw(format!("  {} ─── {count_text}", agent.display_name)),
+                    ]));
+
+                    for tool in &tools {
+                        lines.push(Line::from(vec![
+                            Span::styled(
+                                format!("    {:<16}", tool.name),
+                                Style::default().fg(Color::Cyan),
+                            ),
+                            Span::styled(
+                                tool.description.clone(),
+                                Style::default().fg(Color::DarkGray),
+                            ),
+                        ]));
+                    }
+
+                    // Show server-side tools (provider-native, not in ToolRegistry).
+                    if agent.enable_web_search {
+                        lines.push(Line::from(vec![
+                            Span::styled(
+                                format!("    {:<16}", "web_search"),
+                                Style::default().fg(Color::Cyan),
+                            ),
+                            Span::styled(
+                                "Provider-native web search",
+                                Style::default().fg(Color::DarkGray),
+                            ),
+                        ]));
+                    }
+                }
+            }
         }
 
         render::insert_lines(terminal, lines)

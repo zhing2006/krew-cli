@@ -724,6 +724,7 @@ When an agent's reply `@mentions` another agent, that agent is automatically dis
 | `/compact [agent]` | Compress context using specified agent (default: first in reply_order) |
 | `/mcp` | List connected MCP servers and their tools |
 | `/skills` | List available skills |
+| `/tools` | List available tools per agent |
 | `/stats` | Show process statistics (memory, threads) |
 | `/help` | Show all commands (built-in + custom) |
 | `/exit` | Exit program (alias: `/quit`) |
