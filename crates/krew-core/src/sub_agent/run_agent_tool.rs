@@ -266,6 +266,15 @@ impl ToolHandler for RunAgentTool {
                         if final_text.is_empty() {
                             final_text = done_text;
                         }
+                        // Forward the final response text to parent output so
+                        // the user can see the sub-agent's answer.
+                        if !final_text.is_empty()
+                            && let Some(ref tx) = output_tx
+                        {
+                            for line in final_text.lines() {
+                                let _ = tx.send(format!("  {line}"));
+                            }
+                        }
                         break;
                     }
                     AgentEvent::Error { message, .. } => {
