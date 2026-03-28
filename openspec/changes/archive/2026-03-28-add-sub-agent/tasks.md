@@ -1,7 +1,7 @@
 ## 1. Settings & Feature Gate
 
 - [x] 1.1 在 `krew-config` 的 `Settings` / `RawSettings` 中新增 `sub_agent_enabled: bool` 字段（默认 `false`），TOML 配置项名为 `sub_agent_enabled`
-- [x] 1.2 在配置帮助文本 / 示例配置中补充 `sub_agent_enabled` 字段的说明（如 `settings.toml` 的注释模板、`/help` 输出等）
+- [x] 1.2 在配置帮助文本 / 示例配置中补充 `sub_agent_enabled` 字段的说明（`config.example.toml`、`/help` 输出等）
 - [x] 1.3 确保 TUI 和 prompt 模式在该开关为 `false` 时完全跳过 Sub-Agent 发现、catalog 注入、tool 注册——零开销
 
 ## 2. Sub-Agent Discovery & Parse
@@ -14,11 +14,11 @@
 ## 3. run_agent Tool（在 krew-core 中实现，注册到 krew-tools ToolRegistry）
 
 - [x] 3.1 新增 `crates/krew-core/src/sub_agent/run_agent_tool.rs` — 实现 `RunAgentTool` struct，impl `krew_tools::ToolHandler` trait
-- [x] 3.2 `RunAgentTool` struct 持有以下字段：`defs: HashMap<String, SubAgentDef>`（Sub-Agent 定义）、`is_running: Arc<AtomicBool>`（depth guard 防嵌套标志）、以及父 Agent 的运行时资源引用（`client: Arc<dyn LlmClient>`、`tools: Arc<ToolRegistry>`、`approval_mode`、`approval_cache`、`sampling` 等）。注意：parent event sender 不在构造时持有，而是通过 `ToolContext.parent_event_tx` 在每次 execute 时获取
+- [x] 3.2 `RunAgentTool` struct 持有以下字段：`defs: HashMap<String, SubAgentDef>`（Sub-Agent 定义）、`is_running: Arc<AtomicBool>`（depth guard 防嵌套标志）、以及父 Agent 的运行时资源（`client: Arc<dyn LlmClient>`、`approval_mode`、`approval_cache`、`sampling` 等）。注意：`ToolRegistry` 和 parent event sender 不在构造时持有，而是通过 `ToolContext.tool_registry` 和 `ToolContext.parent_event_tx` 在每次 execute 时获取（避免 `Arc::get_mut` 注册失败）
 - [x] 3.3 实现 `RunAgentTool::spec()` — 返回 tool schema，`agent` 参数 enum 动态填充已发现的 Sub-Agent 名称，`task` 参数为字符串
-- [x] 3.4 实现 `RunAgentTool::execute()` — 入口 CAS `is_running`（嵌套则报错）→ 从 `ctx.parent_event_tx` downcast 取得父 Agent sender → 查找 SubAgentDef → 使用持有的父 Agent 运行时资源 + SubAgentDef 的 system_prompt 构建隔离 messages `[system, user(task)]` → 调用 `start_completion`（exclude_tools=["run_agent"]）→ 循环消费 sub_rx：ToolCallStart/Output/Done 通过 `ctx.output_tx` 转发；ApprovalRequest 通过 parent sender 转发；TextDelta 累积 → Done 时返回 final_text → 退出时重置 `is_running`
-- [x] 3.5 修改 `krew-tools::ToolContext` — 新增 `parent_event_tx: Option<Box<dyn Any + Send>>` 字段（默认 None）
-- [x] 3.6 修改 `krew-core` 的 `create_tool_context()` — 为 `run_agent` tool 设置 `output_tx`（流式输出）和 `parent_event_tx`（装箱的父 Agent event sender clone）
+- [x] 3.4 实现 `RunAgentTool::execute()` — 入口 CAS `is_running`（嵌套则报错）→ 从 `ctx.tool_registry` downcast 取得 `Arc<ToolRegistry>` → 从 `ctx.parent_event_tx` downcast 取得父 Agent sender → 查找 SubAgentDef → 构建隔离 messages `[system, user(task)]` → 构建 tool_defs 时过滤掉 run_agent → 调用 `run_agent_loop` → 循环消费 sub_rx：ToolCallStart/Output/Done 通过 `ctx.output_tx` 转发；ApprovalRequest 通过 parent sender 转发；TextDelta 累积 → Done 时返回 final_text → 退出时重置 `is_running`
+- [x] 3.5 修改 `krew-tools::ToolContext` — 新增 `parent_event_tx: Option<Box<dyn Any + Send + Sync>>` 和 `tool_registry: Option<Box<dyn Any + Send + Sync>>` 字段（默认 None）
+- [x] 3.6 修改 `krew-core` 的 `create_tool_context()` — 为 `run_agent` tool 设置 `output_tx`（流式输出）、`parent_event_tx`（装箱的父 Agent event sender clone）和 `tool_registry`（装箱的 `Arc<ToolRegistry>` clone）
 - [x] 3.7 修改 `AgentRuntime::start_completion()` — 新增 `exclude_tools: Option<&[&str]>` 参数，构建 `tool_defs` 时跳过指定的 tool 名称
 
 ## 4. Integration & Registration
@@ -50,5 +50,5 @@
 - [x] 7.1 `cargo fmt --all && cargo clippy --all-targets --all-features -- -D warnings` 通过
 - [x] 7.2 `cargo test` 全部通过
 - [x] 7.3 `cargo build --release` 成功
-- [ ] 7.4 手动测试（`sub_agent_enabled = false`）：验证无任何 Sub-Agent 行为，`/agents` 不展示 Sub-Agent，无 `run_agent` tool
-- [ ] 7.5 手动测试（`sub_agent_enabled = true`）：在 `.claude/agents/` 放置测试 agent 定义，分别在 TUI 模式和 prompt 模式下验证 `/agents` 展示、`run_agent` tool 调用、流式 tool events 展示、审批转发均正常工作
+- [x] 7.4 手动测试（`sub_agent_enabled = false`）：验证无任何 Sub-Agent 行为，`/agents` 不展示 Sub-Agent，无 `run_agent` tool
+- [x] 7.5 手动测试（`sub_agent_enabled = true`）：在 `.claude/agents/` 放置测试 agent 定义，验证 `/agents` 展示、`run_agent` tool 调用、流式 tool events 展示、审批转发均正常工作

@@ -89,17 +89,18 @@ krew-cli 是一个多 AI Agent 协作 CLI 工具，当前的 Agent 以对等（p
 
 **理由**: `RunAgentTool::execute()` 需要访问 `AgentRuntime`、`AgentEvent`、`ApprovalCache` 等 `krew-core` 类型来运行 Sub-Agent。由于依赖方向是 `krew-core` → `krew-tools`（`krew-tools` 不能反向依赖 `krew-core`），tool 的实现必须放在 `krew-core` 中。`krew-core` 已经依赖 `krew-tools`，可以直接 impl `krew_tools::ToolHandler`。Tool 注册进 `ToolRegistry` 和 MCP tool 完全一致，不需要 krew-tools 侧做代码改动（注册是运行时行为）。
 
-### D6: 使用父 Agent 的运行时资源——共享 Arc + 过滤 tool_defs
+### D6: 使用父 Agent 的运行时资源——执行时传入 ToolRegistry
 
-**决策**: Sub-Agent 直接使用父 Agent 的 `Arc<dyn LlmClient>`、`Arc<ToolRegistry>`（含 MCP tools）、`ApprovalCache` 等运行时资源，不重建。在调用 `start_completion` 时从 `tool_defs`（发送给 LLM 的 tool 定义列表）中过滤掉 `run_agent`。
+**决策**: Sub-Agent 直接使用父 Agent 的 `Arc<dyn LlmClient>`、`ApprovalCache` 等运行时资源，不重建。`Arc<ToolRegistry>` 在执行时通过 `ToolContext.tool_registry` 传入（type-erased `Box<dyn Any>`），而非在 `RunAgentTool` 构造时存储引用。Sub-Agent 的 `tool_defs` 列表中过滤掉 `run_agent`。
 
 **理由**:
 - 父 Agent 的 `Arc<ToolRegistry>` 在 MCP 初始化后已包含所有 live tools（built-in + MCP），直接共享即可获得完整能力
 - 不需要重建 LlmClient（API key、provider 配置等都在里面）
-- `ToolRegistry` 没有 clone/filter 方法，也不应该为此修改其接口
-- 需要为 `start_completion` 新增 `exclude_tools: Option<&[&str]>` 参数，在构建 `tool_defs` 时跳过指定 tool
+- `RunAgentTool` 不持有任何对 `ToolRegistry` 的引用（无 `Weak` 也无 `Arc`），避免了注册时 `Arc::get_mut` 因 weak_count > 0 而失败的问题
+- agent_loop 的 `create_tool_context()` 已经可以访问当前 `Arc<ToolRegistry>`，在构建 `run_agent` 的 `ToolContext` 时注入即可
 
-**替代方案**: 为 ToolRegistry 添加 `clone_without()` 方法。但这要求 `ToolHandler` 支持 Clone（当前是 `Box<dyn ToolHandler>`，不支持），改动过大。
+**替代方案 1**: `RunAgentTool` 持有 `Weak<ToolRegistry>`。但 `Arc::downgrade` 会增加 weak_count，导致注册时 `Arc::get_mut` 返回 `None`，tool 静默注册失败。
+**替代方案 2**: 为 ToolRegistry 添加 `clone_without()` 方法。但这要求 `ToolHandler` 支持 Clone（当前是 `Box<dyn ToolHandler>`，不支持），改动过大。
 
 ### D7: Sub-Agent 不能嵌套——tool_defs 过滤 + execute() depth guard 双重保障
 
@@ -128,11 +129,18 @@ krew-cli 是一个多 AI Agent 协作 CLI 工具，当前的 Agent 以对等（p
 
 ### D9: Approval 转发——ToolContext 新增类型擦除的 parent event sender
 
-**决策**: 在 `krew-tools::ToolContext` 中新增 `parent_event_tx: Option<Box<dyn Any + Send>>` 字段（默认 `None`）。`krew-core` 的 `create_tool_context()` 在处理 `run_agent` tool 时，将父 Agent 当前 turn 的 `UnboundedSender<AgentEvent>` clone 装箱后设入此字段。`RunAgentTool::execute()` 通过 `downcast_ref::<UnboundedSender<AgentEvent>>()` 取回 sender，用于转发 Sub-Agent 的 `ApprovalRequest`。
+**决策**: 在 `krew-tools::ToolContext` 中新增两个类型擦除字段（默认 `None`）：
+- `parent_event_tx: Option<Box<dyn Any + Send + Sync>>` — 父 Agent 的事件 sender，用于 approval 转发
+- `tool_registry: Option<Box<dyn Any + Send + Sync>>` — 父 Agent 的 `Arc<ToolRegistry>`，用于 Sub-Agent tool dispatch
 
-**downcast 协议**: 值的具体类型始终为 `tokio::sync::mpsc::UnboundedSender<AgentEvent>`，由 `krew-core::agent::agent_loop::create_tool_context()` 设置。
-**所有权**: `Box<dyn Any + Send>` 持有 sender 的 clone；RunAgentTool 通过 `downcast_ref` 借用后 clone。
-**失败语义**: 如果 downcast 失败（不应发生），Sub-Agent 的 `ApprovalRequest` 无法转发，Sub-Agent 的 agent_loop 会因 oneshot 超时/drop 而中止该 tool call，返回 denied result 给 Sub-Agent LLM。不会 panic。
+`krew-core` 的 `create_tool_context()` 在处理 `run_agent` tool 时设置这两个字段。`RunAgentTool::execute()` 通过 `downcast_ref` 取回具体类型。
+
+**downcast 协议**:
+- `parent_event_tx`: 具体类型为 `tokio::sync::mpsc::UnboundedSender<AgentEvent>`
+- `tool_registry`: 具体类型为 `Arc<ToolRegistry>`
+
+**所有权**: `Box<dyn Any>` 持有值的 clone；RunAgentTool 通过 `downcast_ref` 借用后 clone。
+**失败语义**: 如果 downcast 失败（不应发生），`parent_event_tx` 失败时 Sub-Agent 的 `ApprovalRequest` 无法转发，agent_loop 返回 denied result；`tool_registry` 失败时返回 `ToolError::Execution`。不会 panic。
 
 **事件转发路径**:
 ```
@@ -148,8 +156,9 @@ RunAgentTool::execute() 消费 sub_rx
 ```
 
 **理由**:
-- `parent_event_tx` 是每次 agent turn 中由 `create_tool_context` 设置的，精确对应当前 turn 的 event channel——解决了 "构造时拿不到 parent_tx" 的时序问题
-- krew-tools 侧改动极小（一个 `Option<Box<dyn Any + Send>>` 字段，默认 `None`），不影响任何现有 tool
+- `parent_event_tx` 和 `tool_registry` 都是每次 agent turn 中由 `create_tool_context` 设置的，精确对应当前 turn 的 event channel 和 tool registry——解决了 "构造时拿不到" 的时序问题
+- `RunAgentTool` 不持有任何对 `ToolRegistry` 的引用，注册时 `Arc::get_mut` 不会因 weak_count 而失败
+- krew-tools 侧改动极小（两个 `Option<Box<dyn Any + Send + Sync>>` 字段，默认 `None`），不影响任何现有 tool
 - 类型安全通过 downcast 保证，且 downcast 逻辑完全在 krew-core 中，krew-tools 不感知具体类型
 - Sub-Agent 完整遵守父 Agent 的 `ApprovalMode` 和共享的 `ApprovalCache`
 

@@ -230,12 +230,9 @@ pub fn register_sub_agents(
             continue;
         }
 
-        // Use Arc::downgrade so RunAgentTool holds a Weak reference.
-        // This keeps strong_count == 1, allowing Arc::get_mut to succeed.
         let tool = sub_agent::RunAgentTool::new(
             sub_agent_defs.clone(),
             Arc::clone(&runtime.client),
-            Arc::downgrade(&runtime.tools),
             runtime.approval_mode,
             runtime.approval_cache.clone(),
             runtime.config.sampling.clone().unwrap_or_default(),

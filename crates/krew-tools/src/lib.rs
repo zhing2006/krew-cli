@@ -76,6 +76,10 @@ pub struct ToolContext {
     /// The concrete type is `tokio::sync::mpsc::UnboundedSender<AgentEvent>`,
     /// set by `krew-core`'s `create_tool_context()` for the `run_agent` tool.
     pub parent_event_tx: Option<Box<dyn std::any::Any + Send + Sync>>,
+    /// Optional type-erased tool registry for Sub-Agent tool dispatch.
+    /// The concrete type is `Arc<ToolRegistry>`, set by `krew-core`'s
+    /// `create_tool_context()` for the `run_agent` tool.
+    pub tool_registry: Option<Box<dyn std::any::Any + Send + Sync>>,
 }
 
 /// Trait for tool execution logic.
