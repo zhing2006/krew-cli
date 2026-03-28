@@ -1000,19 +1000,21 @@ Sub-Agent 提供上下文隔离的子代理执行机制，让 Agent 将专项任
 **核心字段：**
 - `defs: HashMap<String, SubAgentDef>` — Sub-Agent 定义
 - `is_running: Arc<AtomicBool>` — depth guard 防嵌套
-- 父 Agent 运行时资源引用（`client`、`tools`、`approval_cache` 等全部共享）
+- 父 Agent 运行时资源（`client`、`approval_cache` 等，构造时存储）
+- `ToolRegistry` 不在构造时存储，而是执行时从 `ToolContext.tool_registry` 获取（避免 `Arc::get_mut` 注册失败）
 
 **执行流程：**
 1. CAS `is_running`（嵌套则报错 `"Sub-agent nesting is not allowed"`）
-2. 从 `ctx.parent_event_tx` downcast 取得父 Agent event sender
-3. 构建隔离 messages `[system_prompt, user(task)]`
-4. 构建 `tool_defs` 时过滤掉 `run_agent`（LLM 看不到）
-5. 调用 `run_agent_loop` 启动 Sub-Agent 循环
-6. 通过 spawned consumer task 消费 sub_rx 事件：
+2. 从 `ctx.tool_registry` downcast 取得 `Arc<ToolRegistry>`
+3. 从 `ctx.parent_event_tx` downcast 取得父 Agent event sender
+4. 构建隔离 messages `[system_prompt, user(task)]`
+5. 构建 `tool_defs` 时过滤掉 `run_agent`（LLM 看不到）
+6. 调用 `run_agent_loop` 启动 Sub-Agent 循环
+7. 通过 spawned consumer task 消费 sub_rx 事件：
    - `ToolCallStart/Output/Done` → 通过 `ctx.output_tx` 转发
    - `ApprovalRequest` → 通过 parent sender 转发到 TUI
    - `TextDelta` → 累积到 final_text（不转发）
-7. Done 时返回 final_text 作为 tool result
+8. Done 时返回 final_text 作为 tool result
 
 代码位置：`krew-core::sub_agent::run_agent_tool`
 
@@ -1030,7 +1032,7 @@ RunAgentTool::execute() 消费 sub_rx
   └── Done/Error                → return ToolResult
 ```
 
-`parent_event_tx` 通过 `ToolContext` 的 `Option<Box<dyn Any + Send + Sync>>` 字段传递，由 `create_tool_context()` 在处理 `run_agent` tool 时设置为父 Agent 当前 turn 的 `UnboundedSender<AgentEvent>` clone。
+`parent_event_tx` 和 `tool_registry` 通过 `ToolContext` 的 `Option<Box<dyn Any + Send + Sync>>` 字段传递，由 `create_tool_context()` 在处理 `run_agent` tool 时分别设置为父 Agent 当前 turn 的 `UnboundedSender<AgentEvent>` clone 和 `Arc<ToolRegistry>` clone。
 
 #### 3.6.4 防嵌套双重保障
 

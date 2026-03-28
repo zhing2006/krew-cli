@@ -27,6 +27,7 @@ async fn echo_command_streams_output() {
     let ctx = ToolContext {
         output_tx: Some(tx),
         parent_event_tx: None,
+        tool_registry: None,
     };
 
     let result = tool

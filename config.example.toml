@@ -18,6 +18,7 @@ agent_to_agent_routing = "immediate"   # immediate | queued — how @mentioned a
 agent_to_agent_max_rounds = 10         # max AI-to-AI rounds per user turn (0 = disabled)
 # language = "中文"                    # language for agent responses (e.g. "中文", "English", "日本語"); unset = no instruction injected
 # restrict_workspace = true            # restrict file tools to workspace directory (default: true); set false to allow access to any path
+# sub_agent_enabled = false            # enable sub-agent system (default: false); when true, discovers .md agent definitions and registers run_agent tool
 
 # Shell commands auto-approved without user confirmation (prefix-matched).
 # "ls" matches all ls invocations; "cargo build" matches only cargo build (not cargo test).

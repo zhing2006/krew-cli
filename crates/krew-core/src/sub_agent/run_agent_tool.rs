@@ -1,8 +1,8 @@
 //! `run_agent` tool implementation — delegates tasks to Sub-Agents in isolated contexts.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Weak};
 
 use krew_config::{ApprovalMode, SamplingConfig};
 use krew_llm::{ChatMessage, ChatRole, ToolDefinition};
@@ -19,6 +19,10 @@ use crate::event::{AgentEvent, ApprovalCache};
 /// The Sub-Agent shares the parent agent's runtime resources (client, tools,
 /// approval cache, etc.) but operates on a completely independent message
 /// history containing only `[system_prompt, user(task)]`.
+///
+/// The tool registry is passed at execution time via `ToolContext::tool_registry`
+/// rather than stored here, avoiding circular references that would prevent
+/// registration into the parent's `Arc<ToolRegistry>`.
 pub struct RunAgentTool {
     /// Available Sub-Agent definitions keyed by name.
     defs: HashMap<String, SubAgentDef>,
@@ -26,11 +30,6 @@ pub struct RunAgentTool {
     is_running: Arc<AtomicBool>,
     /// Parent agent's LLM client.
     client: Arc<dyn krew_llm::LlmClient>,
-    /// Weak reference to the parent agent's tool registry.
-    /// Using Weak avoids inflating the Arc strong count, which would
-    /// prevent `Arc::get_mut` during registration.  Upgraded to Arc
-    /// temporarily inside `execute()`.
-    tools: Weak<ToolRegistry>,
     /// Parent agent's approval mode.
     approval_mode: ApprovalMode,
     /// Parent agent's session-scoped approval cache.
@@ -45,11 +44,9 @@ pub struct RunAgentTool {
 
 impl RunAgentTool {
     /// Create a new `RunAgentTool` with the given Sub-Agent definitions and parent resources.
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         defs: Vec<SubAgentDef>,
         client: Arc<dyn krew_llm::LlmClient>,
-        tools: Weak<ToolRegistry>,
         approval_mode: ApprovalMode,
         approval_cache: ApprovalCache,
         sampling: SamplingConfig,
@@ -61,7 +58,6 @@ impl RunAgentTool {
             defs: defs_map,
             is_running: Arc::new(AtomicBool::new(false)),
             client,
-            tools,
             approval_mode,
             approval_cache,
             sampling,
@@ -151,11 +147,13 @@ impl ToolHandler for RunAgentTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("missing 'task' parameter".into()))?;
 
-        // Upgrade Weak<ToolRegistry> to Arc for this execution.
-        let tools = self
-            .tools
-            .upgrade()
-            .ok_or_else(|| ToolError::Execution("tool registry has been dropped".into()))?;
+        // Get tool registry from context (passed by the agent loop).
+        let tools = ctx
+            .tool_registry
+            .as_ref()
+            .and_then(|boxed| boxed.downcast_ref::<Arc<ToolRegistry>>())
+            .cloned()
+            .ok_or_else(|| ToolError::Execution("tool registry not available in context".into()))?;
 
         // Look up the Sub-Agent definition.
         let def = match self.defs.get(agent_name) {

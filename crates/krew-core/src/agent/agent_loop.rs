@@ -13,7 +13,7 @@ use super::approval::{ToolApproval, cache_session_approval, check_tool_approval}
 /// Context for a single agent loop execution, grouping all shared references.
 pub(crate) struct AgentLoopContext<'a> {
     pub(crate) client: &'a Arc<dyn krew_llm::LlmClient>,
-    pub(crate) tools: &'a ToolRegistry,
+    pub(crate) tools: &'a Arc<ToolRegistry>,
     pub(crate) tool_defs: &'a [ToolDefinition],
     pub(crate) sampling: &'a krew_config::SamplingConfig,
     pub(crate) on_retry: &'a (dyn Fn(krew_llm::common::RetryInfo) + Send + Sync),
@@ -180,12 +180,13 @@ pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
                     name: name.clone(),
                     arguments: args_str.clone(),
                 });
-                let tools_ref = &ctx.tools;
+                let tools_ref = ctx.tools;
                 let tx_ref = ctx.tx.clone();
+                let tools_clone = Arc::clone(ctx.tools);
                 async move {
                     let args: serde_json::Value =
                         serde_json::from_str(&args_str).unwrap_or_default();
-                    let handle = create_tool_context(&name, &tx_ref);
+                    let handle = create_tool_context(&name, &tx_ref, &tools_clone);
                     let result = tools_ref.dispatch(&name, args, &handle.ctx).await;
                     // Drop the sender so the forwarder sees channel closed.
                     drop(handle.ctx);
@@ -210,7 +211,7 @@ pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
                 arguments: args_str.clone(),
             });
             let args: serde_json::Value = serde_json::from_str(&args_str).unwrap_or_default();
-            let handle = create_tool_context(&name, ctx.tx);
+            let handle = create_tool_context(&name, ctx.tx, ctx.tools);
             let result = ctx.tools.dispatch(&name, args, &handle.ctx).await;
             drop(handle.ctx);
             if let Some(f) = handle.forwarder {
@@ -248,7 +249,7 @@ pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
                 ReviewDecision::Approved => {
                     let args: serde_json::Value =
                         serde_json::from_str(&args_str).unwrap_or_default();
-                    let handle = create_tool_context(&name, ctx.tx);
+                    let handle = create_tool_context(&name, ctx.tx, ctx.tools);
                     let result = ctx.tools.dispatch(&name, args, &handle.ctx).await;
                     drop(handle.ctx);
                     if let Some(f) = handle.forwarder {
@@ -261,7 +262,7 @@ pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
                     cache_session_approval(&name, &args_str, ctx.approval_cache).await;
                     let args: serde_json::Value =
                         serde_json::from_str(&args_str).unwrap_or_default();
-                    let handle = create_tool_context(&name, ctx.tx);
+                    let handle = create_tool_context(&name, ctx.tx, ctx.tools);
                     let result = ctx.tools.dispatch(&name, args, &handle.ctx).await;
                     drop(handle.ctx);
                     if let Some(f) = handle.forwarder {
@@ -472,6 +473,7 @@ pub(crate) struct ToolContextHandle {
 pub(crate) fn create_tool_context(
     tool_name: &str,
     tx: &mpsc::UnboundedSender<AgentEvent>,
+    tools: &Arc<krew_tools::ToolRegistry>,
 ) -> ToolContextHandle {
     if tool_name == "shell" || tool_name == "run_agent" {
         let (output_tx, mut output_rx) = mpsc::unbounded_channel::<String>();
@@ -489,10 +491,18 @@ pub(crate) fn create_tool_context(
                 None
             };
 
+        let tool_registry: Option<Box<dyn std::any::Any + Send + Sync>> =
+            if tool_name == "run_agent" {
+                Some(Box::new(Arc::clone(tools)))
+            } else {
+                None
+            };
+
         ToolContextHandle {
             ctx: krew_tools::ToolContext {
                 output_tx: Some(output_tx),
                 parent_event_tx,
+                tool_registry,
             },
             forwarder: Some(forwarder),
         }
