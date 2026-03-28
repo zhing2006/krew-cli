@@ -43,7 +43,7 @@ Run multiple AI models (GPT, Claude, Gemini, etc.) in a single terminal session 
 - **Web Search** — Provider-native web search (OpenAI Responses, OpenAI Chat, Anthropic, Gemini)
 - **Per-Agent Sampling** — Configure temperature, top_p, max_tokens, etc. per agent
 - **Project Instructions** — `AGENTS.md` files auto-injected into system prompts (hierarchical loading)
-- **Sub-Agent (Experimental)** — Delegate focused tasks to sub-agents running in isolated contexts, keeping the main conversation clean; compatible with `.claude/agents/*.md` definitions
+- **Sub-Agent (Experimental)** — Delegate focused tasks to sub-agents running in isolated contexts, keeping the main conversation clean; compatible with `.claude/agents/*.md` definitions (disabled by default, enable with `sub_agent_enabled = true` in `.krew/settings.toml`)
 
 ## Install
 

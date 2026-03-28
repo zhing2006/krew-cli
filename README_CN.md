@@ -43,7 +43,7 @@
 - **Web 搜索** — Provider 原生 Web 搜索（OpenAI Responses、OpenAI Chat、Anthropic、Gemini）
 - **采样参数** — 每个 Agent 可独立配置 temperature、top_p、max_tokens 等
 - **项目指令** — `AGENTS.md` 文件自动注入系统提示词（支持层级化加载）
-- **Sub-Agent（实验性）** — 将专项任务委派给隔离上下文的子代理执行，避免 tool call 污染主对话；兼容 `.claude/agents/*.md` 定义格式
+- **Sub-Agent（实验性）** — 将专项任务委派给隔离上下文的子代理执行，避免 tool call 污染主对话；兼容 `.claude/agents/*.md` 定义格式（默认禁用，需在 `.krew/settings.toml` 中设置 `sub_agent_enabled = true` 启用）
 
 ## 安装
 
