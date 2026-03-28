@@ -233,6 +233,7 @@ Commands:
 | `/compact [agent]` | Compress context using the specified agent |
 | `/mcp` | List MCP servers and tools |
 | `/skills` | List available skills |
+| `/tools` | List available tools per agent |
 | `/stats` | Show process statistics (memory, threads) |
 | `/help` | Show all commands (including custom commands) |
 | `/exit` | Exit (alias: `/quit`) |

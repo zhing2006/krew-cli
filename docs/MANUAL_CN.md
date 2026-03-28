@@ -723,6 +723,7 @@ Agent 回复中 `@mention` 其他 Agent 时自动调度：
 | `/compact [agent]` | 使用指定 Agent 压缩上下文（默认: reply_order 首个） |
 | `/mcp` | 列出 MCP 服务器及工具 |
 | `/skills` | 列出可用技能 |
+| `/tools` | 按 Agent 列出可用工具 |
 | `/stats` | 显示进程统计（内存、线程） |
 | `/help` | 显示所有命令（内置 + 自定义） |
 | `/exit` | 退出（别名 `/quit`） |
