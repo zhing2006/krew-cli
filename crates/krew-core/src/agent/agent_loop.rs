@@ -11,28 +11,28 @@ use crate::event::{AgentEvent, ApprovalCache, ReviewDecision};
 use super::approval::{ToolApproval, cache_session_approval, check_tool_approval};
 
 /// Context for a single agent loop execution, grouping all shared references.
-pub(super) struct AgentLoopContext<'a> {
-    pub(super) client: &'a Arc<dyn krew_llm::LlmClient>,
-    pub(super) tools: &'a ToolRegistry,
-    pub(super) tool_defs: &'a [ToolDefinition],
-    pub(super) sampling: &'a krew_config::SamplingConfig,
-    pub(super) on_retry: &'a (dyn Fn(krew_llm::common::RetryInfo) + Send + Sync),
-    pub(super) tx: &'a mpsc::UnboundedSender<AgentEvent>,
-    pub(super) agent_name: &'a str,
-    pub(super) max_rounds: u32,
-    pub(super) approval_mode: ApprovalMode,
-    pub(super) approval_cache: &'a ApprovalCache,
-    pub(super) shell_allow_commands: &'a [String],
-    pub(super) fetch_allow_domains: &'a [String],
+pub(crate) struct AgentLoopContext<'a> {
+    pub(crate) client: &'a Arc<dyn krew_llm::LlmClient>,
+    pub(crate) tools: &'a Arc<ToolRegistry>,
+    pub(crate) tool_defs: &'a [ToolDefinition],
+    pub(crate) sampling: &'a krew_config::SamplingConfig,
+    pub(crate) on_retry: &'a (dyn Fn(krew_llm::common::RetryInfo) + Send + Sync),
+    pub(crate) tx: &'a mpsc::UnboundedSender<AgentEvent>,
+    pub(crate) agent_name: &'a str,
+    pub(crate) max_rounds: u32,
+    pub(crate) approval_mode: ApprovalMode,
+    pub(crate) approval_cache: &'a ApprovalCache,
+    pub(crate) shell_allow_commands: &'a [String],
+    pub(crate) fetch_allow_domains: &'a [String],
     /// Whisper targets to stamp on all produced messages (None = not a whisper).
-    pub(super) whisper_targets: Option<Vec<String>>,
+    pub(crate) whisper_targets: Option<Vec<String>>,
 }
 
 /// Run the agent's tool-call loop: stream LLM → execute tools → re-call LLM.
 ///
 /// The loop exits when the LLM finishes without tool calls, when the
 /// maximum number of tool rounds is reached, or on error.
-pub(super) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Vec<ChatMessage>) {
+pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Vec<ChatMessage>) {
     let mut total_usage = Usage {
         prompt_tokens: 0,
         completion_tokens: 0,
@@ -180,12 +180,13 @@ pub(super) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
                     name: name.clone(),
                     arguments: args_str.clone(),
                 });
-                let tools_ref = &ctx.tools;
+                let tools_ref = ctx.tools;
                 let tx_ref = ctx.tx.clone();
+                let tools_clone = Arc::clone(ctx.tools);
                 async move {
                     let args: serde_json::Value =
                         serde_json::from_str(&args_str).unwrap_or_default();
-                    let handle = create_tool_context(&name, &tx_ref);
+                    let handle = create_tool_context(&name, &tx_ref, &tools_clone);
                     let result = tools_ref.dispatch(&name, args, &handle.ctx).await;
                     // Drop the sender so the forwarder sees channel closed.
                     drop(handle.ctx);
@@ -210,7 +211,7 @@ pub(super) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
                 arguments: args_str.clone(),
             });
             let args: serde_json::Value = serde_json::from_str(&args_str).unwrap_or_default();
-            let handle = create_tool_context(&name, ctx.tx);
+            let handle = create_tool_context(&name, ctx.tx, ctx.tools);
             let result = ctx.tools.dispatch(&name, args, &handle.ctx).await;
             drop(handle.ctx);
             if let Some(f) = handle.forwarder {
@@ -248,7 +249,7 @@ pub(super) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
                 ReviewDecision::Approved => {
                     let args: serde_json::Value =
                         serde_json::from_str(&args_str).unwrap_or_default();
-                    let handle = create_tool_context(&name, ctx.tx);
+                    let handle = create_tool_context(&name, ctx.tx, ctx.tools);
                     let result = ctx.tools.dispatch(&name, args, &handle.ctx).await;
                     drop(handle.ctx);
                     if let Some(f) = handle.forwarder {
@@ -261,7 +262,7 @@ pub(super) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
                     cache_session_approval(&name, &args_str, ctx.approval_cache).await;
                     let args: serde_json::Value =
                         serde_json::from_str(&args_str).unwrap_or_default();
-                    let handle = create_tool_context(&name, ctx.tx);
+                    let handle = create_tool_context(&name, ctx.tx, ctx.tools);
                     let result = ctx.tools.dispatch(&name, args, &handle.ctx).await;
                     drop(handle.ctx);
                     if let Some(f) = handle.forwarder {
@@ -456,23 +457,25 @@ async fn consume_stream(
 
 /// Result of creating a tool context, including an optional forwarder handle
 /// that must be awaited before sending `ToolCallDone`.
-struct ToolContextHandle {
-    ctx: krew_tools::ToolContext,
+pub(crate) struct ToolContextHandle {
+    pub(crate) ctx: krew_tools::ToolContext,
     /// Forwarder task that forwards streaming output to the TUI.
     /// Must be awaited after tool execution to ensure all output is delivered.
-    forwarder: Option<tokio::task::JoinHandle<()>>,
+    pub(crate) forwarder: Option<tokio::task::JoinHandle<()>>,
 }
 
 /// Create a `ToolContext` for the given tool.
 ///
-/// For shell tools, sets up an output channel that forwards each line
-/// to the TUI as `AgentEvent::ToolCallOutput`. The returned handle
-/// includes a forwarder task that must be awaited to drain output.
-fn create_tool_context(
+/// For shell and run_agent tools, sets up an output channel that forwards
+/// each line to the TUI as `AgentEvent::ToolCallOutput`. For run_agent,
+/// also sets `parent_event_tx` so Sub-Agent approval requests can be
+/// forwarded to the parent agent's event channel.
+pub(crate) fn create_tool_context(
     tool_name: &str,
     tx: &mpsc::UnboundedSender<AgentEvent>,
+    tools: &Arc<krew_tools::ToolRegistry>,
 ) -> ToolContextHandle {
-    if tool_name == "shell" {
+    if tool_name == "shell" || tool_name == "run_agent" {
         let (output_tx, mut output_rx) = mpsc::unbounded_channel::<String>();
         let event_tx = tx.clone();
         let forwarder = tokio::spawn(async move {
@@ -480,9 +483,26 @@ fn create_tool_context(
                 let _ = event_tx.send(AgentEvent::ToolCallOutput { text });
             }
         });
+
+        let parent_event_tx: Option<Box<dyn std::any::Any + Send + Sync>> =
+            if tool_name == "run_agent" {
+                Some(Box::new(tx.clone()))
+            } else {
+                None
+            };
+
+        let tool_registry: Option<Box<dyn std::any::Any + Send + Sync>> =
+            if tool_name == "run_agent" {
+                Some(Box::new(Arc::clone(tools)))
+            } else {
+                None
+            };
+
         ToolContextHandle {
             ctx: krew_tools::ToolContext {
                 output_tx: Some(output_tx),
+                parent_event_tx,
+                tool_registry,
             },
             forwarder: Some(forwarder),
         }
@@ -495,7 +515,7 @@ fn create_tool_context(
 }
 
 /// Generate a short summary string for TUI display of a tool result.
-fn generate_tool_summary(tool_name: &str, result: &krew_tools::ToolResult) -> String {
+pub(crate) fn generate_tool_summary(tool_name: &str, result: &krew_tools::ToolResult) -> String {
     if result.is_error {
         // Show a concise error message instead of just "error".
         let msg = result.content.lines().next().unwrap_or("error");

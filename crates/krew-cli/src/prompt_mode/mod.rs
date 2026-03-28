@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use krew_config::{ApprovalMode, Config};
-use krew_core::agent::{AgentRuntime, PeerAgent, init_agents};
+use krew_core::agent::{AgentRuntime, PeerAgent, init_agents, register_sub_agents};
 use krew_core::event::{AgentEvent, ReviewDecision};
 use krew_core::persistence::{SessionSnapshot, build_session_file};
 use krew_core::router::{self, Addressee};
@@ -90,6 +90,11 @@ pub async fn run_prompt_mode(
     } else {
         None
     };
+
+    // Register Sub-Agent tool if enabled and definitions found.
+    if config.settings.sub_agent_enabled && !init_result.sub_agent_defs.is_empty() {
+        register_sub_agents(&mut agents, init_result.sub_agent_defs);
+    }
 
     // Load project instructions.
     let project_instructions = krew_config::load_project_instructions(&cwd).ok().flatten();
@@ -193,6 +198,7 @@ pub async fn run_prompt_mode(
             None,
             peers.as_deref(),
             current_whisper_targets.clone(),
+            None,
         );
 
         // Blank line between agents (not before the first).

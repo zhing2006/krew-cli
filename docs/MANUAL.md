@@ -18,12 +18,13 @@
 10. [Tool System](#10-tool-system)
 11. [MCP Integration](#11-mcp-integration)
 12. [Skill System](#12-skill-system)
-13. [Session Management](#13-session-management)
-14. [Prompt Mode](#14-prompt-mode)
-15. [Project Instructions (AGENTS.md)](#15-project-instructions-agentsmd)
-16. [File Paths & Load Priority](#16-file-paths--load-priority)
-17. [Keyboard Shortcuts](#17-keyboard-shortcuts)
-18. [Troubleshooting](#18-troubleshooting)
+13. [Sub-Agent System (Experimental)](#13-sub-agent-system-experimental)
+14. [Session Management](#14-session-management)
+15. [Prompt Mode](#15-prompt-mode)
+16. [Project Instructions (AGENTS.md)](#16-project-instructions-agentsmd)
+17. [File Paths & Load Priority](#17-file-paths--load-priority)
+18. [Keyboard Shortcuts](#18-keyboard-shortcuts)
+19. [Troubleshooting](#19-troubleshooting)
 
 ---
 
@@ -901,7 +902,64 @@ Use `/skills` to list available skills.
 
 ---
 
-## 13. Session Management
+## 13. Sub-Agent System (Experimental)
+
+Sub-Agents allow agents to delegate focused tasks to child agents running in isolated contexts, keeping the main conversation free of intermediate tool call noise.
+
+### Enable
+
+In `settings.toml`:
+
+```toml
+[settings]
+sub_agent_enabled = true
+```
+
+Disabled by default. When off, no agent definition files are read — zero overhead.
+
+### Define a Sub-Agent
+
+Place `.md` files in any of these directories:
+
+- `.krew/agents/` — Project-level (highest priority)
+- `.agents/agents/` — Project-level, cross-client
+- `.claude/agents/` — Project-level, Claude Code compatible
+
+User-level directories (`~/.krew/agents/` etc.) are also supported.
+
+**Definition file format:**
+
+```markdown
+---
+name: git
+description: Git operations agent
+color: cyan        # optional
+maxTurns: 50       # optional, default 30
+---
+
+You are a git expert. Handle all git operations including
+staging, committing, and pushing changes.
+```
+
+- `name` and `description` are required fields
+- The YAML body (after `---`) becomes the Sub-Agent's system prompt
+- Claude Code fields like `tools`, `model`, etc. are parsed but ignored
+
+### How It Works
+
+1. An agent calls the `run_agent` tool to invoke a Sub-Agent
+2. The Sub-Agent runs in a fully isolated context (independent message history)
+3. It shares the parent agent's tools (including MCP) and approval settings
+4. Tool call events are streamed to the user in real-time
+5. The final result is returned to the parent agent
+
+### View Sub-Agents
+
+Use the `/agents` command to see discovered Sub-Agent definitions.
+
+---
+
+## 14. Session Management
 
 ### Persistence
 
@@ -942,7 +1000,7 @@ Use `/agents` to see per-agent token usage (input/output/total).
 
 ---
 
-## 14. Prompt Mode
+## 15. Prompt Mode
 
 Non-interactive mode for scripting and CI/CD.
 
@@ -1033,7 +1091,7 @@ All events include `"agent"` (agent name). Whisper events additionally include `
 
 ---
 
-## 15. Project Instructions (AGENTS.md)
+## 16. Project Instructions (AGENTS.md)
 
 Place an `AGENTS.md` file in your project directory to provide all agents with project context (architecture, coding conventions, etc.).
 
@@ -1052,7 +1110,7 @@ Content is wrapped in `<project-instructions>` tags and injected into every agen
 
 ---
 
-## 16. File Paths & Load Priority
+## 17. File Paths & Load Priority
 
 ### Configuration files
 
@@ -1115,7 +1173,7 @@ All discovery uses **first-found wins** for same-name entries.
 
 ---
 
-## 17. Keyboard Shortcuts
+## 18. Keyboard Shortcuts
 
 ### Chat mode
 
@@ -1151,7 +1209,7 @@ All discovery uses **first-found wins** for same-name entries.
 
 ---
 
-## 18. Troubleshooting
+## 19. Troubleshooting
 
 ### "Git Bash not found" on Windows
 

@@ -121,6 +121,12 @@ pub struct Settings {
     /// can access any path on the system.
     #[serde(default = "default_true")]
     pub restrict_workspace: bool,
+    /// Whether to enable the Sub-Agent feature (experimental, default false).
+    /// When true, discovers agent definition files from `.krew/agents/`,
+    /// `.agents/agents/`, `.claude/agents/` directories and registers the
+    /// `run_agent` tool for delegating tasks to isolated sub-agents.
+    #[serde(default)]
+    pub sub_agent_enabled: bool,
 }
 
 /// Retry configuration for LLM API requests.

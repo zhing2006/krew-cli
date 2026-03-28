@@ -205,6 +205,34 @@ impl App {
             )));
         }
 
+        // Show Sub-Agent definitions if any.
+        if !self.sub_agent_defs.is_empty() {
+            lines.push(Line::default());
+            lines.push(Line::from(Span::styled(
+                "Sub-Agents:",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for def in &self.sub_agent_defs {
+                let source = def.source_path.to_string_lossy().replace('\\', "/");
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        format!("[{}]", def.name),
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(format!("  {}", def.description)),
+                ]));
+                lines.push(Line::from(Span::styled(
+                    format!("         {source}"),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+        }
+
         render::insert_lines(terminal, lines)
     }
 
