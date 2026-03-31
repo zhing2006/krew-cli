@@ -25,6 +25,7 @@ pub struct OpenAiChatClient {
     enable_thinking: bool,
     thinking_effort: Option<ThinkingEffort>,
     enable_web_search: bool,
+    extra_headers: Vec<(String, String)>,
 }
 
 impl OpenAiChatClient {
@@ -49,6 +50,7 @@ impl OpenAiChatClient {
             enable_thinking: config.enable_thinking,
             thinking_effort: config.thinking_effort,
             enable_web_search: config.enable_web_search,
+            extra_headers: config.extra_headers,
         }
     }
 }
@@ -444,8 +446,18 @@ impl LlmClient for OpenAiChatClient {
             provider_name: "OpenAI",
         };
         let auth = AuthMode::Bearer(&self.api_key);
-        let response =
-            common::send_with_retry(&req_config, &auth, None, &self.retry_config, on_retry).await?;
+        let response = common::send_with_retry(
+            &req_config,
+            &auth,
+            if self.extra_headers.is_empty() {
+                None
+            } else {
+                Some(&self.extra_headers)
+            },
+            &self.retry_config,
+            on_retry,
+        )
+        .await?;
 
         // Convert response into SSE event stream.
         let stream = build_event_stream(response);

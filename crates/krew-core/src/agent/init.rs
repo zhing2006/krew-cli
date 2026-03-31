@@ -142,6 +142,12 @@ pub fn init_agents(config: &Config, cwd: Option<PathBuf>) -> InitAgentsResult {
         };
 
         // Build shared client config.
+        let extra_headers: Vec<(String, String)> = provider_config
+            .extra_headers
+            .as_ref()
+            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default();
+
         let client_config = LlmClientConfig {
             agent_name: agent_config.name.clone(),
             model: agent_config.model.clone(),
@@ -152,6 +158,7 @@ pub fn init_agents(config: &Config, cwd: Option<PathBuf>) -> InitAgentsResult {
             enable_thinking: agent_config.enable_thinking,
             thinking_effort: agent_config.thinking_effort,
             enable_web_search: agent_config.enable_web_search,
+            extra_headers,
         };
 
         // Create LLM client based on provider type.

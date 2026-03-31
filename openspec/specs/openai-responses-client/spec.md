@@ -132,3 +132,14 @@
 #### Scenario: OpenAI Responses 多张图片
 - **WHEN** convert_messages 遇到 `role: Tool` 消息且 `images` 包含多张图片
 - **THEN** 每张图片 SHALL 生成一个独立的 `{ "type": "input_image", ... }` content block，文本 block（`type: "input_text"`）放在最后
+
+### Requirement: OpenAI Responses client sends extra headers
+The `OpenAiResponsesClient` SHALL accept extra headers during construction and pass them to `send_with_retry()` in `chat_stream()`.
+
+#### Scenario: Extra headers present
+- **WHEN** `OpenAiResponsesClient` is constructed with extra_headers containing `[("X-Foo", "bar")]`
+- **THEN** every `chat_stream()` request SHALL include the `X-Foo: bar` HTTP header
+
+#### Scenario: No extra headers
+- **WHEN** `OpenAiResponsesClient` is constructed without extra_headers (empty vec)
+- **THEN** `send_with_retry()` SHALL receive `None` for extra_headers, maintaining current behavior

@@ -25,6 +25,7 @@ fn add_provider_to_empty_file() {
             base_url: None,
             vertex_project: None,
             vertex_location: None,
+            extra_headers: None,
         },
     )
     .unwrap();
@@ -51,6 +52,7 @@ fn add_provider_to_new_file() {
             base_url: None,
             vertex_project: None,
             vertex_location: None,
+            extra_headers: None,
         },
     )
     .unwrap();
@@ -80,6 +82,7 @@ fn add_provider_preserves_comments() {
             base_url: None,
             vertex_project: None,
             vertex_location: None,
+            extra_headers: None,
         },
     )
     .unwrap();
@@ -109,6 +112,7 @@ fn add_provider_duplicate_name_errors() {
             base_url: None,
             vertex_project: None,
             vertex_location: None,
+            extra_headers: None,
         },
     );
 
@@ -130,6 +134,7 @@ fn add_provider_with_vertex_fields() {
             base_url: None,
             vertex_project: Some("my-project".into()),
             vertex_location: Some("us-central1".into()),
+            extra_headers: None,
         },
     )
     .unwrap();
@@ -153,12 +158,53 @@ fn add_provider_with_base_url() {
             base_url: Some("https://api.deepseek.com".into()),
             vertex_project: None,
             vertex_location: None,
+            extra_headers: None,
         },
     )
     .unwrap();
 
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(content.contains("base_url = \"https://api.deepseek.com\""));
+    drop(dir);
+}
+
+#[test]
+fn add_provider_with_extra_headers() {
+    let (dir, path) = temp_file("");
+    let mut headers = std::collections::HashMap::new();
+    headers.insert("X-Custom-Header".into(), "value1".into());
+    headers.insert("X-Another".into(), "value2".into());
+
+    add_provider(
+        &path,
+        &ProviderWriteData {
+            name: "vertex".into(),
+            provider_type: ProviderType::Google,
+            api_key: None,
+            api_key_env: Some("GOOGLE_TOKEN".into()),
+            base_url: None,
+            vertex_project: Some("my-proj".into()),
+            vertex_location: Some("global".into()),
+            extra_headers: Some(headers),
+        },
+    )
+    .unwrap();
+
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.contains("[providers.vertex]"));
+    assert!(content.contains("extra_headers"));
+    assert!(content.contains("X-Custom-Header"));
+    assert!(content.contains("value1"));
+    assert!(content.contains("X-Another"));
+    assert!(content.contains("value2"));
+
+    // Verify the written TOML can be parsed back.
+    let parsed: toml::Table = content.parse().unwrap();
+    let eh = parsed["providers"]["vertex"]["extra_headers"]
+        .as_table()
+        .unwrap();
+    assert_eq!(eh["X-Custom-Header"].as_str().unwrap(), "value1");
+    assert_eq!(eh["X-Another"].as_str().unwrap(), "value2");
     drop(dir);
 }
 

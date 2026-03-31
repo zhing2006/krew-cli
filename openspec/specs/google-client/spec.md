@@ -132,3 +132,14 @@
 #### Scenario: Google functionResponse 携带 id
 - **WHEN** convert_messages 遇到 `role: Tool` 消息
 - **THEN** `functionResponse` SHALL 包含 `id` 字段，值从 `ChatMessage.tool_call_id` 获取，与对应的 `functionCall.id` 匹配
+
+### Requirement: Google client sends extra headers
+The `GoogleClient` SHALL accept extra headers during construction and pass them to `send_with_retry()` in `chat_stream()`.
+
+#### Scenario: Extra headers present
+- **WHEN** `GoogleClient` is constructed with extra_headers containing `[("X-Foo", "bar")]`
+- **THEN** every `chat_stream()` request SHALL include the `X-Foo: bar` HTTP header
+
+#### Scenario: No extra headers
+- **WHEN** `GoogleClient` is constructed without extra_headers (empty vec)
+- **THEN** `send_with_retry()` SHALL receive `None` for extra_headers, maintaining current behavior

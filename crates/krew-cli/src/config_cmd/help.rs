@@ -172,6 +172,12 @@ Merge rules (project config takes precedence):
                              Google Vertex AI location, e.g. "us-central1"
                              (google provider only).
 
+  extra_headers              Table (key-value pairs)
+                             Extra HTTP headers for chat/inference requests.
+                             Does not apply to list_models. Do not use header
+                             names that conflict with provider-internal or auth
+                             headers (Authorization, x-api-key, etc.).
+
 ─── [[agents]] (project config only) ─────────────────────────────────────────
 
   name                       String (required)

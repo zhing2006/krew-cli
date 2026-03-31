@@ -104,6 +104,13 @@ api_key_env = "ANTHROPIC_API_KEY"
 type = "google"
 api_key_env = "GOOGLE_API_KEY"
 
+# Google Vertex AI with Priority PayGo example:
+# [providers.vertex]
+# type = "google"
+# vertex_project = "my-project"
+# vertex_location = "global"
+# extra_headers = { "X-Vertex-AI-LLM-Request-Type" = "shared", "X-Vertex-AI-LLM-Shared-Request-Type" = "priority" }
+
 [providers.doubao]
 type = "openai"                            # OpenAI-compatible service
 api_key_env = "DOUBAO_API_KEY"

@@ -176,6 +176,7 @@ fn batch_generated_config_loads_and_validates() {
             base_url: None,
             vertex_project: None,
             vertex_location: None,
+            extra_headers: None,
         },
     )
     .unwrap();

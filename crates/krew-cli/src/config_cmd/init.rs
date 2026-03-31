@@ -230,6 +230,7 @@ pub fn collect_provider_data(existing_names: &[String]) -> anyhow::Result<Provid
         base_url,
         vertex_project,
         vertex_location,
+        extra_headers: None,
     })
 }
 

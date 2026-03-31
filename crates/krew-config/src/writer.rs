@@ -43,6 +43,7 @@ pub struct ProviderWriteData {
     pub base_url: Option<String>,
     pub vertex_project: Option<String>,
     pub vertex_location: Option<String>,
+    pub extra_headers: Option<std::collections::HashMap<String, String>>,
 }
 
 /// Add a provider to the given config file.
@@ -89,6 +90,13 @@ pub fn add_provider(path: &Path, data: &ProviderWriteData) -> Result<(), ConfigE
     }
     if let Some(ref loc) = data.vertex_location {
         table["vertex_location"] = toml_edit::value(loc.as_str());
+    }
+    if let Some(ref headers) = data.extra_headers {
+        let mut inline = toml_edit::InlineTable::new();
+        for (k, v) in headers {
+            inline.insert(k.as_str(), v.as_str().into());
+        }
+        table["extra_headers"] = toml_edit::value(inline);
     }
 
     providers[&data.name] = Item::Table(table);

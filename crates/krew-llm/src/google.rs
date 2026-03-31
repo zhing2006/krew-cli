@@ -32,6 +32,7 @@ pub struct GoogleClient {
     enable_web_search: bool,
     other_agent_role: OtherAgentRole,
     retry_config: RetryConfig,
+    extra_headers: Vec<(String, String)>,
 }
 
 impl GoogleClient {
@@ -68,6 +69,7 @@ impl GoogleClient {
             enable_web_search: config.enable_web_search,
             other_agent_role: config.other_agent_role,
             retry_config: config.retry_config,
+            extra_headers: config.extra_headers,
         }
     }
 
@@ -504,6 +506,14 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                             u.prompt_tokens = prompt;
                             u.completion_tokens = completion;
                             u.total_tokens = prompt + completion;
+
+                            // Log Vertex AI traffic type for Priority PayGo debugging.
+                            if let Some(traffic_type) = usage_meta
+                                .get("trafficType")
+                                .and_then(|t| t.as_str())
+                            {
+                                tracing::debug!(traffic_type, "Vertex AI traffic type");
+                            }
                         }
 
                         // Extract candidates.
@@ -792,8 +802,18 @@ impl LlmClient for GoogleClient {
             // We'll use a special "no auth" approach.
             AuthMode::Header("x-goog-api-client", "krew-cli")
         };
-        let response =
-            common::send_with_retry(&req_config, &auth, None, &self.retry_config, on_retry).await?;
+        let response = common::send_with_retry(
+            &req_config,
+            &auth,
+            if self.extra_headers.is_empty() {
+                None
+            } else {
+                Some(&self.extra_headers)
+            },
+            &self.retry_config,
+            on_retry,
+        )
+        .await?;
 
         // Convert to SSE event stream.
         let stream = build_event_stream(response);

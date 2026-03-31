@@ -383,6 +383,8 @@ struct Usage {
 
 #### 3.3.2 Provider 实现
 
+所有 provider 支持可选的 `extra_headers` 配置（`ProviderConfig.extra_headers`），额外 HTTP headers 仅应用于 chat/inference 请求（`chat_stream()` → `send_with_retry()`），不影响 `list_models` 等非推理请求。用户不应配置与 provider 内部或认证 headers 冲突的名称。
+
 ##### OpenAI Client
 
 同时支持两种 API，通过 Agent 配置的 `api_type` 字段选择：
@@ -422,6 +424,7 @@ struct Usage {
 - system 消息分离到 `systemInstruction` 字段
 - Web Search: tools 中添加 `{ google_search: {} }`
 - Thinking: Gemini 3.x 使用 `thinkingConfig.thinkingLevel`；Gemini 2.5 使用 `thinkingConfig.thinkingBudget`
+- `extra_headers`: 支持 provider 级别的自定义 HTTP headers（仅 chat/inference 请求），用于 Vertex AI Priority PayGo 等场景
 
 ##### OpenAI-Compatible Client
 
@@ -1345,6 +1348,7 @@ struct ProviderWriteData {
     base_url: Option<String>,
     vertex_project: Option<String>,
     vertex_location: Option<String>,
+    extra_headers: Option<HashMap<String, String>>,
 }
 
 /// Agent data for writing to config file.

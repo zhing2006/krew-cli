@@ -536,12 +536,21 @@ type = "google"
 vertex_project = "my-project"
 vertex_location = "us-central1"
 
+# Google（Vertex AI Priority PayGo 模式）
+# [providers.vertex-priority]
+# type = "google"
+# vertex_project = "my-project"
+# vertex_location = "global"
+# extra_headers = { "X-Vertex-AI-LLM-Request-Type" = "shared", "X-Vertex-AI-LLM-Shared-Request-Type" = "priority" }
+
 # OpenAI 兼容（如豆包、LiteLLM）
 [providers.doubao]
 type = "openai"
 api_key_env = "DOUBAO_API_KEY"
 base_url = "https://ark.cn-beijing.volces.com/api/v3"
 ```
+
+**`extra_headers`** — 可选的 key-value 表，指定 chat/inference 请求的额外 HTTP headers。不适用于 `list_models` 等非推理 API 调用。请勿使用与 provider 内部或认证 headers 冲突的名称（如 `Authorization`、`x-api-key`、`anthropic-version`）。
 
 ### 5.5 MCP 服务器配置
 
