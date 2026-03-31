@@ -315,6 +315,9 @@ pub struct ProviderConfig {
     pub vertex_project: Option<String>,
     /// Google Vertex AI location (e.g. "us-central1").
     pub vertex_location: Option<String>,
+    /// Extra HTTP headers to include in chat/inference requests.
+    #[serde(default)]
+    pub extra_headers: Option<std::collections::HashMap<String, String>>,
 }
 
 /// How to present other agents' messages in the conversation history.

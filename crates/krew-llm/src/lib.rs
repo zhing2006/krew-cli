@@ -43,6 +43,8 @@ pub struct LlmClientConfig {
     pub thinking_effort: Option<ThinkingEffort>,
     /// Whether to inject the provider's native web search tool.
     pub enable_web_search: bool,
+    /// Extra HTTP headers to include in chat/inference requests.
+    pub extra_headers: Vec<(String, String)>,
 }
 
 /// Errors that can occur during LLM API interactions.

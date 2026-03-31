@@ -56,6 +56,17 @@
 - **WHEN** Provider TOML 块包含 `vertex_project = "my-proj"` 和 `vertex_location = "us-central1"`
 - **THEN** 正确反序列化两个字段
 
+### Requirement: Provider configuration fields
+The `ProviderConfig` struct SHALL include an optional `extra_headers` field of type `Option<HashMap<String, String>>` that deserializes from TOML inline tables. The field SHALL default to `None` when not specified in the configuration file.
+
+#### Scenario: Parse extra_headers from TOML
+- **WHEN** a provider config contains `extra_headers = { "X-Custom" = "value" }`
+- **THEN** `ProviderConfig.extra_headers` SHALL be `Some(HashMap)` containing the entry `("X-Custom", "value")`
+
+#### Scenario: Parse config without extra_headers
+- **WHEN** a provider config does not contain `extra_headers`
+- **THEN** `ProviderConfig.extra_headers` SHALL be `None`
+
 ### Requirement: McpServerConfig 结构体
 `krew-config` SHALL 定义 `McpServerConfig` 结构体，包含字段：`name: String`、`command: Option<String>`、`args: Vec<String>`、`env: Option<HashMap<String, String>>`、`url: Option<String>`、`headers: Option<HashMap<String, String>>`、`trust: Option<McpTrust>`。支持两种传输模式：stdio（设置 `command`）和 HTTP（设置 `url`）。
 

@@ -136,6 +136,7 @@ fn help_contains_providers_fields() {
         "base_url",
         "vertex_project",
         "vertex_location",
+        "extra_headers",
     ] {
         assert!(out.contains(field), "missing [providers] field: {field}");
     }

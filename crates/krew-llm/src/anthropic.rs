@@ -28,6 +28,7 @@ pub struct AnthropicClient {
     enable_web_search: bool,
     other_agent_role: OtherAgentRole,
     retry_config: RetryConfig,
+    extra_headers: Vec<(String, String)>,
 }
 
 impl AnthropicClient {
@@ -51,6 +52,7 @@ impl AnthropicClient {
             enable_web_search: config.enable_web_search,
             other_agent_role: config.other_agent_role,
             retry_config: config.retry_config,
+            extra_headers: config.extra_headers,
         }
     }
 }
@@ -701,13 +703,14 @@ impl LlmClient for AnthropicClient {
             provider_name: "Anthropic",
         };
         let auth = AuthMode::Header("x-api-key", &self.api_key);
-        let extra_headers = vec![
+        let mut extra_headers = vec![
             (
                 "anthropic-version".to_string(),
                 ANTHROPIC_VERSION.to_string(),
             ),
             ("content-type".to_string(), "application/json".to_string()),
         ];
+        extra_headers.extend_from_slice(&self.extra_headers);
         let response = common::send_with_retry(
             &req_config,
             &auth,

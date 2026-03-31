@@ -740,6 +740,12 @@ base_url = "https://api.anthropic.com"
 type = "google"
 api_key_env = "GOOGLE_API_KEY"
 
+[providers.vertex]                      # Google Vertex AI（支持 extra_headers）
+type = "google"
+vertex_project = "my-project"
+vertex_location = "global"
+extra_headers = { "X-Vertex-AI-LLM-Request-Type" = "shared", "X-Vertex-AI-LLM-Shared-Request-Type" = "priority" }
+
 [providers.openai-compatible]           # 第三方 OpenAI 兼容服务（type 仍为 "openai"）
 type = "openai"
 api_key_env = "DOUBAO_API_KEY"

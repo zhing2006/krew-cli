@@ -537,12 +537,21 @@ type = "google"
 vertex_project = "my-project"
 vertex_location = "us-central1"
 
+# Google (Vertex AI with Priority PayGo)
+# [providers.vertex-priority]
+# type = "google"
+# vertex_project = "my-project"
+# vertex_location = "global"
+# extra_headers = { "X-Vertex-AI-LLM-Request-Type" = "shared", "X-Vertex-AI-LLM-Shared-Request-Type" = "priority" }
+
 # OpenAI-Compatible (e.g. Doubao, LiteLLM)
 [providers.doubao]
 type = "openai"
 api_key_env = "DOUBAO_API_KEY"
 base_url = "https://ark.cn-beijing.volces.com/api/v3"
 ```
+
+**`extra_headers`** — Optional key-value table of extra HTTP headers to include in chat/inference requests. Does not apply to `list_models` or other non-inference API calls. Do not use header names that conflict with provider-internal or authentication headers (e.g. `Authorization`, `x-api-key`, `anthropic-version`).
 
 ### 5.5 MCP server configuration
 

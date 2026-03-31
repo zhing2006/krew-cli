@@ -24,6 +24,7 @@ pub struct OpenAiResponsesClient {
     enable_web_search: bool,
     other_agent_role: OtherAgentRole,
     retry_config: RetryConfig,
+    extra_headers: Vec<(String, String)>,
 }
 
 impl OpenAiResponsesClient {
@@ -48,6 +49,7 @@ impl OpenAiResponsesClient {
             enable_web_search: config.enable_web_search,
             other_agent_role: config.other_agent_role,
             retry_config: config.retry_config,
+            extra_headers: config.extra_headers,
         }
     }
 }
@@ -704,8 +706,18 @@ impl LlmClient for OpenAiResponsesClient {
             provider_name: "OpenAI Responses",
         };
         let auth = AuthMode::Bearer(&self.api_key);
-        let response =
-            common::send_with_retry(&req_config, &auth, None, &self.retry_config, on_retry).await?;
+        let response = common::send_with_retry(
+            &req_config,
+            &auth,
+            if self.extra_headers.is_empty() {
+                None
+            } else {
+                Some(&self.extra_headers)
+            },
+            &self.retry_config,
+            on_retry,
+        )
+        .await?;
 
         // Guard: if the response is not SSE, read body as text and return an error.
         let content_type = response

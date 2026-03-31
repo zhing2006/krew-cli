@@ -424,6 +424,37 @@ fn provider_config_vertex_fields_missing() {
     assert!(provider.vertex_location.is_none());
 }
 
+#[test]
+fn provider_config_extra_headers() {
+    let toml_str = r#"
+        type = "google"
+        vertex_project = "my-proj"
+        vertex_location = "global"
+        extra_headers = { "X-Vertex-AI-LLM-Request-Type" = "shared", "X-Vertex-AI-LLM-Shared-Request-Type" = "priority" }
+    "#;
+    let provider: ProviderConfig = toml::from_str(toml_str).unwrap();
+    let headers = provider.extra_headers.unwrap();
+    assert_eq!(headers.len(), 2);
+    assert_eq!(
+        headers.get("X-Vertex-AI-LLM-Request-Type").unwrap(),
+        "shared"
+    );
+    assert_eq!(
+        headers.get("X-Vertex-AI-LLM-Shared-Request-Type").unwrap(),
+        "priority"
+    );
+}
+
+#[test]
+fn provider_config_extra_headers_missing() {
+    let toml_str = r#"
+        type = "google"
+        api_key_env = "GOOGLE_API_KEY"
+    "#;
+    let provider: ProviderConfig = toml::from_str(toml_str).unwrap();
+    assert!(provider.extra_headers.is_none());
+}
+
 // ── Full config E2E ─────────────────────────────────────────────────────
 
 #[test]
