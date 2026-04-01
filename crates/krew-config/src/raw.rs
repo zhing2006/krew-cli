@@ -39,6 +39,7 @@ pub struct RawSettings {
     pub language: Option<String>,
     pub restrict_workspace: Option<bool>,
     pub sub_agent_enabled: Option<bool>,
+    pub update_check: Option<bool>,
 }
 
 // ── RawConfig ───────────────────────────────────────────────────────
@@ -135,6 +136,7 @@ impl RawConfig {
         merge_option!(language);
         merge_option!(restrict_workspace);
         merge_option!(sub_agent_enabled);
+        merge_option!(update_check);
 
         // ── skills: project Some wins, else inherit user ──
         if self.skills.is_none() {
@@ -172,6 +174,7 @@ impl RawConfig {
                 language: self.settings.language,
                 restrict_workspace: self.settings.restrict_workspace.unwrap_or(true),
                 sub_agent_enabled: self.settings.sub_agent_enabled.unwrap_or(false),
+                update_check: self.settings.update_check.unwrap_or(true),
             },
             agents: self.agents,
             providers: self.providers,
@@ -202,6 +205,7 @@ pub struct UserSettings {
     pub language: Option<String>,
     pub restrict_workspace: Option<bool>,
     pub sub_agent_enabled: Option<bool>,
+    pub update_check: Option<bool>,
 }
 
 // ── UserConfig ──────────────────────────────────────────────────────

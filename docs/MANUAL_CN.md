@@ -480,6 +480,10 @@ compact_keep_rounds = 10
 # comments, and communications with the user. Technical terms and code
 # identifiers should remain in their original form."
 # language = "中文"
+
+# 启动时检查 npm registry 是否有新版本（默认 true）
+# 检查结果缓存 24 小时。设为 false 可禁用。
+# update_check = true
 ```
 
 ### 5.2.1 权限规则

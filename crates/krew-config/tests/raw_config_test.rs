@@ -554,3 +554,48 @@ fn merge_language_project_none_inherits_user() {
     raw.merge_user(&user);
     assert_eq!(raw.settings.language.as_deref(), Some("日本語"));
 }
+
+// ── update_check merge & resolve ────────────────────────────────
+
+#[test]
+fn resolve_update_check_default_is_true() {
+    let raw = RawConfig::default();
+    let config = raw.resolve();
+    assert!(config.settings.update_check);
+}
+
+#[test]
+fn merge_update_check_project_false_wins() {
+    let user = UserConfig {
+        settings: UserSettings {
+            update_check: Some(true),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut raw = RawConfig {
+        settings: krew_config::RawSettings {
+            update_check: Some(false),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    raw.merge_user(&user);
+    let config = raw.resolve();
+    assert!(!config.settings.update_check);
+}
+
+#[test]
+fn merge_update_check_project_none_inherits_user_false() {
+    let user = UserConfig {
+        settings: UserSettings {
+            update_check: Some(false),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut raw = RawConfig::default();
+    raw.merge_user(&user);
+    let config = raw.resolve();
+    assert!(!config.settings.update_check);
+}

@@ -11,6 +11,7 @@ mod prompt_mode;
 mod render;
 mod streaming;
 mod textarea;
+mod update_check;
 
 use std::io::{self, stdout};
 use std::path::{Path, PathBuf};
@@ -413,10 +414,18 @@ fn run() -> i32 {
         "Tokio runtime created"
     );
 
+    // Check for new version (after runtime is ready, before prompt/TUI branch).
+    let mut warnings = config_warnings;
+    if let Some(update_warning) =
+        runtime.block_on(update_check::check_for_update(config.settings.update_check))
+    {
+        warnings.push(update_warning);
+    }
+
     // Branch: prompt mode (-p) or TUI mode.
     if let Some(prompt) = cli.prompt {
-        // Print config warnings to stderr in prompt mode (no TUI to display them).
-        for w in &config_warnings {
+        // Print warnings to stderr in prompt mode (no TUI to display them).
+        for w in &warnings {
             eprintln!("Warning: {w}");
         }
         runtime.block_on(prompt_mode::run_prompt_mode(
@@ -426,7 +435,7 @@ fn run() -> i32 {
             output_format,
         ))
     } else {
-        match runtime.block_on(async_main(config, cwd, cli.resume, config_warnings)) {
+        match runtime.block_on(async_main(config, cwd, cli.resume, warnings)) {
             Ok(()) => 0,
             Err(e) => {
                 eprintln!("Error: {e}");
