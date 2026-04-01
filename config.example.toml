@@ -19,6 +19,7 @@ agent_to_agent_max_rounds = 10         # max AI-to-AI rounds per user turn (0 = 
 # language = "中文"                    # language for agent responses (e.g. "中文", "English", "日本語"); unset = no instruction injected
 # restrict_workspace = true            # restrict file tools to workspace directory (default: true); set false to allow access to any path
 # sub_agent_enabled = false            # enable sub-agent system (default: false); when true, discovers .md agent definitions and registers run_agent tool
+# update_check = true                  # check npm registry for new versions on startup (default: true)
 
 # Permission rules: deny_rules, ask_rules, allow_rules
 # Each rule has: tool (required), pattern (optional), reason (optional)

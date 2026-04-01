@@ -66,6 +66,7 @@ fn help_contains_settings_fields() {
         "agent_to_agent_routing",
         "agent_to_agent_max_rounds",
         "language",
+        "update_check",
     ] {
         assert!(out.contains(field), "missing [settings] field: {field}");
     }
@@ -84,6 +85,7 @@ fn help_field_defaults_are_bound_to_correct_fields() {
     assert_field_default(&out, "other_agent_role", r#"Default: "user""#);
     assert_field_default(&out, "agent_to_agent_routing", r#"Default: "immediate""#);
     assert_field_default(&out, "agent_to_agent_max_rounds", "Default: 10");
+    assert_field_default(&out, "update_check", "Default: true");
 
     // [settings.retry] defaults
     assert_field_default(&out, "max_retries_rate_limit", "Default: 3");

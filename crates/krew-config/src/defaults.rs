@@ -27,6 +27,7 @@ impl Default for Config {
                 language: None,
                 restrict_workspace: true,
                 sub_agent_enabled: false,
+                update_check: true,
             },
             agents: Vec::new(),
             providers: HashMap::new(),

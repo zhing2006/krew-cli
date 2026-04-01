@@ -479,6 +479,10 @@ compact_keep_rounds = 10
 # comments, and communications with the user. Technical terms and code
 # identifiers should remain in their original form."
 # language = "中文"
+
+# Check npm registry for new versions on startup (default: true)
+# Results are cached for 24 hours. Set false to disable.
+# update_check = true
 ```
 
 ### 5.2.1 Permission rules

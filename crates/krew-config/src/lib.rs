@@ -120,6 +120,10 @@ pub struct Settings {
     /// `run_agent` tool for delegating tasks to isolated sub-agents.
     #[serde(default)]
     pub sub_agent_enabled: bool,
+    /// Whether to check for new versions on startup (default true).
+    /// When true, queries npm registry and shows a warning if a newer version is available.
+    #[serde(default = "default_true")]
+    pub update_check: bool,
 }
 
 /// Retry configuration for LLM API requests.

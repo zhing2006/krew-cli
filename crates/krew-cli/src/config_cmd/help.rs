@@ -108,6 +108,13 @@ Merge rules (project config takes precedence):
                              and registers the run_agent tool for delegating
                              tasks to isolated sub-agents.
 
+  update_check               Boolean
+                             Default: true
+                             Check npm registry for new versions on startup.
+                             When a newer version is available, displays a
+                             warning with the upgrade command. Results are
+                             cached for 24 hours. Set to false to disable.
+
 ─── [settings.retry] ─────────────────────────────────────────────────────────
 
   max_retries_rate_limit     Integer
