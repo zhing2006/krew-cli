@@ -9,7 +9,7 @@ pub use raw::{
     RawConfig, RawSettings, USER_CONFIG_DIR, UserConfig, UserSettings, user_config_path,
 };
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -58,6 +58,15 @@ pub struct Config {
     /// Agent Skills configuration.
     #[serde(default)]
     pub skills: SkillsConfig,
+    /// Permission rules that auto-approve matching tool calls.
+    #[serde(default)]
+    pub allow_rules: Vec<PermissionRule>,
+    /// Permission rules that auto-deny matching tool calls (LLM receives reason).
+    #[serde(default)]
+    pub deny_rules: Vec<PermissionRule>,
+    /// Permission rules that force approval even in FullAuto mode (bypass-immune).
+    #[serde(default)]
+    pub ask_rules: Vec<PermissionRule>,
 }
 
 /// Default input history limit.
@@ -91,22 +100,6 @@ pub struct Settings {
     /// Retry configuration for LLM API requests.
     #[serde(default)]
     pub retry: RetryConfig,
-    /// Shell commands that are auto-approved without user confirmation.
-    ///
-    /// Entries are prefix-matched against extracted command prefixes:
-    /// - `"ls"` matches all `ls` invocations
-    /// - `"cargo"` matches `cargo build`, `cargo test`, etc.
-    /// - `"cargo build"` matches only `cargo build` (not `cargo test`)
-    /// - `"git status"` matches only `git status` (not `git push`)
-    #[serde(default = "default_shell_allow_commands")]
-    pub shell_allow_commands: Vec<String>,
-    /// Domains that skip approval for the fetch_url tool.
-    ///
-    /// Entries are suffix-matched against the URL host:
-    /// - `"github.com"` matches `github.com` and `docs.github.com`
-    /// - `"docs.rs"` matches `docs.rs` and any subdomain
-    #[serde(default)]
-    pub fetch_allow_domains: Vec<String>,
     /// AI-to-AI routing strategy: immediate (queue head) or queued (queue tail).
     #[serde(default)]
     pub agent_to_agent_routing: AgentToAgentRouting,
@@ -226,13 +219,6 @@ fn default_retry_request_timeout_secs() -> u64 {
     DEFAULT_RETRY_REQUEST_TIMEOUT_SECS
 }
 
-/// Default shell commands that are auto-approved (read-only / side-effect-free).
-pub const DEFAULT_SHELL_ALLOW_COMMANDS: &[&str] = &[
-    "cat", "cd", "cut", "date", "df", "du", "echo", "env", "expr", "false", "file", "find", "grep",
-    "head", "hostname", "id", "ls", "nl", "paste", "printenv", "pwd", "rev", "rg", "seq", "sort",
-    "stat", "tail", "tr", "true", "uname", "uniq", "wc", "which", "whoami",
-];
-
 /// Default maximum AI-to-AI routing rounds per user message turn.
 pub const DEFAULT_AGENT_TO_AGENT_MAX_ROUNDS: u32 = 10;
 
@@ -240,11 +226,43 @@ fn default_agent_to_agent_max_rounds() -> u32 {
     DEFAULT_AGENT_TO_AGENT_MAX_ROUNDS
 }
 
-fn default_shell_allow_commands() -> Vec<String> {
-    DEFAULT_SHELL_ALLOW_COMMANDS
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
+/// A permission rule matching a tool call by tool name and optional pattern.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PermissionRule {
+    /// Tool name (e.g. "shell", "write_file", "read_file", "fetch_url").
+    pub tool: String,
+    /// Optional match pattern: wildcard for shell, glob for file tools,
+    /// domain suffix for fetch_url.
+    pub pattern: Option<String>,
+    /// Optional reason shown to LLM on deny or to user on ask.
+    pub reason: Option<String>,
+}
+
+/// Deprecated field names from earlier config versions.
+const DEPRECATED_SETTINGS_FIELDS: &[(&str, &str)] = &[
+    (
+        "shell_allow_commands",
+        "配置字段 'shell_allow_commands' 已废弃，请迁移到 [[allow_rules]] 格式。参见 docs/MANUAL_CN.md",
+    ),
+    (
+        "fetch_allow_domains",
+        "配置字段 'fetch_allow_domains' 已废弃，请迁移到 [[allow_rules]] 格式。参见 docs/MANUAL_CN.md",
+    ),
+];
+
+/// Check raw TOML text for deprecated field names and return warning messages.
+pub fn check_deprecated_fields(toml_text: &str) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for (field, message) in DEPRECATED_SETTINGS_FIELDS {
+        // Match the field name as a TOML key (at line start or after whitespace).
+        if toml_text.lines().any(|line| {
+            let trimmed = line.trim();
+            trimmed.starts_with(field) && trimmed[field.len()..].trim_start().starts_with('=')
+        }) {
+            warnings.push(message.to_string());
+        }
+    }
+    warnings
 }
 
 /// Configuration for a single AI agent.
@@ -524,6 +542,51 @@ impl Config {
                     "agent \"{}\" references unknown provider: \"{}\"",
                     agent.name, agent.provider
                 )));
+            }
+        }
+
+        // Validate permission rule tool names.
+        let known_tools: &[&str] = &[
+            "shell",
+            "write_file",
+            "edit_file",
+            "read_file",
+            "fetch_url",
+            "glob",
+            "grep",
+            "activate_skill",
+            "run_agent",
+        ];
+        let all_rules = self
+            .allow_rules
+            .iter()
+            .map(|r| ("allow_rules", r))
+            .chain(self.deny_rules.iter().map(|r| ("deny_rules", r)))
+            .chain(self.ask_rules.iter().map(|r| ("ask_rules", r)));
+        for (section, rule) in all_rules {
+            if !known_tools.contains(&rule.tool.as_str()) && !rule.tool.starts_with("mcp_") {
+                return Err(ConfigError::Validation(format!(
+                    "{section}: unknown tool name \"{}\". Known tools: {}, or mcp_* prefix",
+                    rule.tool,
+                    known_tools.join(", ")
+                )));
+            }
+
+            // Validate shell patterns for accidental regex syntax.
+            if rule.tool == "shell"
+                && let Some(ref pattern) = rule.pattern
+            {
+                let regex_chars = [".+", "\\d", "[", "]", "{", "}", "^", "$"];
+                for ch in &regex_chars {
+                    if pattern.contains(ch) {
+                        return Err(ConfigError::Validation(format!(
+                            "{section}: shell pattern \"{}\" contains regex-like syntax \
+                             \"{}\". Shell patterns use '*' wildcards, not regex. \
+                             Use '*' for any-character matching.",
+                            pattern, ch
+                        )));
+                    }
+                }
             }
         }
 

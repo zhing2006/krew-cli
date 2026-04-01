@@ -22,7 +22,7 @@ pub use glob::GlobTool;
 pub use grep::GrepTool;
 pub use read_file::ReadFileTool;
 pub use shell::ShellTool;
-pub use shell_parse::{extract_command_prefixes, matches_allowlist_entry};
+pub use shell_parse::{extract_command_prefixes, matches_allowlist_entry, split_shell_operators};
 pub use write_file::WriteFileTool;
 
 /// Create a tool registry with all readonly built-in tools.

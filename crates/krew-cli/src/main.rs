@@ -247,9 +247,18 @@ fn restore_terminal() {
 ///
 /// When `--config` is explicitly provided, the file MUST exist (error if not).
 /// When using the default path, a missing file silently falls back to defaults.
-fn load_config(cwd: &Path, cli: &Cli) -> anyhow::Result<Config> {
+fn load_config(cwd: &Path, cli: &Cli) -> anyhow::Result<(Config, Vec<String>)> {
+    let mut warnings = Vec::new();
+
     // 1. Load user-level config (~/.krew/settings.toml).
     let user_config = UserConfig::load();
+
+    // Check user config for deprecated fields.
+    if let Some(user_path) = krew_config::user_config_path()
+        && let Ok(toml_text) = std::fs::read_to_string(&user_path)
+    {
+        warnings.extend(krew_config::check_deprecated_fields(&toml_text));
+    }
 
     // 2. Load project-level config as RawConfig (preserving field presence).
     let explicit = cli.config.is_some();
@@ -260,6 +269,12 @@ fn load_config(cwd: &Path, cli: &Cli) -> anyhow::Result<Config> {
 
     let mut raw = if config_path.exists() {
         tracing::info!(path = %config_path.display(), "Loading config");
+
+        // Check project config for deprecated fields.
+        if let Ok(toml_text) = std::fs::read_to_string(&config_path) {
+            warnings.extend(krew_config::check_deprecated_fields(&toml_text));
+        }
+
         RawConfig::load(&config_path)
             .map_err(|e| anyhow::anyhow!("Failed to load {}: {e}", config_path.display()))?
     } else if explicit {
@@ -296,7 +311,7 @@ fn load_config(cwd: &Path, cli: &Cli) -> anyhow::Result<Config> {
         "Config loaded"
     );
 
-    Ok(config)
+    Ok((config, warnings))
 }
 
 fn main() {
@@ -372,8 +387,8 @@ fn run() -> i32 {
     tracing::info!("krew starting");
 
     // Load configuration (before terminal setup so errors print normally).
-    let config = match load_config(&cwd, &cli) {
-        Ok(config) => config,
+    let (config, config_warnings) = match load_config(&cwd, &cli) {
+        Ok(result) => result,
         Err(e) => {
             eprintln!("Error: {e}");
             return if cli.prompt.is_some() { 2 } else { 1 };
@@ -400,6 +415,10 @@ fn run() -> i32 {
 
     // Branch: prompt mode (-p) or TUI mode.
     if let Some(prompt) = cli.prompt {
+        // Print config warnings to stderr in prompt mode (no TUI to display them).
+        for w in &config_warnings {
+            eprintln!("Warning: {w}");
+        }
         runtime.block_on(prompt_mode::run_prompt_mode(
             config,
             cwd,
@@ -407,7 +426,7 @@ fn run() -> i32 {
             output_format,
         ))
     } else {
-        match runtime.block_on(async_main(config, cwd, cli.resume)) {
+        match runtime.block_on(async_main(config, cwd, cli.resume, config_warnings)) {
             Ok(()) => 0,
             Err(e) => {
                 eprintln!("Error: {e}");
@@ -493,6 +512,7 @@ async fn async_main(
     config: Config,
     cwd: PathBuf,
     resume: Option<Option<String>>,
+    config_warnings: Vec<String>,
 ) -> anyhow::Result<()> {
     // Install panic hook that restores the terminal before printing the panic.
     let default_hook = std::panic::take_hook();
@@ -507,6 +527,9 @@ async fn async_main(
 
     // Run the application.
     let mut app = app::App::new(cwd, config)?;
+
+    // Add deprecated config field warnings.
+    app.startup_warnings.extend(config_warnings);
 
     // Collect startup warnings from config normalization.
     let appended = app.config.normalize();

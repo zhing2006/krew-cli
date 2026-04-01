@@ -106,12 +106,20 @@
 - **WHEN** agent 的 shell 工具产生输出
 - **THEN** stdout 输出 `{"agent":"...","type":"tool_output","text":"..."}`
 
-### Requirement: 工具调用全自动审批
-`-p` 模式下，系统 SHALL 强制使用 `FullAuto` 审批模式，忽略配置文件中的 `approval_mode` 设置。对 `ApprovalRequest` 事件 SHALL 自动回复 `Approved`。
+### Requirement: 工具审批（fail-closed）
+`-p` 模式下，系统 SHALL 强制使用 `FullAuto` 审批模式，但 **deny 规则**、**ask 规则**和**保护路径免疫**仍然生效。对 `ApprovalRequest` 事件 SHALL 自动回复 `Denied`（非交互模式无法向用户确认，采用 fail-closed 策略）。可通过 `[[allow_rules]]` 预授权特定工具以在 prompt 模式下使用。
 
-#### Scenario: 写入工具自动执行
-- **WHEN** agent 请求执行 shell 命令
+#### Scenario: allow 规则覆盖的工具自动执行
+- **WHEN** agent 请求执行匹配 allow_rules 的 shell 命令（如 `cargo build`）
 - **THEN** 系统自动批准执行，不等待用户确认
+
+#### Scenario: 未授权工具自动拒绝
+- **WHEN** agent 请求执行未匹配任何 allow_rules 且需要审批的工具
+- **THEN** 系统自动拒绝，LLM 收到拒绝原因
+
+#### Scenario: deny 规则和保护路径仍生效
+- **WHEN** agent 请求写入 `.env` 文件或执行 `rm -rf .git`
+- **THEN** 系统拒绝执行，与 TUI 模式行为一致
 
 ### Requirement: AI-to-AI 路由
 `-p` 模式 SHALL 支持 AI-to-AI 路由。当 agent 响应中包含 `@other_agent` mention 时，系统按配置的路由策略（immediate/queued）将目标 agent 加入调度队列，遵循 `agent_to_agent_max_rounds` 限制。

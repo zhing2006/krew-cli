@@ -38,9 +38,13 @@
 - `settings.approval_mode` = `Suggest`
 - `settings.reply_order` = `["echo"]`
 - `settings.auto_compact_threshold` = `None`
+- `settings.allow_rules` = `[]`（空 Vec）
+- `settings.deny_rules` = `[]`（空 Vec）
+- `settings.ask_rules` = `[]`（空 Vec）
 - 一个名为 `"echo"` 的 agent（`display_name` = `"Echo"`，`provider` = `"builtin"`，`model` = `"echo"`，`color` = `"yellow"`，`tools` = `false`）
 - 空的 `providers` HashMap
 - 空的 `mcp_servers` Vec
+- 不再包含 `settings.shell_allow_commands` 和 `settings.fetch_allow_domains` 字段
 
 #### Scenario: 默认配置可用
 - **WHEN** 调用 `Config::default()`
@@ -49,6 +53,10 @@
 #### Scenario: 默认配置中包含 echo agent
 - **WHEN** 获取默认配置的 `agents` 列表
 - **THEN** SHALL 包含恰好一个名为 `"echo"` 的 agent
+
+#### Scenario: 默认配置无规则
+- **WHEN** 调用 `Config::default()`
+- **THEN** `settings.allow_rules`、`settings.deny_rules`、`settings.ask_rules` SHALL 均为空 Vec
 
 ### Requirement: 配置文件路径常量
 `krew-config` SHALL 定义公开常量 `CONFIG_FILENAME`，值为 `".krew/settings.toml"`。
@@ -72,12 +80,16 @@
 `krew-cli` 的 `load_config()` 函数 SHALL 按以下顺序执行：
 1. 调用 `UserConfig::load()` 加载 user-level 配置
 2. 调用 `RawConfig::load()` 加载 project-level 配置（不存在时使用 `RawConfig::default()`）
-3. 调用 `raw.merge_user(&user_config)` 合并 user 配置
+3. 调用 `raw.merge_user(&user_config)` 合并 user 配置（包括合并 `allow_rules`、`deny_rules`、`ask_rules` 列表，两个来源的规则拼接，不去重）
 4. 调用 `raw.resolve()` 填充默认值生成最终 `Config`
 5. 调用 `config.apply_cli_overrides()` 应用 CLI 参数覆盖
 6. 调用 `config.validate()` 校验合并后的配置
 
 validate() SHALL 在 apply_cli_overrides() **之后**执行，保持与现有行为一致。
+
+#### Scenario: 合并 user 和 project 规则
+- **WHEN** user config 包含 `[[deny_rules]] tool = "shell" pattern = "rm *"` 且 project config 包含 `[[deny_rules]] tool = "shell" pattern = "dd *"`
+- **THEN** 合并后的 `deny_rules` SHALL 包含两条规则（两个来源的规则拼接，不去重）
 
 #### Scenario: 完整加载流程
 - **WHEN** user config 和 project config 均存在

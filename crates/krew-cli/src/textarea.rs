@@ -140,7 +140,7 @@ struct TextElement {
 pub struct TextArea {
     text: String,
     cursor_pos: usize,
-    wrap_cache: RefCell<Option<WrapCache>>,
+    wrap_cache: RefCell<WrapCache>,
     preferred_col: Option<usize>,
     elements: Vec<TextElement>,
     next_element_id: u64,
@@ -158,7 +158,10 @@ impl TextArea {
         Self {
             text: String::new(),
             cursor_pos: 0,
-            wrap_cache: RefCell::new(None),
+            wrap_cache: RefCell::new(WrapCache {
+                width: 0,
+                lines: Vec::new(),
+            }),
             preferred_col: None,
             elements: Vec::new(),
             next_element_id: 1,
@@ -208,7 +211,7 @@ impl TextArea {
         self.cursor_pos = self.cursor_pos.clamp(0, self.text.len());
         self.elements.clear();
         self.cursor_pos = self.clamp_pos_to_nearest_boundary(self.cursor_pos);
-        self.wrap_cache.replace(None);
+        self.wrap_cache.borrow_mut().width = 0;
         self.preferred_col = None;
         self.kill_buffer.clear();
     }
@@ -224,7 +227,7 @@ impl TextArea {
     pub fn insert_str_at(&mut self, pos: usize, text: &str) {
         let pos = self.clamp_pos_for_insertion(pos);
         self.text.insert_str(pos, text);
-        self.wrap_cache.replace(None);
+        self.wrap_cache.borrow_mut().width = 0;
         if pos <= self.cursor_pos {
             self.cursor_pos += text.len();
         }
@@ -249,7 +252,7 @@ impl TextArea {
         let diff = inserted_len as isize - removed_len as isize;
 
         self.text.replace_range(range, text);
-        self.wrap_cache.replace(None);
+        self.wrap_cache.borrow_mut().width = 0;
         self.preferred_col = None;
         self.update_elements_after_replace(start, end, inserted_len);
 
@@ -652,23 +655,21 @@ impl TextArea {
     pub fn move_cursor_up(&mut self) {
         if let Some((target_col, maybe_line)) = {
             let cache_ref = self.wrap_cache.borrow();
-            if let Some(cache) = cache_ref.as_ref() {
-                let lines = &cache.lines;
-                if let Some(idx) = Self::wrapped_line_index_by_start(lines, self.cursor_pos) {
-                    let cur_range = &lines[idx];
-                    let target_col = self
-                        .preferred_col
-                        .unwrap_or_else(|| self.text[cur_range.start..self.cursor_pos].width());
-                    if idx > 0 {
-                        let prev = &lines[idx - 1];
-                        let line_start = prev.start;
-                        let line_end = prev.end.saturating_sub(1);
-                        Some((target_col, Some((line_start, line_end))))
-                    } else {
-                        Some((target_col, None))
-                    }
+            let lines = &cache_ref.lines;
+            if lines.is_empty() {
+                None
+            } else if let Some(idx) = Self::wrapped_line_index_by_start(lines, self.cursor_pos) {
+                let cur_range = &lines[idx];
+                let target_col = self
+                    .preferred_col
+                    .unwrap_or_else(|| self.text[cur_range.start..self.cursor_pos].width());
+                if idx > 0 {
+                    let prev = &lines[idx - 1];
+                    let line_start = prev.start;
+                    let line_end = prev.end.saturating_sub(1);
+                    Some((target_col, Some((line_start, line_end))))
                 } else {
-                    None
+                    Some((target_col, None))
                 }
             } else {
                 None
@@ -712,23 +713,21 @@ impl TextArea {
     pub fn move_cursor_down(&mut self) {
         if let Some((target_col, move_to_last)) = {
             let cache_ref = self.wrap_cache.borrow();
-            if let Some(cache) = cache_ref.as_ref() {
-                let lines = &cache.lines;
-                if let Some(idx) = Self::wrapped_line_index_by_start(lines, self.cursor_pos) {
-                    let cur_range = &lines[idx];
-                    let target_col = self
-                        .preferred_col
-                        .unwrap_or_else(|| self.text[cur_range.start..self.cursor_pos].width());
-                    if idx + 1 < lines.len() {
-                        let next = &lines[idx + 1];
-                        let line_start = next.start;
-                        let line_end = next.end.saturating_sub(1);
-                        Some((target_col, Some((line_start, line_end))))
-                    } else {
-                        Some((target_col, None))
-                    }
+            let lines = &cache_ref.lines;
+            if lines.is_empty() {
+                None
+            } else if let Some(idx) = Self::wrapped_line_index_by_start(lines, self.cursor_pos) {
+                let cur_range = &lines[idx];
+                let target_col = self
+                    .preferred_col
+                    .unwrap_or_else(|| self.text[cur_range.start..self.cursor_pos].width());
+                if idx + 1 < lines.len() {
+                    let next = &lines[idx + 1];
+                    let line_start = next.start;
+                    let line_end = next.end.saturating_sub(1);
+                    Some((target_col, Some((line_start, line_end))))
                 } else {
-                    None
+                    Some((target_col, None))
                 }
             } else {
                 None
@@ -845,7 +844,7 @@ impl TextArea {
         let diff = inserted_len as isize - removed_len as isize;
 
         self.text.replace_range(range, new);
-        self.wrap_cache.replace(None);
+        self.wrap_cache.borrow_mut().width = 0;
         self.preferred_col = None;
 
         self.elements[idx].range = start..(start + inserted_len);
@@ -1213,24 +1212,20 @@ impl TextArea {
 
     // ── Wrapping ─────────────────────────────────────────────────────
 
-    #[expect(clippy::unwrap_used)]
     fn wrapped_lines(&self, width: u16) -> Ref<'_, Vec<Range<usize>>> {
         {
             let mut cache = self.wrap_cache.borrow_mut();
-            let needs_recalc = match cache.as_ref() {
-                Some(c) => c.width != width,
-                None => true,
-            };
-            if needs_recalc {
+            if cache.width != width {
                 let lines = wrap_ranges(
                     &self.text,
                     Options::new(width as usize).wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
                 );
-                *cache = Some(WrapCache { width, lines });
+                cache.width = width;
+                cache.lines = lines;
             }
         }
         let cache = self.wrap_cache.borrow();
-        Ref::map(cache, |c| &c.as_ref().unwrap().lines)
+        Ref::map(cache, |c| &c.lines)
     }
 
     fn effective_scroll(

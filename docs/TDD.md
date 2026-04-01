@@ -646,7 +646,7 @@ impl ToolRegistry {
 | `fetch_url` | 抓取 URL 内容（HTTP→HTTPS 升级，HTML→Markdown，1MB 限制） | 网络 | 白名单自动，其他需确认 | 同左 | 自动 |
 | `activate_skill` | 激活 Skill，加载完整指令（发现 Skills 时自动注册） | 读操作 | 自动 | 自动 | 自动 |
 
-*Shell 命令可通过 `shell_allow_commands` 配置前缀匹配的免审批列表。
+工具审批通过 `[[allow_rules]]`、`[[deny_rules]]`、`[[ask_rules]]` 权限规则进行细粒度控制。保护路径（`.git/`、`.krew/`、`.env` 等）即使在 `full-auto` 模式下也始终受保护。
 
 **Shell 工具细节：**
 
@@ -659,7 +659,7 @@ impl ToolRegistry {
 
 - HTTP URL 自动升级为 HTTPS
 - 响应大小限制 1MB，超出截断
-- 域名白名单匹配：URL 域名以白名单项结尾即匹配（如 `docs.github.com` 匹配 `github.com`）
+- 域名匹配通过 `[[allow_rules]]` 中 `tool = "fetch_url"` 配置：后缀匹配（如 `docs.github.com` 匹配 `github.com`）
 - 跟随重定向，超时 30 秒
 
 **read_file 图片输入：**
@@ -1173,6 +1173,9 @@ struct Config {
     providers: HashMap<String, ProviderConfig>,
     mcp_servers: Vec<McpServerConfig>,
     skills: SkillsConfig,           // Skill 系统配置（默认 enabled=true）
+    allow_rules: Vec<PermissionRule>,  // 顶层：自动放行的权限规则
+    deny_rules: Vec<PermissionRule>,   // 顶层：自动拒绝的权限规则
+    ask_rules: Vec<PermissionRule>,    // 顶层：强制确认的权限规则（即使 full-auto）
 }
 
 #[derive(Deserialize)]
@@ -1186,8 +1189,6 @@ struct Settings {
     worker_threads: Option<usize>,        // tokio 工作线程数（默认 4）
     other_agent_role: Option<OtherAgentRole>,  // 其他 Agent 消息的 role（默认 User）
     retry: Option<RetryConfig>,           // LLM 请求重试配置
-    shell_allow_commands: Option<Vec<String>>,  // 免审批 shell 命令前缀列表
-    fetch_allow_domains: Option<Vec<String>>,   // 免审批 fetch_url 域名白名单
     agent_to_agent_routing: Option<AgentToAgentRouting>,  // AI-to-AI 路由策略（默认 Immediate）
     agent_to_agent_max_rounds: Option<u32>,               // AI-to-AI 最大轮次（默认 10，0 = 禁用）
     restrict_workspace: Option<bool>,                     // 限制内建文件工具只能访问工作区目录（默认 true）
@@ -1690,7 +1691,7 @@ struct AgentRuntime {
  4. 读取 stdin（若有管道输入）→ <stdin>...</stdin> 包裹 → 拼接到 prompt 前方
      │
      ▼
- 5. 初始化 Agents → 强制 FullAuto 审批模式
+ 5. 初始化 Agents → 强制 FullAuto 审批模式（deny/ask 规则和保护路径免疫仍生效，需确认的调用自动拒绝）
      │
      ▼
  6. 初始化 MCP（若有配置）

@@ -458,7 +458,11 @@ async fn consume_agent_events(
                     }
                 }
             }
-            AgentEvent::ToolCallStart { name, arguments } => {
+            AgentEvent::ToolCallStart {
+                name,
+                display_name,
+                arguments,
+            } => {
                 if format == OutputFormat::Text && mid_line {
                     println!();
                     mid_line = false;
@@ -466,7 +470,7 @@ async fn consume_agent_events(
                 match format {
                     OutputFormat::Text => {
                         let args_preview = format_tool_args_preview(&name, &arguments);
-                        println!("\u{26A1} {name}({args_preview})");
+                        println!("\u{26A1} {display_name}({args_preview})");
                     }
                     OutputFormat::Json => {
                         println!(
@@ -562,10 +566,62 @@ async fn consume_agent_events(
                 error_message = Some(message);
                 intermediate_messages = msgs;
             }
-            AgentEvent::ApprovalRequest { respond, .. } => {
-                // Auto-approve everything in prompt mode.
-                let _ = respond.send(ReviewDecision::Approved);
+            AgentEvent::ApprovalRequest {
+                tool_name,
+                reason,
+                respond,
+                ..
+            } => {
+                // Auto-deny in prompt mode: no interactive user to confirm.
+                // Bypass immunity and deny rules are handled before this point
+                // (they produce ToolDenied, not ApprovalRequest). ApprovalRequests
+                // come from ask_rules or default approval checks — both require
+                // user confirmation that is unavailable in non-interactive mode.
+                let deny_reason = reason.unwrap_or_else(|| {
+                    format!(
+                        "Tool '{tool_name}' requires approval but prompt mode \
+                         is non-interactive. Use TUI mode or add an allow_rule."
+                    )
+                });
+                match format {
+                    OutputFormat::Text => {
+                        eprintln!("  ✗ Denied (non-interactive): {deny_reason}");
+                    }
+                    OutputFormat::Json => {
+                        let json = serde_json::json!({
+                            "agent": agent_name,
+                            "type": "denied",
+                            "tool": tool_name,
+                            "reason": deny_reason,
+                        });
+                        println!("{json}");
+                    }
+                }
+                let _ = respond.send(ReviewDecision::Denied);
             }
+            AgentEvent::ToolDenied { tool_name, reason } => match format {
+                OutputFormat::Text => {
+                    let msg = if reason.is_empty() {
+                        format!("  ✗ Denied by rule: {tool_name}")
+                    } else {
+                        format!("  ✗ Denied: {reason}")
+                    };
+                    eprintln!("{msg}");
+                }
+                OutputFormat::Json => {
+                    let json = serde_json::json!({
+                        "agent": agent_name,
+                        "type": "denied",
+                        "tool": tool_name,
+                        "reason": if reason.is_empty() {
+                            format!("denied by rule: {tool_name}")
+                        } else {
+                            reason
+                        },
+                    });
+                    println!("{json}");
+                }
+            },
             AgentEvent::Retrying {
                 attempt,
                 max_attempts,

@@ -345,14 +345,23 @@ Multi-target whisper group — two agents discuss privately:
 
 ### Recipe 6: Auto-approve safe shell commands
 
-Tired of confirming `ls` and `cargo build`? Add them to the allowlist:
+Tired of confirming `ls` and `cargo build`? Add permission rules:
 
 ```toml
-[settings]
-shell_allow_commands = ["ls", "cat", "cargo build", "cargo test", "git status", "git diff"]
+[[allow_rules]]
+tool = "shell"
+pattern = "cargo *"
+
+[[allow_rules]]
+tool = "shell"
+pattern = "git status"
+
+[[allow_rules]]
+tool = "shell"
+pattern = "git diff *"
 ```
 
-These prefixes are matched — `cargo build --release` is also auto-approved.
+Shell patterns use `*` wildcards — `cargo *` matches `cargo build --release`, `cargo test`, etc.
 
 ---
 
@@ -455,12 +464,6 @@ compact_keep_rounds = 10
 # Tokio worker threads (default: 4)
 # worker_threads = 4
 
-# Shell commands auto-approved by prefix match
-# shell_allow_commands = ["ls", "cargo build", "git status"]
-
-# Domains auto-approved for fetch_url (subdomain matching)
-# fetch_allow_domains = ["docs.rs", "github.com"]
-
 # AI-to-AI routing strategy: "immediate" (default) or "queued"
 # agent_to_agent_routing = "immediate"
 
@@ -476,6 +479,38 @@ compact_keep_rounds = 10
 # comments, and communications with the user. Technical terms and code
 # identifiers should remain in their original form."
 # language = "中文"
+```
+
+### 5.2.1 Permission rules
+
+Permission rules are **top-level** arrays (not under `[settings]`). They control tool approval with deny → ask → allow evaluation order.
+
+```toml
+# Deny: auto-reject with reason sent to LLM
+[[deny_rules]]
+tool = "shell"
+pattern = "rm -rf *"
+reason = "Recursive force deletion is not allowed"
+
+[[deny_rules]]
+tool = "read_file"
+pattern = ".krew/settings.toml"
+reason = "Config file is protected"
+
+# Ask: force user confirmation even in full-auto mode
+[[ask_rules]]
+tool = "shell"
+pattern = "npm publish *"
+reason = "Publishing requires confirmation"
+
+# Allow: auto-approve matching tool calls
+[[allow_rules]]
+tool = "shell"
+pattern = "cargo *"
+
+[[allow_rules]]
+tool = "fetch_url"
+pattern = "github.com"
 ```
 
 ### 5.3 Agent definition
@@ -816,19 +851,22 @@ All file tools enforce path boundaries: operations must be within the session wo
 
 - HTTP URLs auto-upgrade to HTTPS
 - Response size limit: 1MB
-- Domain allowlist: `fetch_allow_domains` in settings; subdomain matching (e.g. `docs.github.com` matches `github.com`)
+- Domain matching via `[[allow_rules]]` with `tool = "fetch_url"`: suffix matching (e.g. `docs.github.com` matches pattern `github.com`)
 - Timeout: 30 seconds
 
 ### Approval behavior
 
 | Mode | Read tools | Write tools | Shell | fetch_url | MCP tools |
 | ---- | ---------- | ----------- | ----- | --------- | --------- |
-| `suggest` | Auto | Confirm | Confirm* | Allowlist auto, else confirm | Confirm** |
-| `auto-edit` | Auto | Auto | Confirm* | Allowlist auto, else confirm | Confirm** |
+| `suggest` | Auto | Confirm | Confirm | Confirm | Confirm** |
+| `auto-edit` | Auto | Auto | Confirm | Confirm | Confirm** |
 | `full-auto` | Auto | Auto | Auto | Auto | Auto |
 
-\* Shell commands matching `shell_allow_commands` prefixes are auto-approved.
 \** MCP tools with `trust = "auto"` skip approval; `trust = "confirm"` follows annotations.
+
+**Permission rules**: Use `[[allow_rules]]`, `[[deny_rules]]`, `[[ask_rules]]` for fine-grained control. Rules are evaluated in order: deny (block) → ask (force confirm) → allow (auto-approve). Each rule specifies a `tool` name and optional `pattern`/`reason`.
+
+**Bypass immunity**: Protected paths (`.git/`, `.krew/`, `.vscode/`, `.idea/`, `.claude/`, `.env`, `.bashrc`, etc.) are always guarded — even in `full-auto` mode, operations on these paths require confirmation and cannot be bypassed by allow rules.
 
 **Approval shortcuts**: `y` approve / `a` approve for session / `n` or `Esc` deny / `Ctrl+C` abort
 
@@ -1068,6 +1106,7 @@ Whisper mode adds `"whisper_targets": [...]` to JSON objects. Text format shows 
 | `tool_done` | `agent`, `tool`, `summary` | A tool call completed |
 | `server_tool_start` | `agent`, `tool` | Server-side tool started (e.g. web search) |
 | `server_tool_done` | `agent`, `tool`, `query` | Server-side tool completed |
+| `denied` | `agent`, `tool`, `reason` | Tool call denied by rule or non-interactive auto-deny |
 
 All events include `"agent"` (agent name). Whisper events additionally include `"whisper_targets": [...]`.
 
@@ -1096,7 +1135,7 @@ All events include `"agent"` (agent name). Whisper events additionally include `
 ### Constraints
 
 - `-p` and `--resume` are mutually exclusive
-- All tools run in `full-auto` mode (no approval prompts)
+- Tools run in `full-auto` mode, but **deny rules**, **ask rules**, and **bypass immunity** are still enforced. Tools that require user confirmation (ask rules or default approval) are **auto-denied** since there is no interactive user to approve them. Add `[[allow_rules]]` to pre-approve specific tools in prompt mode.
 - AI-to-AI routing is supported, subject to `agent_to_agent_max_rounds`
 
 ---
@@ -1253,14 +1292,19 @@ If you type a message without `@` or `#` and there's no previous respondent (e.g
 
 ### Why does shell keep asking for approval?
 
-Shell commands are confirmed by default in `suggest` and `auto-edit` modes. To auto-approve common commands, add them to the allowlist:
+Shell commands are confirmed by default in `suggest` and `auto-edit` modes. To auto-approve common commands, add allow rules:
 
 ```toml
-[settings]
-shell_allow_commands = ["ls", "cargo", "git status", "git diff"]
+[[allow_rules]]
+tool = "shell"
+pattern = "cargo *"
+
+[[allow_rules]]
+tool = "shell"
+pattern = "git status"
 ```
 
-The matching is **prefix-based**: `"cargo"` auto-approves `cargo build`, `cargo test`, etc. To skip all approval, use `--approval-mode full-auto` (use with caution).
+Shell patterns use `*` **wildcards**: `"cargo *"` auto-approves `cargo build`, `cargo test`, etc. To skip all approval, use `--approval-mode full-auto` (use with caution).
 
 After pressing `a` (approve for session), the same command prefix won't ask again in the current session.
 

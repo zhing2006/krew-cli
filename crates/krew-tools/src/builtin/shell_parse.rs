@@ -124,7 +124,7 @@ fn has_complex_constructs(command: &str) -> bool {
 ///
 /// Respects quoted strings (single and double quotes) so that operators
 /// inside quotes are not treated as separators.
-fn split_shell_operators(command: &str) -> Vec<String> {
+pub fn split_shell_operators(command: &str) -> Vec<String> {
     let mut segments = Vec::new();
     let mut current = String::new();
     let chars: Vec<char> = command.chars().collect();

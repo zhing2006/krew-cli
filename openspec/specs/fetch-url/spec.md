@@ -27,18 +27,18 @@ The tool SHALL limit the response body to 1MB. Content exceeding this limit SHAL
 - **THEN** the tool SHALL return the full converted Markdown content
 
 ### Requirement: fetch_url approval mechanism
-The `fetch_url` tool SHALL require user approval by default. Domains listed in `fetch_allow_domains` in `settings.toml` SHALL be auto-approved without user confirmation.
+The `fetch_url` tool SHALL require user approval by default. Approval behavior is controlled by the permission rules engine (`[[allow_rules]]`, `[[deny_rules]]`, `[[ask_rules]]`). Rules with `tool = "fetch_url"` use domain suffix matching on the `pattern` field.
 
-#### Scenario: Domain not in whitelist
-- **WHEN** the agent calls `fetch_url` with a URL whose domain is NOT in `fetch_allow_domains`
+#### Scenario: Domain not in allow rules
+- **WHEN** the agent calls `fetch_url` with a URL whose domain does not match any allow rule
 - **THEN** the tool SHALL require user approval before execution
 
-#### Scenario: Domain in whitelist
-- **WHEN** the agent calls `fetch_url` with a URL whose domain matches an entry in `fetch_allow_domains`
+#### Scenario: Domain matches allow rule
+- **WHEN** an `[[allow_rules]]` entry has `tool = "fetch_url"` and `pattern = "github.com"`, and the URL domain is `github.com`
 - **THEN** the tool SHALL execute without requiring user approval
 
 #### Scenario: Subdomain matching
-- **WHEN** `fetch_allow_domains` contains `github.com` and the URL is `https://docs.github.com/some/path`
+- **WHEN** an allow rule has `pattern = "github.com"` and the URL is `https://docs.github.com/some/path`
 - **THEN** the tool SHALL auto-approve because `docs.github.com` ends with `github.com`
 
 ### Requirement: fetch_url network behavior

@@ -258,11 +258,11 @@ krew -p "#opus what do you think of GPT's approach?"
 
 | Level | Read ops | Write ops | Shell | fetch_url | MCP |
 | ----- | -------- | --------- | ----- | --------- | --- |
-| `suggest` | Auto | Confirm | Confirm* | Allowlist auto | Confirm |
-| `auto-edit` | Auto | Auto | Confirm* | Allowlist auto | Confirm |
+| `suggest` | Auto | Confirm | Confirm | Confirm | Confirm |
+| `auto-edit` | Auto | Auto | Confirm | Confirm | Confirm |
 | `full-auto` | Auto | Auto | Auto | Auto | Auto |
 
-\* Shell commands matching `shell_allow_commands` prefixes are auto-approved.
+Fine-grained control via `[[allow_rules]]`, `[[deny_rules]]`, `[[ask_rules]]` in config. Protected paths (`.git/`, `.env`, etc.) are always guarded.
 
 ## Architecture
 

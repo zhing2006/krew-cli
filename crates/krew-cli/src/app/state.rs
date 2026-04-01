@@ -709,7 +709,11 @@ impl App {
                 }
                 terminal.insert_lines_above(vec![ratatui::text::Line::default()])?;
             }
-            AgentEvent::ToolCallStart { name, arguments } => {
+            AgentEvent::ToolCallStart {
+                name,
+                display_name,
+                arguments,
+            } => {
                 // Clear retry status.
                 self.agent_status_text = None;
 
@@ -731,7 +735,7 @@ impl App {
                 }
 
                 // Build tool call display line: ⚡ **tool_name**(args)
-                let display = format_tool_call_display(&name, &arguments);
+                let display = format_tool_call_display(&display_name, &arguments);
                 let yellow = ratatui::style::Style::default().fg(ratatui::style::Color::Yellow);
                 self.insert_tool_line(terminal, "\u{26A1} ", yellow, display)?;
 
@@ -976,10 +980,25 @@ impl App {
                     self.current_whisper_targets = None;
                 }
             }
+            AgentEvent::ToolDenied { tool_name, reason } => {
+                // Display denied feedback inline (red marker).
+                use ratatui::style::{Color, Style};
+                use ratatui::text::{Line, Span};
+                let line = Line::from(Span::styled(
+                    if reason.is_empty() {
+                        format!("  ✗ Denied by rule: {tool_name}")
+                    } else {
+                        format!("  ✗ Denied: {reason}")
+                    },
+                    Style::default().fg(Color::Red),
+                ));
+                terminal.insert_lines_above(vec![line])?;
+            }
             AgentEvent::ApprovalRequest {
                 tool_name,
                 arguments,
                 allow_session_approval,
+                reason,
                 respond,
             } => {
                 // Clear retry status.
@@ -1004,12 +1023,19 @@ impl App {
 
                 // Create or enqueue approval overlay.
                 if let Some(overlay) = &mut self.approval_overlay {
-                    overlay.enqueue(tool_name, arguments, allow_session_approval, respond);
+                    overlay.enqueue(
+                        tool_name,
+                        arguments,
+                        allow_session_approval,
+                        reason,
+                        respond,
+                    );
                 } else {
                     self.approval_overlay = Some(ApprovalOverlay::new(
                         tool_name,
                         arguments,
                         allow_session_approval,
+                        reason,
                         respond,
                     ));
                 }

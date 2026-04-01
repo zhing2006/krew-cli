@@ -11,8 +11,8 @@ use serde::Deserialize;
 use crate::{
     AgentConfig, AgentToAgentRouting, ApprovalMode, Config, ConfigError,
     DEFAULT_AGENT_TO_AGENT_MAX_ROUNDS, DEFAULT_COMPACT_KEEP_ROUNDS, DEFAULT_INPUT_HISTORY_LIMIT,
-    DEFAULT_SHELL_ALLOW_COMMANDS, DEFAULT_WORKER_THREADS, McpServerConfig, OtherAgentRole,
-    ProviderConfig, RetryConfig, Settings, SkillsConfig,
+    DEFAULT_WORKER_THREADS, McpServerConfig, OtherAgentRole, PermissionRule, ProviderConfig,
+    RetryConfig, Settings, SkillsConfig,
 };
 
 /// User-level config directory name (relative to home).
@@ -34,8 +34,6 @@ pub struct RawSettings {
     pub worker_threads: Option<usize>,
     pub other_agent_role: Option<OtherAgentRole>,
     pub retry: Option<RetryConfig>,
-    pub shell_allow_commands: Option<Vec<String>>,
-    pub fetch_allow_domains: Option<Vec<String>>,
     pub agent_to_agent_routing: Option<AgentToAgentRouting>,
     pub agent_to_agent_max_rounds: Option<u32>,
     pub language: Option<String>,
@@ -59,6 +57,12 @@ pub struct RawConfig {
     pub mcp_servers: Vec<McpServerConfig>,
     #[serde(default)]
     pub skills: Option<SkillsConfig>,
+    #[serde(default)]
+    pub allow_rules: Vec<PermissionRule>,
+    #[serde(default)]
+    pub deny_rules: Vec<PermissionRule>,
+    #[serde(default)]
+    pub ask_rules: Vec<PermissionRule>,
 }
 
 impl RawConfig {
@@ -113,8 +117,19 @@ impl RawConfig {
         merge_option!(worker_threads);
         merge_option!(other_agent_role);
         merge_option!(retry);
-        merge_option!(shell_allow_commands);
-        merge_option!(fetch_allow_domains);
+        // Permission rules: concatenate user + project (both sources apply).
+        let mut merged_allow = user.allow_rules.clone();
+        merged_allow.extend(std::mem::take(&mut self.allow_rules));
+        self.allow_rules = merged_allow;
+
+        let mut merged_deny = user.deny_rules.clone();
+        merged_deny.extend(std::mem::take(&mut self.deny_rules));
+        self.deny_rules = merged_deny;
+
+        let mut merged_ask = user.ask_rules.clone();
+        merged_ask.extend(std::mem::take(&mut self.ask_rules));
+        self.ask_rules = merged_ask;
+
         merge_option!(agent_to_agent_routing);
         merge_option!(agent_to_agent_max_rounds);
         merge_option!(language);
@@ -129,13 +144,6 @@ impl RawConfig {
 
     /// Resolve all `Option` fields to their defaults, producing the final `Config`.
     pub fn resolve(self) -> Config {
-        let shell_allow = self.settings.shell_allow_commands.unwrap_or_else(|| {
-            DEFAULT_SHELL_ALLOW_COMMANDS
-                .iter()
-                .map(|s| s.to_string())
-                .collect()
-        });
-
         Config {
             settings: Settings {
                 approval_mode: self.settings.approval_mode.unwrap_or_default(),
@@ -156,8 +164,6 @@ impl RawConfig {
                     .unwrap_or(DEFAULT_WORKER_THREADS),
                 other_agent_role: self.settings.other_agent_role.unwrap_or_default(),
                 retry: self.settings.retry.unwrap_or_default(),
-                shell_allow_commands: shell_allow,
-                fetch_allow_domains: self.settings.fetch_allow_domains.unwrap_or_default(),
                 agent_to_agent_routing: self.settings.agent_to_agent_routing.unwrap_or_default(),
                 agent_to_agent_max_rounds: self
                     .settings
@@ -171,6 +177,9 @@ impl RawConfig {
             providers: self.providers,
             mcp_servers: self.mcp_servers,
             skills: self.skills.unwrap_or_default(),
+            allow_rules: self.allow_rules,
+            deny_rules: self.deny_rules,
+            ask_rules: self.ask_rules,
         }
     }
 }
@@ -188,8 +197,6 @@ pub struct UserSettings {
     pub worker_threads: Option<usize>,
     pub other_agent_role: Option<OtherAgentRole>,
     pub retry: Option<RetryConfig>,
-    pub shell_allow_commands: Option<Vec<String>>,
-    pub fetch_allow_domains: Option<Vec<String>>,
     pub agent_to_agent_routing: Option<AgentToAgentRouting>,
     pub agent_to_agent_max_rounds: Option<u32>,
     pub language: Option<String>,
@@ -213,6 +220,12 @@ pub struct UserConfig {
     pub mcp_servers: Vec<McpServerConfig>,
     #[serde(default)]
     pub skills: Option<SkillsConfig>,
+    #[serde(default)]
+    pub allow_rules: Vec<PermissionRule>,
+    #[serde(default)]
+    pub deny_rules: Vec<PermissionRule>,
+    #[serde(default)]
+    pub ask_rules: Vec<PermissionRule>,
 }
 
 impl UserConfig {

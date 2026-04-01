@@ -32,6 +32,8 @@ struct PendingRequest {
     allow_session_approval: bool,
     /// Human-readable scope for session approval (e.g. "cargo build", "edit_file").
     session_scope: String,
+    /// Optional reason from ask rules shown to the user.
+    reason: Option<String>,
     /// Channel to send the decision back to the agent loop.
     respond: oneshot::Sender<ReviewDecision>,
 }
@@ -60,6 +62,7 @@ impl ApprovalOverlay {
         tool_name: String,
         arguments: String,
         allow_session_approval: bool,
+        reason: Option<String>,
         respond: oneshot::Sender<ReviewDecision>,
     ) -> Self {
         let session_scope = compute_session_scope(&tool_name, &arguments);
@@ -70,6 +73,7 @@ impl ApprovalOverlay {
                 arguments,
                 allow_session_approval,
                 session_scope,
+                reason,
                 respond,
             }),
             queue: Vec::new(),
@@ -85,6 +89,7 @@ impl ApprovalOverlay {
         tool_name: String,
         arguments: String,
         allow_session_approval: bool,
+        reason: Option<String>,
         respond: oneshot::Sender<ReviewDecision>,
     ) {
         let session_scope = compute_session_scope(&tool_name, &arguments);
@@ -93,6 +98,7 @@ impl ApprovalOverlay {
             arguments,
             allow_session_approval,
             session_scope,
+            reason,
             respond,
         });
     }
@@ -182,6 +188,16 @@ impl ApprovalOverlay {
             Span::styled(tool_display, Style::default().bold()),
             Span::styled(" — approve?", Style::default().fg(Color::DarkGray)),
         ]));
+
+        // Show ask reason if provided.
+        if let Some(reason) = &req.reason {
+            lines.push(Line::from(Span::styled(
+                format!("    Reason: {reason}"),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::ITALIC),
+            )));
+        }
 
         lines.push(Line::default());
 

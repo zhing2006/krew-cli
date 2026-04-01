@@ -508,9 +508,8 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                             u.total_tokens = prompt + completion;
 
                             // Log Vertex AI traffic type for Priority PayGo debugging.
-                            if let Some(traffic_type) = usage_meta
-                                .get("trafficType")
-                                .and_then(|t| t.as_str())
+                            if let Some(traffic_type) =
+                                usage_meta.get("trafficType").and_then(|t| t.as_str())
                             {
                                 tracing::debug!(traffic_type, "Vertex AI traffic type");
                             }

@@ -15,7 +15,6 @@ pub struct McpToolHandler {
     /// Original tool name on the MCP server.
     tool_name: String,
     /// Server name (for display; used by TUI rendering).
-    #[allow(dead_code)]
     server_name: String,
     /// Shared MCP client connection.
     client: Arc<McpClient>,
@@ -49,6 +48,10 @@ impl McpToolHandler {
 impl ToolHandler for McpToolHandler {
     fn name(&self) -> &str {
         &self.qualified_name
+    }
+
+    fn display_name(&self) -> String {
+        format!("mcp:{}/{}", self.server_name, self.tool_name)
     }
 
     fn requires_approval(&self) -> bool {

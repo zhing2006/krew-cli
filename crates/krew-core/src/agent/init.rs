@@ -201,8 +201,13 @@ pub fn init_agents(config: &Config, cwd: Option<PathBuf>) -> InitAgentsResult {
             other_agent_role: config.settings.other_agent_role,
             approval_mode: config.settings.approval_mode,
             approval_cache: shared_approval_cache.clone(),
-            shell_allow_commands: config.settings.shell_allow_commands.clone(),
-            fetch_allow_domains: config.settings.fetch_allow_domains.clone(),
+            allow_rules: config.allow_rules.clone(),
+            deny_rules: config.deny_rules.clone(),
+            ask_rules: config.ask_rules.clone(),
+            cwd: cwd
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default(),
             skill_catalog: skill_catalog.clone(),
             sub_agent_catalog: sub_agent_catalog.clone(),
             language: config.settings.language.clone(),
@@ -237,14 +242,19 @@ pub fn register_sub_agents(
             continue;
         }
 
+        let perms = sub_agent::run_agent_tool::PermissionConfig {
+            approval_mode: runtime.approval_mode,
+            approval_cache: runtime.approval_cache.clone(),
+            allow_rules: runtime.allow_rules.clone(),
+            deny_rules: runtime.deny_rules.clone(),
+            ask_rules: runtime.ask_rules.clone(),
+            cwd: runtime.cwd.clone(),
+        };
         let tool = sub_agent::RunAgentTool::new(
             sub_agent_defs.clone(),
             Arc::clone(&runtime.client),
-            runtime.approval_mode,
-            runtime.approval_cache.clone(),
             runtime.config.sampling.clone().unwrap_or_default(),
-            runtime.shell_allow_commands.clone(),
-            runtime.fetch_allow_domains.clone(),
+            perms,
         );
 
         let spec = tool.spec();
