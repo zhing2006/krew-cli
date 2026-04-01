@@ -14,6 +14,16 @@ use super::types::SubAgentDef;
 use crate::agent::{AgentLoopContext, run_agent_loop};
 use crate::event::{AgentEvent, ApprovalCache};
 
+/// Grouped permission-related configuration for Sub-Agent tool delegation.
+pub struct PermissionConfig {
+    pub approval_mode: ApprovalMode,
+    pub approval_cache: ApprovalCache,
+    pub allow_rules: Vec<krew_config::PermissionRule>,
+    pub deny_rules: Vec<krew_config::PermissionRule>,
+    pub ask_rules: Vec<krew_config::PermissionRule>,
+    pub cwd: String,
+}
+
 /// Tool that runs a Sub-Agent in an isolated context.
 ///
 /// The Sub-Agent shares the parent agent's runtime resources (client, tools,
@@ -30,16 +40,10 @@ pub struct RunAgentTool {
     is_running: Arc<AtomicBool>,
     /// Parent agent's LLM client.
     client: Arc<dyn krew_llm::LlmClient>,
-    /// Parent agent's approval mode.
-    approval_mode: ApprovalMode,
-    /// Parent agent's session-scoped approval cache.
-    approval_cache: ApprovalCache,
     /// Parent agent's sampling configuration.
     sampling: SamplingConfig,
-    /// Shell commands auto-approved without user confirmation.
-    shell_allow_commands: Vec<String>,
-    /// Domains auto-approved for fetch_url.
-    fetch_allow_domains: Vec<String>,
+    /// Permission configuration.
+    perms: PermissionConfig,
 }
 
 impl RunAgentTool {
@@ -47,22 +51,16 @@ impl RunAgentTool {
     pub fn new(
         defs: Vec<SubAgentDef>,
         client: Arc<dyn krew_llm::LlmClient>,
-        approval_mode: ApprovalMode,
-        approval_cache: ApprovalCache,
         sampling: SamplingConfig,
-        shell_allow_commands: Vec<String>,
-        fetch_allow_domains: Vec<String>,
+        perms: PermissionConfig,
     ) -> Self {
         let defs_map = defs.into_iter().map(|d| (d.name.clone(), d)).collect();
         Self {
             defs: defs_map,
             is_running: Arc::new(AtomicBool::new(false)),
             client,
-            approval_mode,
-            approval_cache,
             sampling,
-            shell_allow_commands,
-            fetch_allow_domains,
+            perms,
         }
     }
 
@@ -204,14 +202,18 @@ impl ToolHandler for RunAgentTool {
 
             while let Some(event) = sub_rx.recv().await {
                 match event {
-                    AgentEvent::ToolCallStart { name, arguments } => {
+                    AgentEvent::ToolCallStart {
+                        display_name,
+                        arguments,
+                        ..
+                    } => {
                         if let Some(ref tx) = output_tx {
                             let args_summary = if arguments.len() > 80 {
                                 format!("{}…", &arguments[..80])
                             } else {
                                 arguments
                             };
-                            let _ = tx.send(format!("🔧 {name}({args_summary})"));
+                            let _ = tx.send(format!("🔧 {display_name}({args_summary})"));
                         }
                     }
                     AgentEvent::ToolCallOutput { text } => {
@@ -243,6 +245,7 @@ impl ToolHandler for RunAgentTool {
                         tool_name,
                         arguments,
                         allow_session_approval,
+                        reason,
                         respond,
                     } => {
                         if let Some(ref ptx) = parent_tx {
@@ -250,6 +253,7 @@ impl ToolHandler for RunAgentTool {
                                 tool_name,
                                 arguments,
                                 allow_session_approval,
+                                reason,
                                 respond,
                             });
                         } else {
@@ -311,10 +315,12 @@ impl ToolHandler for RunAgentTool {
             tx: &sub_tx,
             agent_name,
             max_rounds: def.max_turns,
-            approval_mode: self.approval_mode,
-            approval_cache: &self.approval_cache,
-            shell_allow_commands: &self.shell_allow_commands,
-            fetch_allow_domains: &self.fetch_allow_domains,
+            approval_mode: self.perms.approval_mode,
+            approval_cache: &self.perms.approval_cache,
+            allow_rules: &self.perms.allow_rules,
+            deny_rules: &self.perms.deny_rules,
+            ask_rules: &self.perms.ask_rules,
+            cwd: &self.perms.cwd,
             whisper_targets: None,
         };
 

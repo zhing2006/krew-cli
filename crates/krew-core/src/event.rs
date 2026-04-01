@@ -70,7 +70,12 @@ pub enum AgentEvent {
     /// A server-side tool has completed with optional query/context.
     ServerToolDone { name: String, query: Option<String> },
     /// A tool call is starting execution.
-    ToolCallStart { name: String, arguments: String },
+    ToolCallStart {
+        name: String,
+        /// Human-readable name for TUI (e.g. `mcp:server/tool`).
+        display_name: String,
+        arguments: String,
+    },
     /// Incremental output from a streaming tool (e.g. shell).
     ToolCallOutput { text: String },
     /// A tool call has completed.
@@ -108,8 +113,17 @@ pub enum AgentEvent {
         /// Set to `false` for shell commands that cannot be reliably parsed
         /// (complex constructs), since session-wide approval would be unsafe.
         allow_session_approval: bool,
+        /// Optional reason from an ask rule to display in the approval overlay.
+        reason: Option<String>,
         /// Channel to send the user's decision back to the agent loop.
         respond: tokio::sync::oneshot::Sender<ReviewDecision>,
+    },
+    /// A tool call was denied by a permission rule (no user interaction).
+    ToolDenied {
+        /// Tool name that was denied.
+        tool_name: String,
+        /// Reason for denial (from the deny rule or built-in protection).
+        reason: String,
     },
     /// A retry attempt is about to happen (for TUI status display).
     Retrying {

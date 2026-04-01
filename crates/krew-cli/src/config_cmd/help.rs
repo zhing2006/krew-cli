@@ -78,20 +78,6 @@ Merge rules (project config takes precedence):
                              Default: "user"
                              How other agents' messages appear in each agent's history.
 
-  shell_allow_commands       Array of strings
-                             Default: ["cat", "cd", "cut", "date", "df", "du", "echo",
-                               "env", "expr", "false", "file", "find", "grep", "head",
-                               "hostname", "id", "ls", "nl", "paste", "printenv", "pwd",
-                               "rev", "rg", "seq", "sort", "stat", "tail", "tr", "true",
-                               "uname", "uniq", "wc", "which", "whoami"]
-                             Shell commands auto-approved without user confirmation.
-                             Entries are prefix-matched against command prefixes.
-
-  fetch_allow_domains        Array of strings
-                             Default: []
-                             Domains that skip approval for the fetch_url tool.
-                             Entries are suffix-matched against the URL host.
-
   agent_to_agent_routing     "immediate" | "queued"
                              Default: "immediate"
                              AI-to-AI routing strategy when an agent @-mentions another.
@@ -147,6 +133,43 @@ Merge rules (project config takes precedence):
   request_timeout_secs       Integer
                              Default: 60
                              Request timeout in seconds for initial response / first token.
+
+─── [[allow_rules]] / [[deny_rules]] / [[ask_rules]] (top-level) ──────────────
+
+  Permission rules for fine-grained tool approval control.
+  These are TOP-LEVEL arrays (not under [settings]).
+  Rules are evaluated in order: deny (block) → ask (confirm) → allow (approve).
+
+  Each rule has:
+    tool       String (required)   Tool name to match
+    pattern    String (optional)   Pattern to match against tool arguments
+    reason     String (optional)   Reason shown to LLM (deny) or user (ask)
+
+  Pattern syntax varies by tool:
+    shell       — wildcard matching (* = any chars)
+    file tools  — glob matching (**, *)
+    fetch_url   — domain suffix matching
+
+  Examples:
+
+    [[allow_rules]]
+    tool = "shell"
+    pattern = "cargo *"
+
+    [[deny_rules]]
+    tool = "shell"
+    pattern = "rm -rf *"
+    reason = "Recursive force deletion is not allowed"
+
+    [[deny_rules]]
+    tool = "read_file"
+    pattern = ".krew/settings.toml"
+    reason = "Config file is protected"
+
+    [[ask_rules]]
+    tool = "shell"
+    pattern = "npm publish *"
+    reason = "Publishing requires confirmation"
 
 ─── [providers.<name>] ───────────────────────────────────────────────────────
 

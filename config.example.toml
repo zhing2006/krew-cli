@@ -20,17 +20,31 @@ agent_to_agent_max_rounds = 10         # max AI-to-AI rounds per user turn (0 = 
 # restrict_workspace = true            # restrict file tools to workspace directory (default: true); set false to allow access to any path
 # sub_agent_enabled = false            # enable sub-agent system (default: false); when true, discovers .md agent definitions and registers run_agent tool
 
-# Shell commands auto-approved without user confirmation (prefix-matched).
-# "ls" matches all ls invocations; "cargo build" matches only cargo build (not cargo test).
-# Default: cat, cd, cut, date, df, du, echo, env, expr, false, file, find, grep, head,
-#          hostname, id, ls, nl, paste, printenv, pwd, rev, rg, seq, sort, stat, tail,
-#          tr, true, uname, uniq, wc, which, whoami
-# shell_allow_commands = ["ls", "cat", "grep", "cargo", "git status", "git log", "git diff"]
-
-# Domains auto-approved for fetch_url tool (suffix-matched against URL host).
-# "github.com" matches github.com and docs.github.com.
-# Default: [] (all domains require approval)
-# fetch_allow_domains = ["docs.rs", "github.com", "stackoverflow.com"]
+# Permission rules: deny_rules, ask_rules, allow_rules
+# Each rule has: tool (required), pattern (optional), reason (optional)
+# Pattern syntax: shell = wildcard (*), file tools = glob (**/*), fetch_url = domain suffix
+# Rules are evaluated in order: deny → ask → allow
+#
+# [[deny_rules]]
+# tool = "shell"
+# pattern = "rm -rf *"
+# reason = "Recursive force deletion is not allowed"
+#
+# [[ask_rules]]
+# tool = "shell"
+# pattern = "npm publish *"
+# reason = "Publishing requires confirmation"
+#
+# [[allow_rules]]
+# tool = "shell"
+# pattern = "cargo *"
+#
+# [[allow_rules]]
+# tool = "fetch_url"
+# pattern = "github.com"
+#
+# [[allow_rules]]
+# tool = "read_file"
 
 # Agent definitions
 

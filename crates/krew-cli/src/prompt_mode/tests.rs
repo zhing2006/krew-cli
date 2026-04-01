@@ -181,6 +181,7 @@ async fn tool_call_events_processed() {
     .unwrap();
     tx.send(AgentEvent::ToolCallStart {
         name: "read_file".to_string(),
+        display_name: "read_file".to_string(),
         arguments: r#"{"path":"src/main.rs"}"#.to_string(),
     })
     .unwrap();
@@ -211,6 +212,7 @@ async fn tool_call_output_processed() {
     .unwrap();
     tx.send(AgentEvent::ToolCallStart {
         name: "shell".to_string(),
+        display_name: "shell".to_string(),
         arguments: r#"{"command":"ls"}"#.to_string(),
     })
     .unwrap();
@@ -325,7 +327,7 @@ async fn thinking_between_server_tool_does_not_trigger_gemini_style() {
 }
 
 #[tokio::test]
-async fn approval_request_auto_approved() {
+async fn approval_request_auto_denied_in_prompt_mode() {
     let (tx, mut rx) = mpsc::unbounded_channel();
 
     tx.send(AgentEvent::ResponseStart {
@@ -340,20 +342,21 @@ async fn approval_request_auto_approved() {
         tool_name: "shell".to_string(),
         arguments: r#"{"command":"rm -rf /"}"#.to_string(),
         allow_session_approval: false,
+        reason: None,
         respond: resp_tx,
     })
     .unwrap();
     tx.send(make_done_event("done")).unwrap();
     drop(tx);
 
-    // Spawn consumer — it will auto-approve.
+    // Spawn consumer — it will auto-deny (non-interactive mode).
     let handle = tokio::spawn(async move {
         consume_agent_events(&mut rx, "claude", OutputFormat::Text, false, None).await
     });
 
-    // Verify the approval was sent.
+    // Verify the denial was sent.
     let decision = resp_rx.await.unwrap();
-    assert_eq!(decision, ReviewDecision::Approved);
+    assert_eq!(decision, ReviewDecision::Denied);
 
     let result = handle.await.unwrap();
     assert!(!result.has_error);

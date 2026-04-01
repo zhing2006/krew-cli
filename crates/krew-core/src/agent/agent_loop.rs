@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 
 use crate::event::{AgentEvent, ApprovalCache, ReviewDecision};
 
-use super::approval::{ToolApproval, cache_session_approval, check_tool_approval};
+use super::approval::{ApprovalContext, ToolApproval, cache_session_approval, check_tool_approval};
 
 /// Context for a single agent loop execution, grouping all shared references.
 pub(crate) struct AgentLoopContext<'a> {
@@ -22,8 +22,11 @@ pub(crate) struct AgentLoopContext<'a> {
     pub(crate) max_rounds: u32,
     pub(crate) approval_mode: ApprovalMode,
     pub(crate) approval_cache: &'a ApprovalCache,
-    pub(crate) shell_allow_commands: &'a [String],
-    pub(crate) fetch_allow_domains: &'a [String],
+    pub(crate) allow_rules: &'a [krew_config::PermissionRule],
+    pub(crate) deny_rules: &'a [krew_config::PermissionRule],
+    pub(crate) ask_rules: &'a [krew_config::PermissionRule],
+    /// Working directory for path normalization in permission rules.
+    pub(crate) cwd: &'a str,
     /// Whisper targets to stamp on all produced messages (None = not a whisper).
     pub(crate) whisper_targets: Option<Vec<String>>,
 }
@@ -135,25 +138,26 @@ pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
         tool_round_messages.push(assistant_msg.clone());
         messages.push(assistant_msg);
 
-        // Split tool calls into three groups:
+        // Split tool calls into four groups:
         // 1. readonly_calls: truly side-effect-free tools → parallel
-        // 2. auto_write_calls: write/shell auto-approved (FullAuto, cache hit, allowlist) → serial
+        // 2. auto_write_calls: write/shell auto-approved (FullAuto, cache hit, rules) → serial
         // 3. approval_calls: need user approval → serial with prompt
+        // 4. denied_calls: denied by rule → immediate error result, no execution
         let mut readonly_calls = Vec::new();
         let mut auto_write_calls = Vec::new();
-        let mut approval_calls: Vec<(&StreamToolCall, bool)> = Vec::new();
+        let mut approval_calls: Vec<(&StreamToolCall, bool, Option<String>)> = Vec::new();
+        let mut denied_calls: Vec<(&StreamToolCall, String)> = Vec::new();
         for tc in &result.tool_calls {
-            match check_tool_approval(
-                &tc.name,
-                &tc.arguments,
-                ctx.tools,
-                ctx.approval_mode,
-                ctx.approval_cache,
-                ctx.shell_allow_commands,
-                ctx.fetch_allow_domains,
-            )
-            .await
-            {
+            let approval_ctx = ApprovalContext {
+                tools: ctx.tools,
+                mode: ctx.approval_mode,
+                cache: ctx.approval_cache,
+                allow_rules: ctx.allow_rules,
+                deny_rules: ctx.deny_rules,
+                ask_rules: ctx.ask_rules,
+                cwd: ctx.cwd,
+            };
+            match check_tool_approval(&tc.name, &tc.arguments, &approval_ctx).await {
                 ToolApproval::Auto => {
                     if ctx.tools.requires_approval(&tc.name) {
                         // Write tool auto-approved — execute serially to avoid races.
@@ -165,8 +169,46 @@ pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
                 }
                 ToolApproval::NeedsApproval {
                     allow_session_approval,
-                } => approval_calls.push((tc, allow_session_approval)),
+                    reason,
+                } => approval_calls.push((tc, allow_session_approval, reason)),
+                ToolApproval::Denied { reason } => denied_calls.push((tc, reason)),
             }
+        }
+
+        // Phase 0: Process denied tool calls — immediate error results.
+        for (tc, reason) in &denied_calls {
+            let name = tc.name.clone();
+            let args_str = tc.arguments.clone();
+            let id = tc.id.clone();
+            let _ = ctx.tx.send(AgentEvent::ToolCallStart {
+                name: name.clone(),
+                display_name: ctx.tools.display_name(&name),
+                arguments: args_str.clone(),
+            });
+            let content = if reason.is_empty() {
+                "Tool denied by rule.".to_string()
+            } else {
+                format!("Tool denied: {reason}")
+            };
+            let _ = ctx.tx.send(AgentEvent::ToolDenied {
+                tool_name: name.clone(),
+                reason: reason.clone(),
+            });
+            let tool_msg = ChatMessage {
+                role: ChatRole::Tool,
+                content: content.clone(),
+                name: Some(name.clone()),
+                tool_call_id: Some(id),
+                tool_calls: None,
+                images: Vec::new(),
+                addressee: None,
+                whisper_targets: None,
+                created_at: chrono::Utc::now(),
+                usage: None,
+                server_tool_uses: Vec::new(),
+            };
+            tool_round_messages.push(tool_msg.clone());
+            messages.push(tool_msg);
         }
 
         // Phase 1: Execute readonly tools in parallel.
@@ -178,6 +220,7 @@ pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
                 let id = tc.id.clone();
                 let _ = ctx.tx.send(AgentEvent::ToolCallStart {
                     name: name.clone(),
+                    display_name: ctx.tools.display_name(&name),
                     arguments: args_str.clone(),
                 });
                 let tools_ref = ctx.tools;
@@ -208,6 +251,7 @@ pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
             let id = tc.id.clone();
             let _ = ctx.tx.send(AgentEvent::ToolCallStart {
                 name: name.clone(),
+                display_name: ctx.tools.display_name(&name),
                 arguments: args_str.clone(),
             });
             let args: serde_json::Value = serde_json::from_str(&args_str).unwrap_or_default();
@@ -224,13 +268,14 @@ pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
         let mut approval_results = Vec::new();
         let mut aborted = false;
 
-        for (tc, allow_session_approval) in &approval_calls {
+        for (tc, allow_session_approval, ask_reason) in &approval_calls {
             let name = tc.name.clone();
             let args_str = tc.arguments.clone();
             let id = tc.id.clone();
 
             let _ = ctx.tx.send(AgentEvent::ToolCallStart {
                 name: name.clone(),
+                display_name: ctx.tools.display_name(&name),
                 arguments: args_str.clone(),
             });
 
@@ -240,6 +285,7 @@ pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
                 tool_name: name.clone(),
                 arguments: args_str.clone(),
                 allow_session_approval: *allow_session_approval,
+                reason: ask_reason.clone(),
                 respond: resp_tx,
             });
 

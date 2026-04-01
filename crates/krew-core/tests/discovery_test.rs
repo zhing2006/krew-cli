@@ -162,6 +162,10 @@ fn commands_no_dirs_empty_registry() {
 #[test]
 fn skills_claude_dir() {
     let tmp = tempfile::tempdir().unwrap();
+    unsafe {
+        std::env::set_var("HOME", tmp.path().join("__fake_home__"));
+        std::env::set_var("USERPROFILE", tmp.path().join("__fake_home__"));
+    }
     let skill_dir = tmp.path().join(".claude").join("skills").join("my-skill");
     fs::create_dir_all(&skill_dir).unwrap();
     fs::write(
@@ -180,6 +184,10 @@ fn skills_claude_dir() {
 #[test]
 fn skills_priority_krew_over_agents_over_claude() {
     let tmp = tempfile::tempdir().unwrap();
+    unsafe {
+        std::env::set_var("HOME", tmp.path().join("__fake_home__"));
+        std::env::set_var("USERPROFILE", tmp.path().join("__fake_home__"));
+    }
 
     for (dir_name, desc) in [
         (".krew", "From krew."),
@@ -205,6 +213,10 @@ fn skills_priority_krew_over_agents_over_claude() {
 #[test]
 fn skills_multi_dir_merge() {
     let tmp = tempfile::tempdir().unwrap();
+    unsafe {
+        std::env::set_var("HOME", tmp.path().join("__fake_home__"));
+        std::env::set_var("USERPROFILE", tmp.path().join("__fake_home__"));
+    }
 
     let krew_dir = tmp.path().join(".krew").join("skills").join("review");
     fs::create_dir_all(&krew_dir).unwrap();

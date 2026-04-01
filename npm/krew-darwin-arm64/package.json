@@ -1,6 +1,6 @@
 {
   "name": "@zhing2026/krew-darwin-arm64",
-  "version": "0.8.2",
+  "version": "0.9.0",
   "description": "krew binary for macOS arm64",
   "os": ["darwin"],
   "cpu": ["arm64"],

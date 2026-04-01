@@ -260,6 +260,13 @@ mod tests {
     fn test_discover_skills_from_directory() {
         let dir = tempfile::tempdir().unwrap();
 
+        // Override HOME to avoid picking up user-level skills.
+        // SAFETY: test-only, no concurrent reads of HOME expected.
+        unsafe {
+            std::env::set_var("HOME", dir.path().join("__fake_home__"));
+            std::env::set_var("USERPROFILE", dir.path().join("__fake_home__"));
+        }
+
         // Create .krew/skills/review/SKILL.md
         let review_dir = dir.path().join(".krew").join("skills").join("review");
         fs::create_dir_all(&review_dir).unwrap();
@@ -289,6 +296,13 @@ mod tests {
     #[test]
     fn test_discover_skills_priority_override() {
         let dir = tempfile::tempdir().unwrap();
+
+        // Override HOME to avoid picking up user-level skills.
+        // SAFETY: test-only, no concurrent reads of HOME expected.
+        unsafe {
+            std::env::set_var("HOME", dir.path().join("__fake_home__"));
+            std::env::set_var("USERPROFILE", dir.path().join("__fake_home__"));
+        }
 
         // Create higher-priority version in .krew/skills/
         let krew_dir = dir.path().join(".krew").join("skills").join("dupe");

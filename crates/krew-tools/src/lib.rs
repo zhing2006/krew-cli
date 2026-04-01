@@ -90,6 +90,13 @@ pub struct ToolContext {
 pub trait ToolHandler: Send + Sync {
     /// Unique tool name (must match the corresponding ToolSpec).
     fn name(&self) -> &str;
+    /// Human-readable display name for TUI rendering.
+    ///
+    /// Defaults to `name()`. MCP tools override this to produce
+    /// `mcp:{server}/{tool}` format using the stored server name.
+    fn display_name(&self) -> String {
+        self.name().to_string()
+    }
     /// Whether this tool requires user approval before execution.
     fn requires_approval(&self) -> bool;
     /// Execute the tool with the given arguments.
@@ -142,6 +149,16 @@ impl ToolRegistry {
         self.handlers
             .get(name)
             .is_some_and(|h| h.requires_approval())
+    }
+
+    /// Return the display name for a tool (human-readable, for TUI).
+    ///
+    /// Falls back to the raw `name` when the tool is not registered.
+    pub fn display_name(&self, name: &str) -> String {
+        self.handlers
+            .get(name)
+            .map(|h| h.display_name())
+            .unwrap_or_else(|| name.to_string())
     }
 
     /// Reset session-scoped state on all registered tools.

@@ -37,10 +37,14 @@ pub struct AgentRuntime {
     pub approval_mode: ApprovalMode,
     /// Session-scoped approval cache (persists across agent turns).
     pub approval_cache: ApprovalCache,
-    /// Shell commands that are auto-approved without user confirmation.
-    pub shell_allow_commands: Vec<String>,
-    /// Domains that skip approval for the fetch_url tool.
-    pub fetch_allow_domains: Vec<String>,
+    /// Permission rules that auto-approve matching tool calls.
+    pub allow_rules: Vec<krew_config::PermissionRule>,
+    /// Permission rules that auto-deny matching tool calls.
+    pub deny_rules: Vec<krew_config::PermissionRule>,
+    /// Permission rules that force approval even in FullAuto mode.
+    pub ask_rules: Vec<krew_config::PermissionRule>,
+    /// Working directory for path normalization in permission rules.
+    pub cwd: String,
     /// Pre-built skill catalog XML for system prompt injection.
     pub skill_catalog: Option<String>,
     /// Pre-built Sub-Agent catalog XML for system prompt injection.
@@ -116,8 +120,10 @@ impl AgentRuntime {
         let max_rounds = max_tool_rounds.unwrap_or(DEFAULT_MAX_TOOL_ROUNDS);
         let approval_mode = self.approval_mode;
         let approval_cache = self.approval_cache.clone();
-        let shell_allow_commands = self.shell_allow_commands.clone();
-        let fetch_allow_domains = self.fetch_allow_domains.clone();
+        let allow_rules = self.allow_rules.clone();
+        let deny_rules = self.deny_rules.clone();
+        let ask_rules = self.ask_rules.clone();
+        let cwd = self.cwd.clone();
         let exclude: Vec<String> = exclude_tools
             .unwrap_or(&[])
             .iter()
@@ -162,8 +168,10 @@ impl AgentRuntime {
                 max_rounds,
                 approval_mode,
                 approval_cache: &approval_cache,
-                shell_allow_commands: &shell_allow_commands,
-                fetch_allow_domains: &fetch_allow_domains,
+                allow_rules: &allow_rules,
+                deny_rules: &deny_rules,
+                ask_rules: &ask_rules,
+                cwd: &cwd,
                 whisper_targets,
             };
             run_agent_loop(&ctx, &mut full_messages).await;

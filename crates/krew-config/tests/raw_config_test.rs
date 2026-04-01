@@ -58,8 +58,9 @@ fn resolve_none_fields_get_defaults() {
     );
     assert!(config.settings.paste_burst_detection);
     assert!(config.settings.auto_compact_threshold.is_none());
-    assert!(!config.settings.shell_allow_commands.is_empty()); // default list
-    assert!(config.settings.fetch_allow_domains.is_empty());
+    assert!(config.allow_rules.is_empty());
+    assert!(config.deny_rules.is_empty());
+    assert!(config.ask_rules.is_empty());
     assert!(config.agents.is_empty());
     assert!(config.providers.is_empty());
     assert!(config.skills.enabled);
@@ -73,7 +74,11 @@ fn resolve_some_fields_preserved() {
     raw.settings.approval_mode = Some(ApprovalMode::FullAuto);
     raw.settings.worker_threads = Some(16);
     raw.settings.paste_burst_detection = Some(false);
-    raw.settings.shell_allow_commands = Some(vec!["cargo".to_string()]);
+    raw.allow_rules = vec![krew_config::PermissionRule {
+        tool: "shell".into(),
+        pattern: Some("cargo *".into()),
+        reason: None,
+    }];
     raw.skills = Some(SkillsConfig {
         enabled: false,
         extra_paths: vec!["/custom".to_string()],
@@ -83,7 +88,8 @@ fn resolve_some_fields_preserved() {
     assert_eq!(config.settings.approval_mode, ApprovalMode::FullAuto);
     assert_eq!(config.settings.worker_threads, 16);
     assert!(!config.settings.paste_burst_detection);
-    assert_eq!(config.settings.shell_allow_commands, vec!["cargo"]);
+    assert_eq!(config.allow_rules.len(), 1);
+    assert_eq!(config.allow_rules[0].tool, "shell");
     assert!(!config.skills.enabled);
     assert_eq!(config.skills.extra_paths, vec!["/custom"]);
 }
@@ -135,7 +141,7 @@ color = "red"
     assert_eq!(raw.settings.approval_mode, Some(ApprovalMode::FullAuto));
     assert!(raw.settings.worker_threads.is_none());
     assert!(raw.settings.compact_keep_rounds.is_none());
-    assert!(raw.settings.shell_allow_commands.is_none());
+    assert!(raw.allow_rules.is_empty());
     assert!(raw.settings.other_agent_role.is_none());
     assert!(raw.settings.retry.is_none());
 }
@@ -401,6 +407,9 @@ fn merge_resolve_end_to_end() {
             enabled: true,
             extra_paths: vec!["/user-skills".into()],
         }),
+        allow_rules: Vec::new(),
+        deny_rules: Vec::new(),
+        ask_rules: Vec::new(),
     };
 
     // Project config: overrides approval_mode, adds agent, overrides openai provider.
