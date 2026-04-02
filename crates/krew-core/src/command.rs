@@ -1,3 +1,14 @@
+/// Scope for the `/dream` memory consolidation command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DreamScope {
+    /// Consolidate global memory (`.krew/memory/`).
+    Global,
+    /// Consolidate per-agent memory (`.krew/memory/agents/{name}/`).
+    Agent,
+    /// Consolidate both global and per-agent memory.
+    All,
+}
+
 /// Slash commands available during a session.
 pub enum SlashCommand {
     /// Resume a previous session.
@@ -20,6 +31,8 @@ pub enum SlashCommand {
     Help,
     /// Rewind to a previous message.
     Rewind,
+    /// Memory consolidation (dream) with a specific agent.
+    Dream(DreamScope, String),
     /// Exit the program (also aliased as /quit).
     Exit,
 }
@@ -43,9 +56,39 @@ impl SlashCommand {
             "/stats" => Some(SlashCommand::Stats),
             "/help" => Some(SlashCommand::Help),
             "/rewind" => Some(SlashCommand::Rewind),
+            "/dream" => Self::parse_dream(&arg),
             "/exit" | "/quit" => Some(SlashCommand::Exit),
             _ => None,
         }
+    }
+
+    /// Parse `/dream <scope> @<agent>` arguments.
+    ///
+    /// Returns `Some(Dream(scope, agent))` on success, or
+    /// `Some(Dream(Global, ""))` for missing/invalid args (handled at
+    /// execution time with a usage hint).
+    fn parse_dream(arg: &str) -> Option<SlashCommand> {
+        if arg.is_empty() {
+            // No arguments — show usage hint at execution time.
+            return Some(SlashCommand::Dream(DreamScope::Global, String::new()));
+        }
+
+        let mut parts = arg.split_whitespace();
+        let scope_str = parts.next().unwrap_or("");
+        let scope = match scope_str {
+            "global" => DreamScope::Global,
+            "agent" => DreamScope::Agent,
+            "all" => DreamScope::All,
+            _ => {
+                // Invalid scope — show usage hint at execution time.
+                return Some(SlashCommand::Dream(DreamScope::Global, String::new()));
+            }
+        };
+
+        let agent_part = parts.next().unwrap_or("");
+        let agent_name = agent_part.strip_prefix('@').unwrap_or("").to_string();
+
+        Some(SlashCommand::Dream(scope, agent_name))
     }
 
     /// Return the command name including the `/` prefix.
@@ -61,6 +104,7 @@ impl SlashCommand {
             SlashCommand::Stats => "/stats",
             SlashCommand::Help => "/help",
             SlashCommand::Rewind => "/rewind",
+            SlashCommand::Dream(..) => "/dream",
             SlashCommand::Exit => "/exit",
         }
     }
@@ -72,6 +116,7 @@ impl SlashCommand {
             ("/resume", "Resume a previous session"),
             ("/agents", "List agents and token usage"),
             ("/compact", "Compact session context"),
+            ("/dream", "Consolidate memory (/dream <scope> @<agent>)"),
             ("/mcp", "List MCP servers and tools"),
             ("/skills", "List available skills"),
             ("/tools", "List available tools per agent"),
@@ -89,6 +134,7 @@ impl SlashCommand {
             SlashCommand::Resume => "Resume a previous session",
             SlashCommand::Agents => "List agents and token usage",
             SlashCommand::Compact(_) => "Compact session context",
+            SlashCommand::Dream(..) => "Consolidate memory (/dream <scope> @<agent>)",
             SlashCommand::Mcp => "List MCP servers and tools",
             SlashCommand::Skills => "List available skills",
             SlashCommand::Tools => "List available tools per agent",

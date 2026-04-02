@@ -148,6 +148,8 @@ pub struct App {
     pub(crate) a2a_insert_cursor: usize,
     /// Current whisper targets (set during whisper dispatch, cleared when done).
     pub(crate) current_whisper_targets: Option<Vec<String>>,
+    /// Tool names to exclude from the current agent dispatch (used by `/dream`).
+    pub(crate) current_exclude_tools: Option<Vec<String>>,
     /// Whether the session is in rewound state (fork semantics: don't save until new message).
     pub(crate) rewound: bool,
 }
@@ -249,6 +251,7 @@ impl App {
             ai_conversation_rounds: 0,
             a2a_insert_cursor: 0,
             current_whisper_targets: None,
+            current_exclude_tools: None,
             session_created_at: Utc::now(),
             rewound: false,
         })
@@ -908,8 +911,9 @@ impl App {
 
                 // Chain-trigger next pending agent (if any).
                 if !self.start_next_agent(terminal)? {
-                    // No more pending agents — clear whisper state.
+                    // No more pending agents — clear dispatch state.
                     self.current_whisper_targets = None;
+                    self.current_exclude_tools = None;
                 }
             }
             AgentEvent::Error {
@@ -978,6 +982,7 @@ impl App {
                 // Error isolation: continue with next pending agent.
                 if !self.start_next_agent(terminal)? {
                     self.current_whisper_targets = None;
+                    self.current_exclude_tools = None;
                 }
             }
             AgentEvent::ToolDenied { tool_name, reason } => {
@@ -1096,9 +1101,10 @@ impl App {
         // Persist session after cancel to avoid data loss.
         self.save_session();
 
-        // Clear pending agents (cancel the entire @all dispatch).
+        // Clear pending agents (cancel the entire dispatch).
         self.pending_agents.clear();
         self.current_whisper_targets = None;
+        self.current_exclude_tools = None;
 
         // Close shell output section if open.
         if self.shell_output_started {
