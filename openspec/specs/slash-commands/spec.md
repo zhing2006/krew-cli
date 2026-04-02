@@ -78,7 +78,7 @@ The `/resume` command SHALL list recent sessions and allow the user to select on
 - **THEN** `/resume` SHALL be described as "Resume a previous session"
 
 ### Requirement: 已实现的命令
-`/compact`、`/mcp`、`/skills`、`/tools` SHALL 执行各自的功能逻辑。`/compact` 的完整行为定义在 compact spec 中，`/mcp` 列出已连接的 MCP 服务器及其工具，`/skills` 列出可用的 skill 列表，`/tools` 按 agent 分组列出非 MCP runtime tools。
+`/compact`、`/mcp`、`/skills`、`/tools`、`/dream` SHALL 执行各自的功能逻辑。`/compact` 的完整行为定义在 compact spec 中，`/mcp` 列出已连接的 MCP 服务器及其工具，`/skills` 列出可用的 skill 列表，`/tools` 按 agent 分组列出非 MCP runtime tools，`/dream` 的完整行为定义在 dream-command spec 中。
 
 #### Scenario: /skills 执行 skill 列表显示
 - **WHEN** 用户输入 `/skills`
@@ -99,6 +99,10 @@ The `/resume` command SHALL list recent sessions and allow the user to select on
 #### Scenario: /tools 列出非 MCP runtime tools
 - **WHEN** 用户输入 `/tools`
 - **THEN** 系统 SHALL 按 agent 分组列出每个 agent 的非 MCP runtime tools（详见 tools-command spec）
+
+#### Scenario: /dream 执行记忆整理
+- **WHEN** 用户输入 `/dream global @opus`
+- **THEN** 系统 SHALL 执行记忆整理逻辑（详见 dream-command spec）
 
 ### Requirement: /rewind 命令注册
 `/rewind` SHALL 注册为内置 slash 命令，出现在命令解析、帮助列表和 tab 补全中。

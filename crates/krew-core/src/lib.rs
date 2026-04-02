@@ -6,6 +6,7 @@ pub mod command;
 pub mod compact;
 pub mod custom_command;
 pub mod discovery;
+pub mod dream;
 pub mod event;
 pub mod memory;
 pub mod persistence;

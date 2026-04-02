@@ -3,7 +3,8 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use krew_core::command::SlashCommand;
+use krew_core::command::{DreamScope, SlashCommand};
+use krew_core::dream;
 use krew_llm::{ChatMessage, ChatRole};
 
 use crate::completion::{ActivePopup, CompletionItem, CompletionState};
@@ -61,6 +62,9 @@ impl App {
             }
             SlashCommand::Rewind => {
                 self.execute_rewind(terminal)?;
+            }
+            SlashCommand::Dream(scope, agent_name) => {
+                self.execute_dream(scope, agent_name, terminal)?;
             }
         }
         Ok(())
@@ -146,6 +150,104 @@ impl App {
 
         // Schedule compact (processed in the main event loop).
         self.pending_compact_agent = Some(agent_name);
+        Ok(())
+    }
+
+    /// Execute /dream: trigger memory consolidation with a specific agent.
+    fn execute_dream(
+        &mut self,
+        scope: DreamScope,
+        agent_name: String,
+        terminal: &mut custom_terminal::Terminal,
+    ) -> anyhow::Result<()> {
+        // Show usage hint if agent name is empty.
+        if agent_name.is_empty() {
+            return self.show_info(
+                terminal,
+                "Usage: /dream <scope> @<agent>  (scope: global, agent, all)",
+            );
+        }
+
+        // Reject @all.
+        if agent_name == "all" {
+            return self.show_error(
+                terminal,
+                "/dream does not support @all — specify a single agent",
+            );
+        }
+
+        // Validate agent exists.
+        if !self.agents.contains_key(&agent_name) {
+            return self.show_error(terminal, &format!("Agent \"{agent_name}\" not found"));
+        }
+
+        // Validate agent has tools enabled.
+        let has_tools = self
+            .config
+            .agents
+            .iter()
+            .find(|a| a.name == agent_name)
+            .is_some_and(|a| a.tools);
+        if !has_tools {
+            return self.show_error(
+                terminal,
+                &format!("Agent \"{agent_name}\" has tools disabled — cannot execute dream"),
+            );
+        }
+
+        // Fork semantics: generate new session ID on first action after rewind.
+        if self.rewound {
+            self.session_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
+            self.session_created_at = chrono::Utc::now();
+            self.rewound = false;
+        }
+
+        // Build dream prompt.
+        let prompt = dream::build_dream_prompt(scope, &agent_name);
+
+        let scope_label = match scope {
+            DreamScope::Global => "global",
+            DreamScope::Agent => "agent",
+            DreamScope::All => "all",
+        };
+
+        // Show status.
+        self.show_info(
+            terminal,
+            &format!("Dreaming with [{agent_name}] ({scope_label})..."),
+        )?;
+
+        // Inject as whisper message.
+        let whisper_targets = vec![agent_name.clone()];
+        self.messages.push(
+            ChatMessage::user_with_addressee(prompt, Some(agent_name.clone()))
+                .with_whisper_targets(Some(whisper_targets.clone())),
+        );
+
+        // Build exclude list from whitelist: exclude all tools NOT in the
+        // allowed set. This covers MCP tools and any future built-in tools.
+        let exclude_tools: Vec<String> = self
+            .agents
+            .get(&agent_name)
+            .map(|agent| {
+                agent
+                    .tools
+                    .specs()
+                    .iter()
+                    .filter(|spec| !dream::DREAM_ALLOWED_TOOLS.contains(&spec.name.as_str()))
+                    .map(|spec| spec.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Set dispatch state.
+        self.current_whisper_targets = Some(whisper_targets);
+        self.current_exclude_tools = Some(exclude_tools);
+        self.pending_agents.push_back(agent_name);
+
+        // Start the agent.
+        self.start_next_agent(terminal)?;
+
         Ok(())
     }
 

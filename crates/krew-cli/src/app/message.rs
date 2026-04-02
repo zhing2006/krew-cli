@@ -301,13 +301,17 @@ impl App {
                 } else {
                     None
                 };
+                let exclude_refs: Option<Vec<&str>> = self
+                    .current_exclude_tools
+                    .as_ref()
+                    .map(|v| v.iter().map(|s| s.as_str()).collect());
                 let rx = agent.start_completion(
                     self.messages.clone(),
                     self.project_instructions.as_deref(),
                     None,
                     peers.as_deref(),
                     self.current_whisper_targets.clone(),
-                    None,
+                    exclude_refs.as_deref(),
                 );
                 self.agent_event_rx = Some(rx);
                 return Ok(true);
