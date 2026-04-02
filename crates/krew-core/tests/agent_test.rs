@@ -8,6 +8,7 @@ fn instructions_and_system_prompt() {
         Some("Use Rust conventions"),
         None,
         None,
+        None,
         Some("You are a helpful assistant"),
     );
     assert_eq!(
@@ -18,7 +19,7 @@ fn instructions_and_system_prompt() {
 
 #[test]
 fn instructions_without_system_prompt() {
-    let result = build_system_prompt(Some("Use Rust conventions"), None, None, None);
+    let result = build_system_prompt(Some("Use Rust conventions"), None, None, None, None);
     assert_eq!(
         result.unwrap(),
         "<project-instructions>\nUse Rust conventions\n</project-instructions>"
@@ -27,7 +28,7 @@ fn instructions_without_system_prompt() {
 
 #[test]
 fn instructions_with_empty_system_prompt() {
-    let result = build_system_prompt(Some("Use Rust conventions"), None, None, Some(""));
+    let result = build_system_prompt(Some("Use Rust conventions"), None, None, None, Some(""));
     assert_eq!(
         result.unwrap(),
         "<project-instructions>\nUse Rust conventions\n</project-instructions>"
@@ -36,13 +37,13 @@ fn instructions_with_empty_system_prompt() {
 
 #[test]
 fn no_instructions_with_system_prompt() {
-    let result = build_system_prompt(None, None, None, Some("You are a helpful assistant"));
+    let result = build_system_prompt(None, None, None, None, Some("You are a helpful assistant"));
     assert_eq!(result.unwrap(), "You are a helpful assistant");
 }
 
 #[test]
 fn no_instructions_no_system_prompt() {
-    let result = build_system_prompt(None, None, None, None);
+    let result = build_system_prompt(None, None, None, None, None);
     assert!(result.is_none());
 }
 
@@ -53,6 +54,7 @@ fn instructions_skills_and_system_prompt() {
     let result = build_system_prompt(
         Some("Use Rust"),
         Some(catalog),
+        None,
         None,
         Some("You are helpful"),
     );
@@ -72,7 +74,7 @@ fn instructions_skills_and_system_prompt() {
 fn skills_without_instructions() {
     let catalog =
         "<available-skills>\n  <skill name=\"test\">Test skill.</skill>\n</available-skills>";
-    let result = build_system_prompt(None, Some(catalog), None, Some("Agent prompt"));
+    let result = build_system_prompt(None, Some(catalog), None, None, Some("Agent prompt"));
     let output = result.unwrap();
     assert!(output.starts_with("<available-skills>"));
     assert!(output.contains("Agent prompt"));
@@ -80,7 +82,41 @@ fn skills_without_instructions() {
 
 #[test]
 fn empty_skill_catalog_ignored() {
-    let result = build_system_prompt(None, Some(""), None, Some("Agent prompt"));
+    let result = build_system_prompt(None, Some(""), None, None, Some("Agent prompt"));
+    assert_eq!(result.unwrap(), "Agent prompt");
+}
+
+#[test]
+fn memory_prompt_ordering() {
+    let sub_agent_catalog = "<sub-agents>sub-agent list</sub-agents>";
+    let memory = "## Global Memory\n\n- [User](user.md) — engineer";
+    let result = build_system_prompt(
+        Some("Project rules"),
+        None,
+        Some(sub_agent_catalog),
+        Some(memory),
+        Some("Agent prompt"),
+    );
+    let output = result.unwrap();
+    // Verify order: sub-agent catalog → memory → agent prompt.
+    let sa_pos = output.find("<sub-agents>").unwrap();
+    let mem_pos = output.find("## Global Memory").unwrap();
+    let ap_pos = output.find("Agent prompt").unwrap();
+    assert!(sa_pos < mem_pos, "sub-agent catalog before memory");
+    assert!(mem_pos < ap_pos, "memory before agent prompt");
+}
+
+#[test]
+fn memory_prompt_only() {
+    let memory = "## Global Memory\n\n- [User](user.md) — dev";
+    let result = build_system_prompt(None, None, None, Some(memory), None);
+    let output = result.unwrap();
+    assert!(output.contains("## Global Memory"));
+}
+
+#[test]
+fn empty_memory_prompt_ignored() {
+    let result = build_system_prompt(None, None, None, Some(""), Some("Agent prompt"));
     assert_eq!(result.unwrap(), "Agent prompt");
 }
 

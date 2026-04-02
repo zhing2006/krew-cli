@@ -19,12 +19,13 @@
 11. [MCP Integration](#11-mcp-integration)
 12. [Skill System](#12-skill-system)
 13. [Sub-Agent System (Experimental)](#13-sub-agent-system-experimental)
-14. [Session Management](#14-session-management)
-15. [Prompt Mode](#15-prompt-mode)
-16. [Project Instructions (AGENTS.md)](#16-project-instructions-agentsmd)
-17. [File Paths & Load Priority](#17-file-paths--load-priority)
-18. [Keyboard Shortcuts](#18-keyboard-shortcuts)
-19. [Troubleshooting](#19-troubleshooting)
+14. [Agent Memory](#14-agent-memory)
+15. [Session Management](#15-session-management)
+16. [Prompt Mode](#16-prompt-mode)
+17. [Project Instructions (AGENTS.md)](#17-project-instructions-agentsmd)
+18. [File Paths & Load Priority](#18-file-paths--load-priority)
+19. [Keyboard Shortcuts](#19-keyboard-shortcuts)
+20. [Troubleshooting](#20-troubleshooting)
 
 ---
 
@@ -375,7 +376,7 @@ Options:
   -a, --agents <NAMES>          Enable only these agents (comma-separated, e.g. "gpt,opus")
       --approval-mode <MODE>    Override tool approval mode: suggest | auto-edit | full-auto
       --resume [ID]             Resume a previous session (interactive picker if no ID given)
-  -p, --prompt <PROMPT>         Non-interactive prompt mode (see §14)
+  -p, --prompt <PROMPT>         Non-interactive prompt mode (see §16)
       --format <FORMAT>         Output format for -p mode: text (default) | json
   -v, --verbose                 Enable debug-level logging
   -h, --help                    Show help
@@ -870,7 +871,7 @@ All file tools enforce path boundaries: operations must be within the session wo
 
 **Permission rules**: Use `[[allow_rules]]`, `[[deny_rules]]`, `[[ask_rules]]` for fine-grained control. Rules are evaluated in order: deny (block) → ask (force confirm) → allow (auto-approve). Each rule specifies a `tool` name and optional `pattern`/`reason`.
 
-**Bypass immunity**: Protected paths (`.git/`, `.krew/`, `.vscode/`, `.idea/`, `.claude/`, `.env`, `.bashrc`, etc.) are always guarded — even in `full-auto` mode, operations on these paths require confirmation and cannot be bypassed by allow rules.
+**Bypass immunity**: Protected paths (`.git/`, `.krew/`, `.vscode/`, `.idea/`, `.claude/`, `.env`, `.bashrc`, etc.) are always guarded — even in `full-auto` mode, operations on these paths require confirmation and cannot be bypassed by allow rules. **Exception**: `.krew/memory/**` paths are auto-approved (see [§14](#14-agent-memory)).
 
 **Approval shortcuts**: `y` approve / `a` approve for session / `n` or `Esc` deny / `Ctrl+C` abort
 
@@ -1011,7 +1012,60 @@ Use the `/agents` command to see discovered Sub-Agent definitions.
 
 ---
 
-## 14. Session Management
+## 14. Agent Memory
+
+Agents can persist knowledge across sessions — user preferences, project context, and behavioral feedback are saved to `.krew/memory/` and automatically loaded on every agent turn.
+
+### How it works
+
+1. On each agent turn, krew loads `MEMORY.md` index files and injects them into the agent's system prompt
+2. Agents with `tools = true` receive full read/write instructions and can save new memories using `write_file`
+3. Agents with `tools = false` receive only the index content (read-only)
+
+### Two-layer storage
+
+| Layer | Path | Scope | Memory types |
+| ----- | ---- | ----- | ------------ |
+| Global | `.krew/memory/` | Shared by all agents | `user`, `project`, `reference` |
+| Per-Agent | `.krew/memory/agents/{name}/` | Private to one agent | `feedback` |
+
+- **user** — User's role, goals, preferences, knowledge
+- **project** — Ongoing work, deadlines, decisions not derivable from code
+- **reference** — Pointers to external resources (issue trackers, dashboards)
+- **feedback** — Behavioral guidance specific to one agent ("don't use emoji", "be concise")
+
+### Directory structure
+
+```
+.krew/memory/
+├── MEMORY.md                    ← Global index
+├── user_role.md                 ← Global topic file
+├── project_deadline.md
+└── agents/
+    └── opus/
+        ├── MEMORY.md            ← Agent-specific index
+        └── feedback_style.md
+```
+
+### Saving memories
+
+Agents save memories in two steps:
+1. Write a topic file (e.g. `user_role.md`) as plain Markdown
+2. Add a one-line entry to the corresponding `MEMORY.md` index
+
+### Limits
+
+- `MEMORY.md` is truncated at **200 lines** or **25,000 bytes** (whichever is hit first)
+- A warning is appended when truncation occurs
+- Directories are auto-created on first use
+
+### Approval
+
+Memory paths (`.krew/memory/**`) are auto-approved for `read_file`, `write_file`, and `edit_file` — agents can read and write memories without user confirmation. User-defined `deny_rules` and `ask_rules` still take effect.
+
+---
+
+## 15. Session Management
 
 ### Persistence
 
@@ -1052,7 +1106,7 @@ Use `/agents` to see per-agent token usage (input/output/total).
 
 ---
 
-## 15. Prompt Mode
+## 16. Prompt Mode
 
 Non-interactive mode for scripting and CI/CD.
 
@@ -1144,7 +1198,7 @@ All events include `"agent"` (agent name). Whisper events additionally include `
 
 ---
 
-## 16. Project Instructions (AGENTS.md)
+## 17. Project Instructions (AGENTS.md)
 
 Place an `AGENTS.md` file in your project directory to provide all agents with project context (architecture, coding conventions, etc.).
 
@@ -1163,7 +1217,7 @@ Content is wrapped in `<project-instructions>` tags and injected into every agen
 
 ---
 
-## 17. File Paths & Load Priority
+## 18. File Paths & Load Priority
 
 ### Configuration files
 
@@ -1186,6 +1240,7 @@ Priority (high to low):
 | `.krew/sessions/` | Session TOML files |
 | `.krew/history` | Input history (persists across sessions) |
 | `.krew/logs/` | Log files (daily rolling, 7-day retention) |
+| `.krew/memory/` | Agent memory files (global + per-agent) |
 | `~/.krew/settings.toml` | User config |
 
 ### Commands discovery (priority high to low)
@@ -1226,7 +1281,7 @@ All discovery uses **first-found wins** for same-name entries.
 
 ---
 
-## 18. Keyboard Shortcuts
+## 19. Keyboard Shortcuts
 
 ### Chat mode
 
@@ -1262,7 +1317,7 @@ All discovery uses **first-found wins** for same-name entries.
 
 ---
 
-## 19. Troubleshooting
+## 20. Troubleshooting
 
 ### "Git Bash not found" on Windows
 
@@ -1342,7 +1397,7 @@ Logs are written to `.krew/logs/` in the project directory. Files rotate daily a
 ### My custom command isn't showing up
 
 Check that:
-1. The `.md` file is in one of the [discovery paths](#16-file-paths--load-priority) (e.g. `.krew/commands/my-command.md`)
+1. The `.md` file is in one of the [discovery paths](#18-file-paths--load-priority) (e.g. `.krew/commands/my-command.md`)
 2. The file has valid YAML frontmatter (or no frontmatter at all — it's optional)
 3. There isn't a built-in command with the same name (built-in commands take priority)
 4. Restart krew after adding new command files

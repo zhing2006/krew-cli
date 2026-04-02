@@ -1496,6 +1496,66 @@ Agent 生成回复期间，在 viewport 分隔线上方显示状态行：闪烁 
 
 失败时返回 `None` 而非报错。提供 `format_memory()` 格式化显示（`512 B` / `15.00 MB`）。
 
+### 3.12 Agent Memory
+
+跨会话持久化记忆系统，代码位于 `krew-core::memory` 模块。
+
+#### 3.12.1 存储结构
+
+两层目录：
+
+```txt
+.krew/memory/                          ← Global 层（所有 Agent 共享）
+├── MEMORY.md                          ← 全局索引
+├── user_role.md
+└── agents/                            ← Per-Agent 层
+    └── {agent_name}/
+        ├── MEMORY.md                  ← Agent 索引
+        └── feedback_no_emoji.md
+```
+
+记忆类型归属：`user` / `project` / `reference` → Global，`feedback` → Per-Agent。
+
+#### 3.12.2 System Prompt 注入
+
+`build_system_prompt()` 组装顺序：
+
+```txt
+Project Instructions → Skill Catalog → Sub-Agent Catalog → 【Memory Prompt】 → Agent Prompt
+```
+
+`load_memory_prompt(agent_name, cwd, has_tools)` 在每次 `start_completion()` 调用时执行：
+
+1. `create_dir_all` 确保目录存在（失败静默返回 `None`）
+2. 当 `has_tools = true` 时注入 `MEMORY_PROMPT_TEMPLATE`（含 `{{agent_name}}` 变量替换）
+3. 读取 Global `MEMORY.md` → `read_and_truncate()` → 添加 `## Global Memory` 标题
+4. 读取 Per-Agent `MEMORY.md` → `read_and_truncate()` → 添加 `## Your Memory` 标题
+5. 当 `has_tools = false` 时跳过模板，仅注入索引内容
+
+`has_tools` 由 `config.tools && !tools.specs().is_empty()` 决定——配置启用且实际有工具可用。
+
+#### 3.12.3 MEMORY.md 截断
+
+`read_and_truncate(path, MAX_LINES=200, MAX_BYTES=25000)`:
+
+- 先按行数截断（保留前 200 行）
+- 再按字节截断（在不超过 25KB 的最后完整行处切断）
+- 截断时附加 `⚠ MEMORY.md is N lines (limit: 200). Only part of it was loaded.`
+
+#### 3.12.4 Approval Carve-out
+
+`check_tool_approval()` 8 步审批流水线中的 memory 处理：
+
+```txt
+Step 0: deny_rules → 可以 deny memory 路径
+Step 1: bypass immunity → memory 路径（.krew/memory/**）跳过 dangerous-path 检查
+Step 2: ask_rules → 可以对 memory 路径要求确认
+Memory carve-out: is_memory_path() → 返回 Auto
+Step 3+: 正常流程（memory 路径不会到达这里）
+```
+
+`is_memory_path(normalized)` 判断规则：`lower == ".krew/memory" || lower.starts_with(".krew/memory/")`。
+
 ---
 
 ## 4. 数据模型
