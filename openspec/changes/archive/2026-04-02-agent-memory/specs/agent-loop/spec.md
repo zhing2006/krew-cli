@@ -1,17 +1,4 @@
-## REMOVED Requirements
-
-### Requirement: 跳过工具调用
-**Reason**: Phase 8 实现完整的工具调用循环，不再跳过 ToolCall 事件。
-**Migration**: 由 `agent-loop-tool-calls` capability 中的"工具调用循环"需求替代。
-
 ## MODIFIED Requirements
-
-### Requirement: AgentEvent 通信协议
-`krew-core` SHALL 定义 `AgentEvent` 枚举作为 agent loop 与 TUI 层之间的通信协议。
-
-#### Scenario: 事件类型完整性
-- **WHEN** agent loop 运行
-- **THEN** SHALL 通过 `AgentEvent` 发送以下事件类型：`ResponseStart`（含 agent_name、display_name、color）、`TextDelta(String)`、`ThinkingDelta(String)`、`Done(Usage)`、`Error(String)`、`Retrying`、`ToolCallStart`（含 name、arguments）、`ToolCallDone`（含 name、result_summary）
 
 ### Requirement: 单 Agent 对话完成
 `AgentRuntime` SHALL 提供 `start_completion()` 方法，接收消息历史，启动异步 task 调用 LLM，通过 mpsc channel 发送 `AgentEvent`。当 `config.tools = true` 时，SHALL 将注册的 ToolSpec 列表传给 `chat_stream()` 并在收到 ToolCall 时进入工具调用循环。

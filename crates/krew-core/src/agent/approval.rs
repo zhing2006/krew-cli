@@ -2,6 +2,7 @@ use krew_config::{ApprovalMode, PermissionRule};
 use krew_tools::ToolRegistry;
 
 use crate::event::ApprovalCache;
+use crate::memory;
 
 /// Result of checking whether a tool call needs user approval.
 pub(super) enum ToolApproval {
@@ -484,11 +485,13 @@ pub(super) async fn check_tool_approval(
     }
 
     // Step 1: Bypass immunity — protected paths and built-in shell deny.
+    // Memory carve-out: .krew/memory/** skips the dangerous-path check
+    // so it can reach Step 2 (ask_rules) instead of being blocked here.
     if matches!(tool_name, "write_file" | "edit_file" | "read_file")
         && let Some(file_path) = extract_file_path(arguments)
     {
         let normalized = normalize_file_path(&file_path, cwd);
-        if is_dangerous_path(&normalized) {
+        if is_dangerous_path(&normalized) && !memory::is_memory_path(&normalized) {
             return ToolApproval::NeedsApproval {
                 allow_session_approval: false,
                 reason: Some(format!("Protected path: {normalized}")),
@@ -509,6 +512,19 @@ pub(super) async fn check_tool_approval(
                 allow_session_approval: true,
                 reason: rule.reason.clone(),
             };
+        }
+    }
+
+    // Memory carve-out (part 2): after deny_rules (Step 0) and ask_rules
+    // (Step 2) have had their chance, .krew/memory/** is auto-approved
+    // regardless of approval mode. This prevents memory operations from
+    // falling through to the default NeedsApproval in Suggest mode.
+    if matches!(tool_name, "write_file" | "edit_file" | "read_file")
+        && let Some(file_path) = extract_file_path(arguments)
+    {
+        let normalized = normalize_file_path(&file_path, cwd);
+        if memory::is_memory_path(&normalized) {
+            return ToolApproval::Auto;
         }
     }
 
@@ -1284,5 +1300,132 @@ mod tests {
     fn complex_command_deny_whole_string() {
         // Complex construct: deny does whole-string matching.
         assert!(matches_shell_rule("echo $(rm -rf /)", "*rm -rf*", false));
+    }
+
+    // ── Memory carve-out ──
+
+    #[tokio::test]
+    async fn memory_path_write_auto_in_suggest() {
+        let r = test_registry();
+        let c = ApprovalCache::new();
+        // .krew/memory/ write auto-approved even in Suggest mode.
+        // Without the carve-out, write_file would need approval.
+        assert!(
+            is_auto(
+                "write_file",
+                r#"{"file_path":".krew/memory/MEMORY.md"}"#,
+                &r,
+                ApprovalMode::Suggest,
+                &c
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_path_read_auto_in_suggest() {
+        let r = test_registry();
+        let c = ApprovalCache::new();
+        // .krew/memory/ read auto-approved — carve-out prevents the
+        // "Protected path" NeedsApproval that .krew/* normally triggers.
+        assert!(
+            is_auto(
+                "read_file",
+                r#"{"file_path":".krew/memory/user_role.md"}"#,
+                &r,
+                ApprovalMode::Suggest,
+                &c
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_path_edit_auto_in_suggest() {
+        let r = test_registry();
+        let c = ApprovalCache::new();
+        // .krew/memory/ edit auto-approved even in Suggest mode.
+        assert!(
+            is_auto(
+                "edit_file",
+                r#"{"file_path":".krew/memory/agents/gpt/MEMORY.md"}"#,
+                &r,
+                ApprovalMode::Suggest,
+                &c
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn non_memory_krew_path_still_protected() {
+        let r = test_registry();
+        let c = ApprovalCache::new();
+        // .krew/settings.toml should still require approval.
+        assert!(matches!(
+            check_with_defaults(
+                "write_file",
+                r#"{"file_path":".krew/settings.toml"}"#,
+                &r,
+                ApprovalMode::FullAuto,
+                &c
+            )
+            .await,
+            ToolApproval::NeedsApproval { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn ask_rule_overrides_memory_carveout() {
+        let r = test_registry();
+        let c = ApprovalCache::new();
+        let ask = vec![PermissionRule {
+            tool: "write_file".into(),
+            pattern: Some(".krew/memory/**".into()),
+            reason: Some("Confirm memory write".into()),
+        }];
+        let ctx = ApprovalContext {
+            tools: &r,
+            mode: ApprovalMode::FullAuto,
+            cache: &c,
+            allow_rules: &[],
+            deny_rules: &[],
+            ask_rules: &ask,
+            cwd: "/tmp",
+        };
+        let result = check_tool_approval(
+            "write_file",
+            r#"{"file_path":".krew/memory/MEMORY.md"}"#,
+            &ctx,
+        )
+        .await;
+        assert!(matches!(result, ToolApproval::NeedsApproval { .. }));
+    }
+
+    #[tokio::test]
+    async fn deny_rule_overrides_memory_carveout() {
+        let r = test_registry();
+        let c = ApprovalCache::new();
+        let deny = vec![PermissionRule {
+            tool: "write_file".into(),
+            pattern: Some(".krew/memory/**".into()),
+            reason: Some("Memory writes disabled".into()),
+        }];
+        let ctx = ApprovalContext {
+            tools: &r,
+            mode: ApprovalMode::FullAuto,
+            cache: &c,
+            allow_rules: &[],
+            deny_rules: &deny,
+            ask_rules: &[],
+            cwd: "/tmp",
+        };
+        let result = check_tool_approval(
+            "write_file",
+            r#"{"file_path":".krew/memory/MEMORY.md"}"#,
+            &ctx,
+        )
+        .await;
+        assert!(matches!(result, ToolApproval::Denied { .. }));
     }
 }

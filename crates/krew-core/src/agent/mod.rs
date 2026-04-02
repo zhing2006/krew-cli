@@ -101,10 +101,16 @@ impl AgentRuntime {
             Some(prompt) if !prompt.is_empty() => format!("{identity}\n\n{prompt}"),
             _ => identity,
         };
+        // Only inject memory write instructions when the agent actually has
+        // file tools available (config.tools=true AND registry is non-empty).
+        let has_file_tools = self.config.tools && !self.tools.specs().is_empty();
+        let memory_prompt =
+            crate::memory::load_memory_prompt(&self.config.name, &self.cwd, has_file_tools);
         let system_prompt = build_system_prompt(
             project_instructions,
             self.skill_catalog.as_deref(),
             self.sub_agent_catalog.as_deref(),
+            memory_prompt.as_deref(),
             Some(&agent_prompt),
         );
         let mut full_messages = Vec::with_capacity(messages.len() + 1);
@@ -182,17 +188,20 @@ impl AgentRuntime {
 }
 
 /// Build the final system prompt by merging project instructions, skill
-/// catalog, sub-agent catalog, and the agent's configured system_prompt.
+/// catalog, sub-agent catalog, memory prompt, and the agent's configured
+/// system_prompt.
 ///
 /// Assembly order:
 /// 1. `<project-instructions>` (if present)
 /// 2. Skill catalog XML (if present)
 /// 3. Sub-Agent catalog XML (if present)
-/// 4. Agent system prompt
+/// 4. Memory prompt (if present)
+/// 5. Agent system prompt
 pub fn build_system_prompt(
     project_instructions: Option<&str>,
     skill_catalog: Option<&str>,
     sub_agent_catalog: Option<&str>,
+    memory_prompt: Option<&str>,
     agent_system_prompt: Option<&str>,
 ) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
@@ -209,6 +218,10 @@ pub fn build_system_prompt(
 
     if let Some(catalog) = sub_agent_catalog.filter(|c| !c.is_empty()) {
         parts.push(catalog.to_string());
+    }
+
+    if let Some(mem) = memory_prompt.filter(|m| !m.is_empty()) {
+        parts.push(mem.to_string());
     }
 
     if let Some(prompt) = agent_system_prompt.filter(|p| !p.is_empty()) {
