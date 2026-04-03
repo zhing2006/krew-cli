@@ -243,6 +243,7 @@ impl App {
         // Set dispatch state.
         self.current_whisper_targets = Some(whisper_targets);
         self.current_exclude_tools = Some(exclude_tools);
+        self.is_dreaming = true;
         self.pending_agents.push_back(agent_name);
 
         // Start the agent.

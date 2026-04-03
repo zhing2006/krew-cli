@@ -137,6 +137,10 @@ pub fn convert_messages(
 
     let mut result: Vec<serde_json::Value> = Vec::new();
     let mut pending: Vec<RoleContent> = Vec::new();
+    // Buffer for consecutive tool result parts. Gemini requires all
+    // functionResponse parts for a single tool-call turn to be in the
+    // same contents entry.
+    let mut pending_tool_parts: Vec<serde_json::Value> = Vec::new();
 
     for msg in messages.iter().filter(|m| m.role != ChatRole::System) {
         // Tool result messages: Google uses role: "user" with functionResponse parts.
@@ -157,10 +161,7 @@ pub fn convert_messages(
                 if let Some(id) = msg.tool_call_id.as_ref().filter(|_| use_beta_features) {
                     fr["id"] = serde_json::json!(id);
                 }
-                result.push(serde_json::json!({
-                    "role": "user",
-                    "parts": [{ "functionResponse": fr }],
-                }));
+                pending_tool_parts.push(serde_json::json!({ "functionResponse": fr }));
             } else if use_beta_features {
                 // v1beta: embed inlineData inside functionResponse.parts
                 // with $ref/displayName linking.
@@ -189,33 +190,29 @@ pub fn convert_messages(
                 if let Some(ref id) = msg.tool_call_id {
                     fr["id"] = serde_json::json!(id);
                 }
-                result.push(serde_json::json!({
-                    "role": "user",
-                    "parts": [{ "functionResponse": fr }],
-                }));
+                pending_tool_parts.push(serde_json::json!({ "functionResponse": fr }));
             } else {
                 // v1: inlineData as sibling parts alongside functionResponse.
-                let mut parts = vec![serde_json::json!({
+                pending_tool_parts.push(serde_json::json!({
                     "functionResponse": {
                         "name": tool_name,
                         "response": response,
                     }
-                })];
+                }));
                 for img in &msg.images {
-                    parts.push(serde_json::json!({
+                    pending_tool_parts.push(serde_json::json!({
                         "inlineData": {
                             "mimeType": img.media_type,
                             "data": common::encode_base64(&img.data),
                         }
                     }));
                 }
-                result.push(serde_json::json!({
-                    "role": "user",
-                    "parts": parts,
-                }));
             }
             continue;
         }
+
+        // Flush any buffered tool results before processing non-tool message.
+        flush_pending_tool_parts(&mut pending_tool_parts, &mut result);
 
         // Assistant messages with tool_calls: Google uses functionCall parts.
         if let (ChatRole::Assistant, Some(tcs)) = (&msg.role, &msg.tool_calls) {
@@ -279,12 +276,32 @@ pub fn convert_messages(
         });
     }
 
+    flush_pending_tool_parts(&mut pending_tool_parts, &mut result);
     flush_pending_google(&mut pending, &mut result);
 
     ConvertedMessages {
         system_instruction,
         contents: result,
     }
+}
+
+/// Flush buffered functionResponse parts into a single contents entry.
+///
+/// Gemini requires that the number of functionResponse parts matches the
+/// number of functionCall parts in the preceding model turn, and they must
+/// all be in a single contents object.
+fn flush_pending_tool_parts(
+    pending: &mut Vec<serde_json::Value>,
+    result: &mut Vec<serde_json::Value>,
+) {
+    if pending.is_empty() {
+        return;
+    }
+    let parts = std::mem::take(pending);
+    result.push(serde_json::json!({
+        "role": "user",
+        "parts": parts,
+    }));
 }
 
 /// Merge and flush pending role-content items into the result vector.
@@ -1301,6 +1318,103 @@ mod tests {
         assert_eq!(tool_array.len(), 2);
         assert!(tool_array[0].get("functionDeclarations").is_some());
         assert!(tool_array[1].get("google_search").is_some());
+    }
+
+    #[test]
+    fn convert_consecutive_tool_results_merged() {
+        // When Gemini returns multiple functionCalls in one turn, the
+        // corresponding functionResponse parts must be in a single contents
+        // entry. This test verifies that consecutive Tool messages are merged.
+        let messages = vec![
+            ChatMessage {
+                role: ChatRole::Tool,
+                content: r#"{"ok": true}"#.to_string(),
+                name: Some("write_file".to_string()),
+                tool_calls: None,
+                tool_call_id: Some("gemini_call_0".to_string()),
+                server_tool_uses: Vec::new(),
+                addressee: None,
+                whisper_targets: None,
+                created_at: chrono::Utc::now(),
+                usage: None,
+                images: vec![],
+            },
+            ChatMessage {
+                role: ChatRole::Tool,
+                content: r#"{"ok": true}"#.to_string(),
+                name: Some("write_file".to_string()),
+                tool_calls: None,
+                tool_call_id: Some("gemini_call_1".to_string()),
+                server_tool_uses: Vec::new(),
+                addressee: None,
+                whisper_targets: None,
+                created_at: chrono::Utc::now(),
+                usage: None,
+                images: vec![],
+            },
+        ];
+        let converted = convert_messages(&messages, "agent", &OtherAgentRole::User, true);
+        // Should produce exactly 1 contents entry with 2 functionResponse parts.
+        assert_eq!(converted.contents.len(), 1);
+        let parts = converted.contents[0]["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0]["functionResponse"]["id"], "gemini_call_0");
+        assert_eq!(parts[1]["functionResponse"]["id"], "gemini_call_1");
+    }
+
+    #[test]
+    fn convert_tool_results_separated_by_other_message() {
+        // Tool results from different turns should NOT be merged.
+        let messages = vec![
+            ChatMessage {
+                role: ChatRole::Tool,
+                content: r#"{"ok": true}"#.to_string(),
+                name: Some("read_file".to_string()),
+                tool_calls: None,
+                tool_call_id: Some("gemini_call_0".to_string()),
+                server_tool_uses: Vec::new(),
+                addressee: None,
+                whisper_targets: None,
+                created_at: chrono::Utc::now(),
+                usage: None,
+                images: vec![],
+            },
+            ChatMessage::text(
+                ChatRole::Assistant,
+                "thinking...".to_string(),
+                Some("agent".to_string()),
+            ),
+            ChatMessage {
+                role: ChatRole::Tool,
+                content: r#"{"ok": true}"#.to_string(),
+                name: Some("write_file".to_string()),
+                tool_calls: None,
+                tool_call_id: Some("gemini_call_1".to_string()),
+                server_tool_uses: Vec::new(),
+                addressee: None,
+                whisper_targets: None,
+                created_at: chrono::Utc::now(),
+                usage: None,
+                images: vec![],
+            },
+        ];
+        let converted = convert_messages(&messages, "agent", &OtherAgentRole::User, true);
+        // Should produce 3 separate contents entries.
+        assert_eq!(converted.contents.len(), 3);
+        // First: tool result
+        assert!(
+            converted.contents[0]["parts"][0]
+                .get("functionResponse")
+                .is_some()
+        );
+        // Second: model message
+        assert_eq!(converted.contents[1]["role"], "model");
+        // Third: tool result
+        assert!(
+            converted.contents[2]["parts"][0]
+                .get("functionResponse")
+                .is_some()
+        );
     }
 
     #[test]

@@ -54,6 +54,7 @@ Target directories:
 - Fix contradictory entries — keep the most recent or most accurate version.
 - Convert relative dates (e.g., "yesterday", "last week") to absolute dates.
 - Remove entries that duplicate information already in the codebase (git history, README, etc.).
+- To delete a file, use `write_file` to write an empty string (zero bytes). The system will automatically clean up empty files after consolidation. Do NOT write comments or markers into files you want to delete.
 
 ## Phase 3 — Prune index
 

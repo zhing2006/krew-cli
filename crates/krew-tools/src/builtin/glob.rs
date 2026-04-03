@@ -129,9 +129,9 @@ impl ToolHandler for GlobTool {
             .follow_links(false)
             .into_iter()
             .filter_entry(|e| {
-                // Skip hidden directories (except the search root).
+                // Skip .git directory (large and never useful to search).
                 let name = e.file_name().to_string_lossy();
-                !name.starts_with('.') || e.depth() == 0
+                name != ".git" || e.depth() == 0
             })
         {
             let entry = match entry {
