@@ -150,6 +150,8 @@ pub struct App {
     pub(crate) current_whisper_targets: Option<Vec<String>>,
     /// Tool names to exclude from the current agent dispatch (used by `/dream`).
     pub(crate) current_exclude_tools: Option<Vec<String>>,
+    /// Whether a `/dream` memory consolidation is currently running.
+    pub(crate) is_dreaming: bool,
     /// Whether the session is in rewound state (fork semantics: don't save until new message).
     pub(crate) rewound: bool,
 }
@@ -252,6 +254,7 @@ impl App {
             a2a_insert_cursor: 0,
             current_whisper_targets: None,
             current_exclude_tools: None,
+            is_dreaming: false,
             session_created_at: Utc::now(),
             rewound: false,
         })
@@ -911,6 +914,15 @@ impl App {
 
                 // Chain-trigger next pending agent (if any).
                 if !self.start_next_agent(terminal)? {
+                    // Post-dream cleanup: remove 0-byte memory files left
+                    // by consolidation and prune dangling index entries.
+                    if self.is_dreaming {
+                        krew_core::memory::cleanup_empty_memory_files(
+                            self.cwd.to_str().unwrap_or(""),
+                        );
+                        self.is_dreaming = false;
+                    }
+
                     // No more pending agents — clear dispatch state.
                     self.current_whisper_targets = None;
                     self.current_exclude_tools = None;
@@ -981,6 +993,12 @@ impl App {
 
                 // Error isolation: continue with next pending agent.
                 if !self.start_next_agent(terminal)? {
+                    if self.is_dreaming {
+                        krew_core::memory::cleanup_empty_memory_files(
+                            self.cwd.to_str().unwrap_or(""),
+                        );
+                        self.is_dreaming = false;
+                    }
                     self.current_whisper_targets = None;
                     self.current_exclude_tools = None;
                 }
@@ -1103,6 +1121,10 @@ impl App {
 
         // Clear pending agents (cancel the entire dispatch).
         self.pending_agents.clear();
+        if self.is_dreaming {
+            krew_core::memory::cleanup_empty_memory_files(self.cwd.to_str().unwrap_or(""));
+            self.is_dreaming = false;
+        }
         self.current_whisper_targets = None;
         self.current_exclude_tools = None;
 

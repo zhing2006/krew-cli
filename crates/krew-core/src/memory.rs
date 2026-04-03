@@ -205,6 +205,74 @@ Saving a memory is a two-step process:
 - Memory records can become stale. Verify against current state before acting on them
 - If a recalled memory conflicts with current information, trust what you observe now — update or remove the stale memory"#;
 
+/// Post-dream cleanup: delete 0-byte memory files and remove dangling
+/// index entries from MEMORY.md files.
+///
+/// Called automatically after `/dream` finishes. Agents consolidate by
+/// clearing merged files to 0 bytes (they lack a delete tool), so this
+/// function handles the actual deletion.
+pub fn cleanup_empty_memory_files(cwd: &str) {
+    if cwd.is_empty() {
+        return;
+    }
+
+    let base = Path::new(cwd).join(".krew").join("memory");
+    if !base.is_dir() {
+        return;
+    }
+
+    // Collect all directories that may contain memory files (global + per-agent).
+    let mut dirs_to_scan: Vec<std::path::PathBuf> = vec![base.clone()];
+    let agents_dir = base.join("agents");
+    if agents_dir.is_dir()
+        && let Ok(entries) = fs::read_dir(&agents_dir)
+    {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                dirs_to_scan.push(entry.path());
+            }
+        }
+    }
+
+    for dir in &dirs_to_scan {
+        // Phase 1: Delete 0-byte .md files (except MEMORY.md).
+        let mut deleted_files: Vec<String> = Vec::new();
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                if name == "MEMORY.md" || !name.ends_with(".md") {
+                    continue;
+                }
+                if let Ok(meta) = fs::metadata(&path)
+                    && meta.len() == 0
+                    && fs::remove_file(&path).is_ok()
+                {
+                    deleted_files.push(name.to_string());
+                }
+            }
+        }
+
+        // Phase 2: Prune MEMORY.md index — remove lines referencing deleted files.
+        if !deleted_files.is_empty() {
+            let index_path = dir.join("MEMORY.md");
+            if let Ok(content) = fs::read_to_string(&index_path) {
+                let pruned: Vec<&str> = content
+                    .lines()
+                    .filter(|line| {
+                        // Keep lines that don't reference any deleted file.
+                        !deleted_files.iter().any(|f| line.contains(f))
+                    })
+                    .collect();
+                let _ = fs::write(&index_path, pruned.join("\n"));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,5 +496,70 @@ mod tests {
         let result = load_memory_prompt("mybot", cwd.to_str().unwrap(), true).unwrap();
         assert!(result.contains(".krew/memory/agents/mybot/"));
         assert!(!result.contains("{{agent_name}}"));
+    }
+
+    // ── cleanup_empty_memory_files tests ──
+
+    #[test]
+    fn cleanup_deletes_empty_files_and_prunes_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path();
+        let mem_dir = cwd.join(".krew").join("memory");
+        fs::create_dir_all(&mem_dir).unwrap();
+
+        // Create files: one empty (merged), one with content (kept).
+        fs::write(mem_dir.join("user_role.md"), "").unwrap();
+        fs::write(
+            mem_dir.join("user_profile.md"),
+            "# Profile\nBackend engineer",
+        )
+        .unwrap();
+        fs::write(
+            mem_dir.join("MEMORY.md"),
+            "# Index\n- [Role](user_role.md) — old\n- [Profile](user_profile.md) — new",
+        )
+        .unwrap();
+
+        cleanup_empty_memory_files(cwd.to_str().unwrap());
+
+        // Empty file should be deleted.
+        assert!(!mem_dir.join("user_role.md").exists());
+        // Non-empty file should remain.
+        assert!(mem_dir.join("user_profile.md").exists());
+        // Index should no longer reference deleted file.
+        let index = fs::read_to_string(mem_dir.join("MEMORY.md")).unwrap();
+        assert!(!index.contains("user_role.md"));
+        assert!(index.contains("user_profile.md"));
+    }
+
+    #[test]
+    fn cleanup_handles_agent_subdirectories() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path();
+        let agent_dir = cwd.join(".krew").join("memory").join("agents").join("opus");
+        fs::create_dir_all(&agent_dir).unwrap();
+
+        fs::write(agent_dir.join("old_feedback.md"), "").unwrap();
+        fs::write(agent_dir.join("good_feedback.md"), "Keep this").unwrap();
+        fs::write(
+            agent_dir.join("MEMORY.md"),
+            "- [Old](old_feedback.md) — stale\n- [Good](good_feedback.md) — keep",
+        )
+        .unwrap();
+
+        cleanup_empty_memory_files(cwd.to_str().unwrap());
+
+        assert!(!agent_dir.join("old_feedback.md").exists());
+        assert!(agent_dir.join("good_feedback.md").exists());
+        let index = fs::read_to_string(agent_dir.join("MEMORY.md")).unwrap();
+        assert!(!index.contains("old_feedback.md"));
+        assert!(index.contains("good_feedback.md"));
+    }
+
+    #[test]
+    fn cleanup_no_crash_on_missing_directory() {
+        // Should not panic when cwd doesn't have .krew/memory/.
+        cleanup_empty_memory_files("/nonexistent/path");
+        cleanup_empty_memory_files("");
     }
 }
