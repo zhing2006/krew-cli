@@ -64,8 +64,8 @@ impl RunAgentTool {
     }
 
     /// Set the `is_running` flag for testing the depth guard.
-    #[doc(hidden)]
-    pub fn set_running_for_test(&self, running: bool) {
+    #[cfg(test)]
+    fn set_running_for_test(&self, running: bool) {
         self.is_running.store(running, Ordering::SeqCst);
     }
 
@@ -322,5 +322,180 @@ impl ToolHandler for RunAgentTool {
             is_error: result.is_error,
             images: vec![],
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::pin::Pin;
+    use std::sync::Mutex;
+
+    use futures::stream;
+    use krew_config::ApprovalMode;
+    use krew_llm::{ChatMessage, StreamEvent, Usage};
+
+    use crate::event::ApprovalCache;
+
+    struct MockClient {
+        response: String,
+    }
+
+    #[async_trait::async_trait]
+    impl krew_llm::LlmClient for MockClient {
+        async fn chat_stream(
+            &self,
+            _messages: &[ChatMessage],
+            _tools: &[krew_llm::ToolDefinition],
+            _sampling: &krew_config::SamplingConfig,
+            _on_retry: Option<&(dyn Fn(krew_llm::common::RetryInfo) + Send + Sync)>,
+        ) -> Result<Pin<Box<dyn futures::Stream<Item = StreamEvent> + Send>>, krew_llm::LlmError>
+        {
+            let response = self.response.clone();
+            let usage = Usage {
+                prompt_tokens: 1,
+                completion_tokens: 1,
+                total_tokens: 2,
+            };
+            Ok(Box::pin(stream::iter(vec![
+                StreamEvent::TextDelta(response),
+                StreamEvent::Done(usage),
+            ])))
+        }
+    }
+
+    /// Mock client that captures tool definitions it receives.
+    struct ToolCapturingClient {
+        captured_tools: Mutex<Option<Vec<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl krew_llm::LlmClient for ToolCapturingClient {
+        async fn chat_stream(
+            &self,
+            _messages: &[ChatMessage],
+            tools: &[krew_llm::ToolDefinition],
+            _sampling: &krew_config::SamplingConfig,
+            _on_retry: Option<&(dyn Fn(krew_llm::common::RetryInfo) + Send + Sync)>,
+        ) -> Result<Pin<Box<dyn futures::Stream<Item = StreamEvent> + Send>>, krew_llm::LlmError>
+        {
+            let names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
+            *self.captured_tools.lock().unwrap() = Some(names);
+            let usage = Usage {
+                prompt_tokens: 1,
+                completion_tokens: 1,
+                total_tokens: 2,
+            };
+            Ok(Box::pin(stream::iter(vec![
+                StreamEvent::TextDelta("done".to_string()),
+                StreamEvent::Done(usage),
+            ])))
+        }
+    }
+
+    fn make_def() -> SubAgentDef {
+        SubAgentDef {
+            name: "helper".to_string(),
+            description: "test agent".to_string(),
+            system_prompt: "you are a test agent".to_string(),
+            color: None,
+            max_turns: 5,
+            source_path: std::path::PathBuf::from("test.md"),
+        }
+    }
+
+    fn make_perms() -> PermissionConfig {
+        PermissionConfig {
+            approval_mode: ApprovalMode::FullAuto,
+            approval_cache: ApprovalCache::new(),
+            allow_rules: vec![],
+            deny_rules: vec![],
+            ask_rules: vec![],
+            cwd: ".".to_string(),
+        }
+    }
+
+    fn make_ctx(registry: Arc<ToolRegistry>) -> ToolContext {
+        ToolContext {
+            output_tx: None,
+            parent_event_tx: None,
+            tool_registry: Some(Box::new(registry)),
+        }
+    }
+
+    #[tokio::test]
+    async fn depth_guard_prevents_nesting() {
+        let client: Arc<dyn krew_llm::LlmClient> = Arc::new(MockClient {
+            response: "hello".to_string(),
+        });
+        let tool = RunAgentTool::new(vec![make_def()], client, Default::default(), make_perms());
+        tool.set_running_for_test(true);
+
+        let ctx = make_ctx(Arc::new(ToolRegistry::empty()));
+        let args = serde_json::json!({"agent": "helper", "task": "do something"});
+        let result = ToolHandler::execute(&tool, args, &ctx).await.unwrap();
+
+        assert!(result.is_error);
+        assert!(result.content.contains("nesting is not allowed"));
+    }
+
+    #[tokio::test]
+    async fn run_agent_excluded_from_tool_defs() {
+        let capturing_client = Arc::new(ToolCapturingClient {
+            captured_tools: Mutex::new(None),
+        });
+        let client: Arc<dyn krew_llm::LlmClient> = capturing_client.clone();
+        let tool = RunAgentTool::new(vec![make_def()], client, Default::default(), make_perms());
+
+        let mut registry = ToolRegistry::empty();
+        let dummy = |name: &str| ToolSpec {
+            name: name.to_string(),
+            description: format!("{name} tool"),
+            parameters: serde_json::json!({"type": "object", "properties": {}}),
+        };
+        registry.register(dummy("read_file"), Box::new(NoopHandler));
+        registry.register(dummy("run_agent"), Box::new(NoopHandler));
+        registry.register(dummy("grep"), Box::new(NoopHandler));
+
+        let ctx = make_ctx(Arc::new(registry));
+        let args = serde_json::json!({"agent": "helper", "task": "find files"});
+        let result = ToolHandler::execute(&tool, args, &ctx).await.unwrap();
+        assert!(!result.is_error);
+
+        let captured = capturing_client
+            .captured_tools
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap();
+        assert!(captured.contains(&"read_file".to_string()));
+        assert!(captured.contains(&"grep".to_string()));
+        assert!(
+            !captured.contains(&"run_agent".to_string()),
+            "run_agent should be excluded"
+        );
+    }
+
+    struct NoopHandler;
+
+    #[async_trait::async_trait]
+    impl ToolHandler for NoopHandler {
+        fn name(&self) -> &str {
+            "noop"
+        }
+        fn requires_approval(&self) -> bool {
+            false
+        }
+        async fn execute(
+            &self,
+            _args: serde_json::Value,
+            _ctx: &ToolContext,
+        ) -> Result<ToolResult, ToolError> {
+            Ok(ToolResult {
+                content: String::new(),
+                is_error: false,
+                images: vec![],
+            })
+        }
     }
 }
