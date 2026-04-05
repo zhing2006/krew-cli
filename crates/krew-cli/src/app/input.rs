@@ -360,9 +360,16 @@ impl App {
                     ActivePopup::RewindPicker(state) => {
                         if let Some(item) = state.selected_item() {
                             let msg_index: usize = item.value.parse().unwrap_or(0);
+                            // Grab the rewound user message content before truncation.
+                            let rewound_content = self
+                                .messages
+                                .get(msg_index)
+                                .map(|m| m.content.clone())
+                                .unwrap_or_default();
                             self.popup = ActivePopup::None;
                             self.clear_textarea();
                             self.apply_rewind(msg_index, terminal)?;
+                            self.set_textarea_content(&rewound_content);
                             return Ok(true);
                         }
                     }

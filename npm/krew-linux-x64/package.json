@@ -1,6 +1,6 @@
 {
   "name": "@zhing2026/krew-linux-x64",
-  "version": "0.10.1",
+  "version": "0.10.2",
   "description": "krew binary for Linux x64",
   "os": ["linux"],
   "cpu": ["x64"],
