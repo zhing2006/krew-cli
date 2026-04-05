@@ -66,3 +66,10 @@ Memory Prompt 在每次 `start_completion()` 调用时随 `build_system_prompt()
 #### Scenario: system prompt 包含 Memory 段（tools=false）
 - **WHEN** 构建 `config.tools = false` 的 agent 的 system prompt 且 `.krew/memory/` 目录存在
 - **THEN** system prompt SHALL 在 Sub-Agent Catalog 之后、Agent Prompt 之前仅包含 Memory 索引内容（不含写入指令）
+
+### Requirement: 外部模块可复用 agent loop
+`AgentLoopContext`、`run_agent_loop`、`create_tool_context`、`generate_tool_summary`、`ToolContextHandle` SHALL 保持 `pub(crate)` 可见性，允许 `krew-core` 内的其他模块（如 `task`）直接构造和调用。
+
+#### Scenario: task 模块调用 agent loop
+- **WHEN** `krew-core::task` 模块需要执行独立的 agent loop
+- **THEN** SHALL 能直接构造 `AgentLoopContext` 并调用 `run_agent_loop()`，通过 `pub(crate)` 可见性在 crate 内部访问
