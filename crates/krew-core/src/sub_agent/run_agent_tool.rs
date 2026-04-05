@@ -1,23 +1,22 @@
 //! `run_agent` tool implementation — delegates tasks to Sub-Agents in isolated contexts.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use krew_config::{ApprovalMode, SamplingConfig};
-use krew_llm::{ChatMessage, ChatRole, ToolDefinition};
+use krew_config::SamplingConfig;
+use krew_llm::ToolDefinition;
 use krew_tools::{ToolContext, ToolError, ToolHandler, ToolRegistry, ToolResult, ToolSpec};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use super::types::SubAgentDef;
-use crate::agent::{AgentLoopContext, run_agent_loop};
-use crate::event::{AgentEvent, ApprovalCache};
+use crate::event::AgentEvent;
+use crate::task::{TaskRequest, run_task_with_events};
 
 /// Grouped permission-related configuration for Sub-Agent tool delegation.
 pub struct PermissionConfig {
-    pub approval_mode: ApprovalMode,
-    pub approval_cache: ApprovalCache,
+    pub approval_mode: krew_config::ApprovalMode,
+    pub approval_cache: crate::event::ApprovalCache,
     pub allow_rules: Vec<krew_config::PermissionRule>,
     pub deny_rules: Vec<krew_config::PermissionRule>,
     pub ask_rules: Vec<krew_config::PermissionRule>,
@@ -35,7 +34,7 @@ pub struct PermissionConfig {
 /// registration into the parent's `Arc<ToolRegistry>`.
 pub struct RunAgentTool {
     /// Available Sub-Agent definitions keyed by name.
-    defs: HashMap<String, SubAgentDef>,
+    defs: std::collections::HashMap<String, SubAgentDef>,
     /// Depth guard: prevents nested Sub-Agent calls.
     is_running: Arc<AtomicBool>,
     /// Parent agent's LLM client.
@@ -62,6 +61,12 @@ impl RunAgentTool {
             sampling,
             perms,
         }
+    }
+
+    /// Set the `is_running` flag for testing the depth guard.
+    #[doc(hidden)]
+    pub fn set_running_for_test(&self, running: bool) {
+        self.is_running.store(running, Ordering::SeqCst);
     }
 
     /// Build the tool specification with dynamic agent enum values.
@@ -172,12 +177,6 @@ impl ToolHandler for RunAgentTool {
             .and_then(|boxed| boxed.downcast_ref::<mpsc::UnboundedSender<AgentEvent>>())
             .cloned();
 
-        // Build isolated message list.
-        let mut messages = vec![
-            ChatMessage::text(ChatRole::System, def.system_prompt.clone(), None),
-            ChatMessage::text(ChatRole::User, task.to_string(), None),
-        ];
-
         // Build tool_defs excluding `run_agent` to prevent nesting.
         let tool_defs: Vec<ToolDefinition> = tools
             .specs()
@@ -190,17 +189,32 @@ impl ToolHandler for RunAgentTool {
             })
             .collect();
 
-        // Create sub-agent event channel.
-        let (sub_tx, mut sub_rx) = mpsc::unbounded_channel::<AgentEvent>();
+        // Build TaskRequest with inherited parent permissions.
+        let req = TaskRequest {
+            prompt: task.to_string(),
+            system_prompt: Some(def.system_prompt.clone()),
+            client: Arc::clone(&self.client),
+            tools,
+            tool_defs,
+            sampling: self.sampling.clone(),
+            max_rounds: def.max_turns,
+            agent_name: agent_name.to_string(),
+            approval_mode: self.perms.approval_mode,
+            approval_cache: self.perms.approval_cache.clone(),
+            allow_rules: self.perms.allow_rules.clone(),
+            deny_rules: self.perms.deny_rules.clone(),
+            ask_rules: self.perms.ask_rules.clone(),
+            cwd: self.perms.cwd.clone(),
+        };
 
-        // Spawn event consumer BEFORE starting the loop, since the loop may
-        // block on approval requests that the consumer needs to forward.
+        let (task_fut, mut rx) = run_task_with_events(req);
+
+        // Forwarder: forward progress events and approval requests to parent.
+        // Result collection is handled by task_fut — the forwarder is purely
+        // for side-effects (TUI display and approval interaction).
         let output_tx = ctx.output_tx.clone();
-        let consumer_handle = tokio::spawn(async move {
-            let mut final_text = String::new();
-            let mut is_error = false;
-
-            while let Some(event) = sub_rx.recv().await {
+        let forwarder = tokio::spawn(async move {
+            while let Some(event) = rx.recv().await {
                 match event {
                     AgentEvent::ToolCallStart {
                         display_name,
@@ -208,8 +222,9 @@ impl ToolHandler for RunAgentTool {
                         ..
                     } => {
                         if let Some(ref tx) = output_tx {
-                            let args_summary = if arguments.len() > 80 {
-                                format!("{}…", &arguments[..80])
+                            let args_summary = if arguments.chars().count() > 80 {
+                                let truncated: String = arguments.chars().take(80).collect();
+                                format!("{truncated}…")
                             } else {
                                 arguments
                             };
@@ -241,6 +256,18 @@ impl ToolHandler for RunAgentTool {
                             let _ = tx.send(format!("  ✓ {q}"));
                         }
                     }
+                    AgentEvent::Retrying {
+                        attempt,
+                        max_attempts,
+                        reason,
+                        delay_secs,
+                    } => {
+                        if let Some(ref tx) = output_tx {
+                            let _ = tx.send(format!(
+                                "  ⟳ Retrying ({attempt}/{max_attempts}) in {delay_secs:.1}s: {reason}"
+                            ));
+                        }
+                    }
                     AgentEvent::ApprovalRequest {
                         tool_name,
                         arguments,
@@ -260,88 +287,39 @@ impl ToolHandler for RunAgentTool {
                             let _ = respond.send(crate::event::ReviewDecision::Denied);
                         }
                     }
-                    AgentEvent::TextDelta(text) => {
-                        final_text.push_str(&text);
-                    }
-                    AgentEvent::Done {
-                        final_text: done_text,
-                        ..
-                    } => {
-                        if final_text.is_empty() {
-                            final_text = done_text;
-                        }
-                        // Forward the final response text to parent output so
-                        // the user can see the sub-agent's answer.
-                        if !final_text.is_empty()
-                            && let Some(ref tx) = output_tx
-                        {
-                            for line in final_text.lines() {
-                                let _ = tx.send(format!("  {line}"));
-                            }
-                        }
-                        break;
-                    }
-                    AgentEvent::Error { message, .. } => {
-                        final_text = message;
-                        is_error = true;
-                        break;
-                    }
                     _ => {}
                 }
             }
-
-            (final_text, is_error)
         });
 
-        // Build retry callback.
-        let output_tx_for_retry = ctx.output_tx.clone();
-        let on_retry = move |info: krew_llm::common::RetryInfo| {
-            if let Some(ref tx) = output_tx_for_retry {
-                let _ = tx.send(format!(
-                    "  ⟳ Retrying ({}/{}) in {:.1}s: {}",
-                    info.attempt, info.max_attempts, info.delay_secs, info.reason
-                ));
-            }
-        };
+        // Await task completion — single source of truth for the result.
+        let result = task_fut.await;
 
-        // Run the agent loop. This blocks until the sub-agent completes.
-        // The loop sends events to sub_tx; the spawned consumer task processes them.
-        let loop_ctx = AgentLoopContext {
-            client: &self.client,
-            tools: &tools,
-            tool_defs: &tool_defs,
-            sampling: &self.sampling,
-            on_retry: &on_retry,
-            tx: &sub_tx,
-            agent_name,
-            max_rounds: def.max_turns,
-            approval_mode: self.perms.approval_mode,
-            approval_cache: &self.perms.approval_cache,
-            allow_rules: &self.perms.allow_rules,
-            deny_rules: &self.perms.deny_rules,
-            ask_rules: &self.perms.ask_rules,
-            cwd: &self.perms.cwd,
-            whisper_targets: None,
-        };
+        // Wait for forwarder to finish draining events. Log if it panicked
+        // — approval forwarding and TUI progress depend on this task.
+        if let Err(e) = forwarder.await {
+            tracing::error!("sub-agent event forwarder panicked: {e}");
+        }
 
-        run_agent_loop(&loop_ctx, &mut messages).await;
-
-        // Drop sub_tx to close the channel so the consumer finishes.
-        drop(loop_ctx);
-        drop(sub_tx);
-
-        // Wait for the consumer to collect final results.
-        let (mut final_text, is_error) = consumer_handle
-            .await
-            .unwrap_or_else(|_| ("sub-agent consumer task panicked".to_string(), true));
-
-        if final_text.is_empty() && !is_error {
+        let mut final_text = result.final_text;
+        if final_text.is_empty() && !result.is_error {
             final_text = "(sub-agent produced no output)".to_string();
+        }
+
+        // Forward the final response text to parent output so the user
+        // can see the sub-agent's answer.
+        if !result.is_error
+            && !final_text.is_empty()
+            && let Some(ref tx) = ctx.output_tx
+        {
+            for line in final_text.lines() {
+                let _ = tx.send(format!("  {line}"));
+            }
         }
 
         Ok(ToolResult {
             content: final_text,
-            is_error,
+            is_error: result.is_error,
             images: vec![],
         })
     }
