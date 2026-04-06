@@ -83,7 +83,7 @@ impl App {
                 // No @/# target — show hint and keep textarea.
                 self.show_error(
                     terminal,
-                    "待发送消息需要指定目标，请使用 @name 或 #name",
+                    "Pending message requires a target — use @name or #name",
                 )?;
                 return Ok(());
             }

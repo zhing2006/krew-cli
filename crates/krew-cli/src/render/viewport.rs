@@ -330,8 +330,8 @@ fn render_pending_area(frame: &mut custom_terminal::Frame, app: &App, area: Rect
         .collect();
     let chunks = Layout::vertical(constraints).split(area);
 
-    // Title line: ┄ 待发送 (N) ┄
-    let title_text = format!(" 待发送 ({}) ", app.pending_messages.len());
+    // Title line: ┄ Pending (N) ┄
+    let title_text = format!(" Pending ({}) ", app.pending_messages.len());
     let pad_total = width.saturating_sub(title_text.len());
     let pad_left = pad_total / 2;
     let pad_right = pad_total - pad_left;
