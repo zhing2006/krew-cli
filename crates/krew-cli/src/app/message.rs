@@ -11,6 +11,7 @@ use crate::custom_terminal;
 use crate::render;
 
 use super::App;
+use super::state::{MAX_PENDING_MESSAGES, PendingMessage};
 
 impl App {
     /// Send the current input as a message or execute a slash command.
@@ -25,20 +26,17 @@ impl App {
             return Ok(());
         }
 
-        let trimmed = text.trim();
+        let trimmed = text.trim().to_string();
         tracing::debug!(input = %trimmed, "User sent message");
 
-        // Push to input history.
-        self.history_push(trimmed.to_string());
-
         // Try built-in slash command first.
-        if trimmed.starts_with('/') && SlashCommand::from_input(trimmed).is_some() {
+        if trimmed.starts_with('/') && SlashCommand::from_input(&trimmed).is_some() {
+            self.history_push(trimmed.clone());
             self.clear_textarea();
-            return self.execute_slash_command(trimmed, terminal);
+            return self.execute_slash_command(&trimmed, terminal);
         }
 
         // Try custom command — `/name args` where name is in the custom registry.
-        // If input starts with `/` but matches neither built-in nor custom, show error.
         if let Some(without_slash) = trimmed.strip_prefix('/') {
             let (cmd_part, args) = match without_slash.split_once(' ') {
                 Some((c, a)) => (c, a.trim()),
@@ -47,54 +45,119 @@ impl App {
             if let Some(cmd) = self.custom_commands.lookup(cmd_part) {
                 let expanded = cmd.expand(args);
                 self.pending_custom_command = Some(expanded);
+                self.history_push(trimmed.clone());
                 self.clear_textarea();
                 return Ok(());
             }
-            // Unknown `/` command — show error instead of treating as plain text.
             self.clear_textarea();
             return self.show_error(terminal, &format!("Unknown command: /{cmd_part}"));
         }
+
+        self.clear_textarea();
+        self.submit_raw_input(&trimmed, terminal)
+    }
+
+    /// Queue the current textarea content as a pending message.
+    ///
+    /// Validates that input is non-empty and contains @/# addressing.
+    /// On success, clears the textarea. On failure, preserves textarea content.
+    pub(crate) fn queue_message(
+        &mut self,
+        terminal: &mut custom_terminal::Terminal,
+    ) -> anyhow::Result<()> {
+        let text = self.expanded_text();
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Ok(());
+        }
+
+        // Reject if queue is full (caller should check, but defensive).
+        if self.pending_messages.len() >= MAX_PENDING_MESSAGES {
+            return Ok(());
+        }
+
+        // Validate: must have @/# addressing (LastRespondent not allowed for pending).
+        let agent_names: Vec<String> = self.config.agents.iter().map(|a| a.name.clone()).collect();
+        match router::parse_input(trimmed, &agent_names) {
+            Ok((Addressee::LastRespondent, _, _)) => {
+                // No @/# target — show hint and keep textarea.
+                self.show_error(
+                    terminal,
+                    "待发送消息需要指定目标，请使用 @name 或 #name",
+                )?;
+                return Ok(());
+            }
+            Err(e) => {
+                self.show_error(terminal, &e.to_string())?;
+                return Ok(());
+            }
+            Ok(_) => {} // Valid addressing, proceed.
+        }
+
+        self.pending_messages.push_back(PendingMessage {
+            raw_input: trimmed.to_string(),
+        });
+        self.clear_textarea();
+        Ok(())
+    }
+
+    /// Drain one pending message from the queue and submit it.
+    ///
+    /// Called after all pending agents finish (Done/Error/Cancel paths).
+    pub(crate) fn drain_pending_message(
+        &mut self,
+        terminal: &mut custom_terminal::Terminal,
+    ) -> anyhow::Result<()> {
+        let pending = match self.pending_messages.pop_front() {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+        self.submit_raw_input(&pending.raw_input, terminal)
+    }
+
+    /// Submit a raw input string as a user message (shared by send_message and drain).
+    fn submit_raw_input(
+        &mut self,
+        trimmed: &str,
+        terminal: &mut custom_terminal::Terminal,
+    ) -> anyhow::Result<()> {
+        // Push to input history.
+        self.history_push(trimmed.to_string());
 
         // Reset AI-to-AI round counter on new user message.
         self.ai_conversation_rounds = 0;
         self.a2a_insert_cursor = 0;
 
-        // Parse @ addressee (only known agents are recognized as addressees).
+        // Parse @ addressee.
         let agent_names: Vec<String> = self.config.agents.iter().map(|a| a.name.clone()).collect();
         let (addressee, body, is_whisper) = match router::parse_input(trimmed, &agent_names) {
             Ok(result) => result,
             Err(e) => {
                 self.show_error(terminal, &e.to_string())?;
-                self.clear_textarea();
                 return Ok(());
             }
         };
 
-        // Resolve LastRespondent early so we can show colored dots.
         let resolved_last = match &addressee {
             Addressee::LastRespondent => self.last_respondent.clone(),
             _ => None,
         };
 
-        // Task 3.5: Block if LastRespondent has no value.
         if matches!(&addressee, Addressee::LastRespondent) && resolved_last.is_none() {
             self.show_error(
                 terminal,
                 "No agent has replied yet — use @name to specify a target agent",
             )?;
-            self.clear_textarea();
             return Ok(());
         }
 
-        // Fork semantics: generate new session ID on first real message after rewind.
-        // All validation has passed at this point — the message will be sent.
+        // Fork semantics.
         if self.rewound {
             self.session_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
             self.session_created_at = chrono::Utc::now();
             self.rewound = false;
         }
 
-        // Resolve target agent names for colored dots on user message.
         let available: std::collections::HashSet<String> = self.agents.keys().cloned().collect();
         let target_names = router::resolve_target_names(
             &addressee,
@@ -103,10 +166,8 @@ impl App {
             resolved_last.as_deref(),
         );
 
-        // Insert user message with colored routing dots: > ●●● message
         self.insert_user_message(terminal, &target_names, trimmed, is_whisper)?;
 
-        // Set whisper state for dispatch lifecycle.
         let whisper_targets = if is_whisper {
             let targets: Vec<String> = target_names.iter().map(|n| n.to_string()).collect();
             self.current_whisper_targets = Some(targets.clone());
@@ -116,7 +177,6 @@ impl App {
             None
         };
 
-        // Add user message to conversation history with addressee info.
         let addressee_str = match &addressee {
             Addressee::All => Some("all".to_string()),
             Addressee::Single(name) => Some(name.clone()),
@@ -128,10 +188,8 @@ impl App {
                 .with_whisper_targets(whisper_targets),
         );
 
-        // Persist session after user message.
         self.save_session();
 
-        // Build the agent dispatch queue via krew-core router.
         self.pending_agents = router::resolve_dispatch_queue(
             &addressee,
             &self.config.settings.reply_order,
@@ -139,7 +197,6 @@ impl App {
             resolved_last.as_deref(),
         );
 
-        // Check for unavailable agents in the dispatch queue.
         let unavailable: Vec<String> = self
             .pending_agents
             .iter()
@@ -147,7 +204,6 @@ impl App {
             .cloned()
             .collect();
         if !unavailable.is_empty() {
-            // Remove unavailable agents from the queue.
             self.pending_agents
                 .retain(|name| self.agents.contains_key(name.as_str()));
             let names = unavailable.join(", ");
@@ -156,15 +212,11 @@ impl App {
                 &format!("Agent unavailable (possibly missing API key): {names}"),
             )?;
             if self.pending_agents.is_empty() {
-                self.clear_textarea();
                 return Ok(());
             }
         }
 
-        // Start the first agent in the queue.
         self.start_next_agent(terminal)?;
-
-        self.clear_textarea();
         Ok(())
     }
 

@@ -133,14 +133,20 @@ impl App {
 
         // Match key events directly via crossterm KeyEvent.
         match key_event {
-            // Enter (no modifiers) => send message, or newline if agent is active.
+            // Enter (no modifiers) => send / queue / newline (three-state logic).
             KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
                 if self.agent_event_rx.is_some() {
-                    self.textarea.insert_newline();
+                    if self.pending_messages.len()
+                        < super::state::MAX_PENDING_MESSAGES
+                    {
+                        self.queue_message(terminal)?;
+                    } else {
+                        self.textarea.insert_newline();
+                    }
                 } else {
                     self.send_message(terminal)?;
                 }
@@ -153,13 +159,18 @@ impl App {
             } => {
                 self.textarea.insert_newline();
             }
-            // Up arrow (no modifiers): history prev when cursor is on the first row.
+            // Up arrow (no modifiers): undo pending or history prev when cursor is on the first row.
             KeyEvent {
                 code: KeyCode::Up,
                 modifiers: KeyModifiers::NONE,
                 ..
             } if self.textarea.cursor_row_col().0 == 0 => {
-                self.history_prev();
+                if let Some(pending) = self.pending_messages.pop_back() {
+                    // Undo last pending message — replace textarea content.
+                    self.set_textarea_content(&pending.raw_input);
+                } else {
+                    self.history_prev();
+                }
             }
             // Down arrow (no modifiers): history next when cursor is on the last row.
             KeyEvent {

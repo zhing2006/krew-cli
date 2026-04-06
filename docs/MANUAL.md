@@ -1287,13 +1287,13 @@ All discovery uses **first-found wins** for same-name entries.
 
 | Key | Action |
 | --- | ------ |
-| `Enter` | Send message |
+| `Enter` | Send message (idle) / Queue pending message (agent responding) / New line (queue full) |
 | `Shift+Enter` / `Ctrl+J` | New line |
-| `↑` / `↓` | Browse input history |
+| `↑` / `↓` | Undo pending message (if any) or browse input history / Browse input history |
 | `@` | Open agent completion popup (includes "all") |
 | `#` | Open whisper target popup (excludes "all") |
 | `/` | Open slash command popup |
-| `Esc` | Cancel current agent's streaming output |
+| `Esc` | Cancel current agent's streaming output (then auto-submits pending message) |
 | `Ctrl+C` (double) | Exit program |
 
 ### Completion popup

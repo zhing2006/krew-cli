@@ -10,4 +10,4 @@ mod viewport;
 
 pub use header::insert_header;
 pub use messages::insert_lines;
-pub use viewport::{parse_color, render_input_viewport};
+pub use viewport::{parse_color, pending_area_height, render_input_viewport};

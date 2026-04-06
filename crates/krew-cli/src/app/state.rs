@@ -36,6 +36,15 @@ use super::paste_burst::{FlushResult, PasteBurst};
 /// Duration within which a second Ctrl+C triggers quit.
 pub(super) const QUIT_SHORTCUT_TIMEOUT: Duration = Duration::from_secs(1);
 
+/// Maximum number of pending messages allowed in the queue.
+pub(super) const MAX_PENDING_MESSAGES: usize = 1;
+
+/// A message queued for sending while agents are responding.
+pub(crate) struct PendingMessage {
+    /// Original user input text (unparsed).
+    pub raw_input: String,
+}
+
 /// Commit tick interval (~60 Hz).
 const COMMIT_TICK_INTERVAL: Duration = Duration::from_millis(16);
 
@@ -154,6 +163,8 @@ pub struct App {
     pub(crate) is_dreaming: bool,
     /// Whether the session is in rewound state (fork semantics: don't save until new message).
     pub(crate) rewound: bool,
+    /// Queue of messages waiting to be sent after current agent dispatch completes.
+    pub(crate) pending_messages: VecDeque<PendingMessage>,
 }
 
 impl App {
@@ -257,6 +268,7 @@ impl App {
             is_dreaming: false,
             session_created_at: Utc::now(),
             rewound: false,
+            pending_messages: VecDeque::new(),
         })
     }
 
@@ -384,12 +396,14 @@ impl App {
                     let term_width = terminal.size()?.width.saturating_sub(2);
                     let status_line_height: u16 =
                         if self.agent_start_time.is_some() { 1 } else { 0 };
+                    let pending_height = render::pending_area_height(self);
                     let needed = if let Some(overlay) = &self.approval_overlay {
                         // Approval overlay replaces the input area.
                         overlay.desired_height() + status_line_height
                     } else {
                         let input_lines = self.textarea.desired_height(term_width.max(1));
                         input_lines.max(1) + 3 + status_line_height + self.popup.extra_height()
+                            + pending_height
                     };
                     terminal.ensure_viewport_height(needed)?;
 
@@ -926,6 +940,9 @@ impl App {
                     // No more pending agents — clear dispatch state.
                     self.current_whisper_targets = None;
                     self.current_exclude_tools = None;
+
+                    // Auto-drain: submit next pending message (if any).
+                    self.drain_pending_message(terminal)?;
                 }
             }
             AgentEvent::Error {
@@ -1001,6 +1018,9 @@ impl App {
                     }
                     self.current_whisper_targets = None;
                     self.current_exclude_tools = None;
+
+                    // Auto-drain: submit next pending message (if any).
+                    self.drain_pending_message(terminal)?;
                 }
             }
             AgentEvent::ToolDenied { tool_name, reason } => {
@@ -1151,6 +1171,9 @@ impl App {
         // Reset AI-to-AI round counter and insertion cursor.
         self.ai_conversation_rounds = 0;
         self.a2a_insert_cursor = 0;
+
+        // Auto-drain: submit next pending message (if any).
+        self.drain_pending_message(terminal)?;
 
         Ok(())
     }

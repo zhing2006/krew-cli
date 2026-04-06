@@ -38,6 +38,7 @@ Run multiple AI models (GPT, Claude, Gemini, etc.) in a single terminal session 
 - **Session Persistence** — Save and resume conversations; `/rewind` to fork from any point in history
 - **Token Tracking & Auto-Compact** — Real-time token usage; automatic context compression with whisper message preservation
 - **Prompt Mode (`-p`)** — Non-interactive mode for scripts and CI/CD, with text/JSON output and stdin pipe support
+- **Pending Message** — Queue a message while agents are responding; auto-submits after the current dispatch completes; `↑` to undo
 - **Streaming Output** — ~60Hz token-by-token rendering with Markdown, syntax highlighting, and per-agent color coding
 - **Thinking/Reasoning** — Display model thinking process (configurable effort: low/medium/high)
 - **Web Search** — Provider-native web search (OpenAI Responses, OpenAI Chat, Anthropic, Gemini)
