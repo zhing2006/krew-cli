@@ -1476,7 +1476,41 @@ Agent 生成回复期间，在 viewport 分隔线上方显示状态行：闪烁 
 - **语法高亮**：使用 syntect（超过 512KB 或 10,000 行跳过高亮）
 - **Unicode 感知**：CJK 字符宽度计算（unicode-width）
 
-#### 3.9.5 补全弹窗
+#### 3.9.5 Pending Message 系统
+
+Agent 响应期间用户可预排队消息，调度完成后自动提交。
+
+**数据结构：**
+
+```rust
+const MAX_PENDING_MESSAGES: usize = 1;
+
+struct PendingMessage {
+    raw_input: String, // 不预解析，提交时重新 parse
+}
+
+// App state
+pending_messages: VecDeque<PendingMessage>
+```
+
+**Enter 键三态逻辑：**
+
+```txt
+Enter (光标在最后一行):
+  1. agent_event_rx.is_none() → send_message()
+  2. agent_event_rx.is_some() + pending 未满 → queue_message()
+  3. agent_event_rx.is_some() + pending 已满 → insert_newline()
+```
+
+**入队验证：** 非空 + 必须含 `@`/`#` 寻址（`LastRespondent` 被拒绝，textarea 保留）。原因：pending 期间 `last_respondent` 随串行执行和 A2A 触发而漂移，目标不确定。
+
+**↑ 键双模式：** 光标在第一行时，有 pending → `pop_back()` 到 textarea（直接替换）；无 pending → 调取输入历史。
+
+**Auto-drain：** Done / Error / Cancel 路径统一——`pending_agents` 清空且 `agent_event_rx` 变为 None 后，调用 `drain_pending_message()` 提交队首消息。
+
+**Viewport 渲染：** Pending 区域位于 viewport 最上方（textarea 之上），包含标题行（`┄ 待发送 (N) ┄`）和消息行（`⏳ ● @name ...`，单行截断 + `…`）。Approval overlay / completion popup 活跃时隐藏。高度动态计算：`pending_area_height` + 现有布局。
+
+#### 3.9.6 补全弹窗
 
 输入 `/`、`@`、`#` 触发对应的补全弹窗，替换状态栏区域并扩展 viewport 高度。支持键盘导航（上下箭头、Tab/Enter 确认、Esc 关闭），同一时间只能显示一个弹窗。Slash 命令补全同时包含内置命令和自定义命令。
 
@@ -1693,6 +1727,10 @@ struct AgentRuntime {
           gemini 上下文已包含 gpt + opus 的回复
           gemini.run_loop(session.messages) → 流式输出 → 工具调用(如有)
           gemini 回复追加到 session.messages 并持久化
+     │
+     ▼
+ 4. pending_agents 清空 → drain_pending_message()
+     └─ 如果用户在响应期间排队了消息，自动提交并开始新一轮调度
 ```
 
 ### 5.3 工具调用流程
@@ -1808,9 +1846,9 @@ krew-cli/
 │   │       ├── app/                # App 状态机 + 事件循环
 │   │       │   ├── mod.rs
 │   │       │   ├── state.rs        # App 状态定义
-│   │       │   ├── input.rs        # 键盘事件处理 + ESC 取消
+│   │       │   ├── input.rs        # 键盘事件处理 + ESC 取消 + pending 撤销
 │   │       │   ├── commands.rs     # Slash 命令处理
-│   │       │   ├── message.rs      # 消息发送流程
+│   │       │   ├── message.rs      # 消息发送 + pending 入队/drain
 │   │       │   ├── agent_display.rs # Agent 显示信息管理
 │   │       │   ├── persistence.rs  # 会话持久化集成
 │   │       │   ├── paste_burst.rs  # 粘贴检测

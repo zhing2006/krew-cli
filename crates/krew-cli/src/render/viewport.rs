@@ -11,6 +11,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use krew_core::router;
+
 use crate::app::App;
 use crate::custom_terminal;
 
@@ -139,6 +141,8 @@ pub fn render_input_viewport(frame: &mut custom_terminal::Frame, app: &mut App) 
 
     let has_status_line = app.agent_start_time.is_some();
 
+    let pending_h = pending_area_height(app);
+
     if app.popup.is_active() {
         // Popup replaces the status bar and may take multiple rows.
         let popup_lines = app.popup.render_lines(area.width);
@@ -147,6 +151,10 @@ pub fn render_input_viewport(frame: &mut custom_terminal::Frame, app: &mut App) 
         let mut constraints = Vec::new();
         if has_status_line {
             constraints.push(Constraint::Length(1)); // Agent status line
+        }
+        // pending_h is 0 when popup is active (hidden by pending_area_height).
+        if pending_h > 0 {
+            constraints.push(Constraint::Length(pending_h));
         }
         constraints.push(Constraint::Length(1)); // Top separator
         constraints.push(Constraint::Length(input_height)); // Input prompt
@@ -160,6 +168,10 @@ pub fn render_input_viewport(frame: &mut custom_terminal::Frame, app: &mut App) 
             render_agent_status(frame, app, chunks[i]);
             i += 1;
         }
+        if pending_h > 0 {
+            render_pending_area(frame, app, chunks[i]);
+            i += 1;
+        }
         render_separator(frame, chunks[i]);
         render_input(frame, app, chunks[i + 1]);
         render_separator(frame, chunks[i + 2]);
@@ -168,6 +180,9 @@ pub fn render_input_viewport(frame: &mut custom_terminal::Frame, app: &mut App) 
         let mut constraints = Vec::new();
         if has_status_line {
             constraints.push(Constraint::Length(1)); // Agent status line
+        }
+        if pending_h > 0 {
+            constraints.push(Constraint::Length(pending_h)); // Pending area
         }
         constraints.push(Constraint::Length(1)); // Top separator
         constraints.push(Constraint::Length(input_height)); // Input prompt
@@ -179,6 +194,10 @@ pub fn render_input_viewport(frame: &mut custom_terminal::Frame, app: &mut App) 
 
         if has_status_line {
             render_agent_status(frame, app, chunks[i]);
+            i += 1;
+        }
+        if pending_h > 0 {
+            render_pending_area(frame, app, chunks[i]);
             i += 1;
         }
         render_separator(frame, chunks[i]);
@@ -278,6 +297,126 @@ fn render_agent_status(frame: &mut custom_terminal::Frame, app: &App, area: Rect
     spans.push(Span::styled(" to interrupt)", dim));
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// Compute the height of the pending message area (0 if empty or overlay/popup active).
+pub fn pending_area_height(app: &App) -> u16 {
+    if app.pending_messages.is_empty() {
+        return 0;
+    }
+    // Hide pending area when overlay or popup is active.
+    if app.approval_overlay.is_some() || app.popup.is_active() {
+        return 0;
+    }
+    // 1 title line + N message lines
+    1 + app.pending_messages.len() as u16
+}
+
+/// Render the pending message area at the top of the viewport.
+fn render_pending_area(frame: &mut custom_terminal::Frame, app: &App, area: Rect) {
+    if area.height == 0 {
+        return;
+    }
+
+    let width = area.width as usize;
+
+    // Split area: first row = title, remaining = messages.
+    let constraints: Vec<Constraint> = std::iter::once(Constraint::Length(1))
+        .chain(
+            app.pending_messages
+                .iter()
+                .map(|_| Constraint::Length(1)),
+        )
+        .collect();
+    let chunks = Layout::vertical(constraints).split(area);
+
+    // Title line: ┄ 待发送 (N) ┄
+    let title_text = format!(" 待发送 ({}) ", app.pending_messages.len());
+    let pad_total = width.saturating_sub(title_text.len());
+    let pad_left = pad_total / 2;
+    let pad_right = pad_total - pad_left;
+    let title_line = Line::from(Span::styled(
+        format!(
+            "{}{}{}",
+            "┄".repeat(pad_left.min(20)),
+            title_text,
+            "┄".repeat(pad_right.min(20))
+        ),
+        Style::default().fg(Color::DarkGray),
+    ));
+    frame.render_widget(Paragraph::new(title_line), chunks[0]);
+
+    // Message lines.
+    let agent_names: Vec<String> = app.config.agents.iter().map(|a| a.name.clone()).collect();
+    for (idx, pending) in app.pending_messages.iter().enumerate() {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+
+        // ⏳ prefix
+        spans.push(Span::styled(
+            "⏳ ".to_string(),
+            Style::default().fg(Color::DarkGray),
+        ));
+
+        // Parse for routing dots preview.
+        if let Ok((addressee, _, is_whisper)) =
+            router::parse_input(&pending.raw_input, &agent_names)
+        {
+            if is_whisper {
+                spans.push(Span::styled(
+                    "\u{1F512}".to_string(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ));
+            }
+
+            let available: std::collections::HashSet<String> =
+                app.agents.keys().cloned().collect();
+            let target_names = router::resolve_target_names(
+                &addressee,
+                &app.config.settings.reply_order,
+                &available,
+                None,
+            );
+            for name in &target_names {
+                let color = app
+                    .config
+                    .agents
+                    .iter()
+                    .find(|a| a.name == *name)
+                    .map(|a| parse_color(&a.color))
+                    .unwrap_or(Color::White);
+                spans.push(Span::styled(
+                    "\u{25cf}".to_string(),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ));
+            }
+            if !target_names.is_empty() {
+                spans.push(Span::raw(" ".to_string()));
+            }
+        }
+
+        // Message text — first line only, truncated.
+        let first_line = pending
+            .raw_input
+            .lines()
+            .next()
+            .unwrap_or(&pending.raw_input);
+        let is_multiline = pending.raw_input.contains('\n');
+
+        // Calculate remaining width for text.
+        let prefix_width: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+        let max_text_width = width.saturating_sub(prefix_width).saturating_sub(1);
+
+        let display_text = if first_line.chars().count() > max_text_width || is_multiline {
+            let truncated: String = first_line.chars().take(max_text_width.saturating_sub(1)).collect();
+            format!("{truncated}…")
+        } else {
+            first_line.to_string()
+        };
+
+        spans.push(Span::styled(display_text, Style::default().fg(Color::Gray)));
+
+        frame.render_widget(Paragraph::new(Line::from(spans)), chunks[idx + 1]);
+    }
 }
 
 /// Render the bottom status bar with config values.

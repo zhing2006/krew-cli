@@ -38,6 +38,7 @@
 - **会话持久化** — 随时保存和恢复对话；`/rewind` 可从任意历史点分叉
 - **Token 追踪与自动压缩** — 实时 token 用量显示；超过阈值自动压缩上下文，保留密语消息
 - **Prompt 模式（`-p`）** — 非交互模式，适用于脚本和 CI/CD，支持 text/JSON 输出和 stdin 管道
+- **待发送消息** — Agent 响应期间可预排队一条消息，调度完成后自动提交；按 `↑` 可撤销
 - **流式输出** — ~60Hz 逐 token 渲染，支持 Markdown、语法高亮和 Agent 颜色区分
 - **思考/推理** — 显示模型思考过程（可配置力度：low/medium/high）
 - **Web 搜索** — Provider 原生 Web 搜索（OpenAI Responses、OpenAI Chat、Anthropic、Gemini）
