@@ -141,7 +141,7 @@ fn language_instruction_without_language() {
 fn identity_basic_no_language_no_peers() {
     let result = build_identity_prompt("GPT-5", "gpt-5", "gpt", "2026-03-24", None, None, None);
     assert!(result.contains("You are GPT-5, powered by the gpt-5 model."));
-    assert!(result.contains("Current date/time: 2026-03-24"));
+    assert!(result.contains("Current date: 2026-03-24"));
     // No language instruction.
     assert!(!result.contains("Always respond in"));
     // No peer or whisper hints.

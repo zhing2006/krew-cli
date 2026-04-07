@@ -140,9 +140,7 @@ impl App {
                 ..
             } => {
                 if self.agent_event_rx.is_some() {
-                    if self.pending_messages.len()
-                        < super::state::MAX_PENDING_MESSAGES
-                    {
+                    if self.pending_messages.len() < super::state::MAX_PENDING_MESSAGES {
                         self.queue_message(terminal)?;
                     } else {
                         self.textarea.insert_newline();

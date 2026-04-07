@@ -322,11 +322,7 @@ fn render_pending_area(frame: &mut custom_terminal::Frame, app: &App, area: Rect
 
     // Split area: first row = title, remaining = messages.
     let constraints: Vec<Constraint> = std::iter::once(Constraint::Length(1))
-        .chain(
-            app.pending_messages
-                .iter()
-                .map(|_| Constraint::Length(1)),
-        )
+        .chain(app.pending_messages.iter().map(|_| Constraint::Length(1)))
         .collect();
     let chunks = Layout::vertical(constraints).split(area);
 
@@ -368,8 +364,7 @@ fn render_pending_area(frame: &mut custom_terminal::Frame, app: &App, area: Rect
                 ));
             }
 
-            let available: std::collections::HashSet<String> =
-                app.agents.keys().cloned().collect();
+            let available: std::collections::HashSet<String> = app.agents.keys().cloned().collect();
             let target_names = router::resolve_target_names(
                 &addressee,
                 &app.config.settings.reply_order,
@@ -407,7 +402,10 @@ fn render_pending_area(frame: &mut custom_terminal::Frame, app: &App, area: Rect
         let max_text_width = width.saturating_sub(prefix_width).saturating_sub(1);
 
         let display_text = if first_line.chars().count() > max_text_width || is_multiline {
-            let truncated: String = first_line.chars().take(max_text_width.saturating_sub(1)).collect();
+            let truncated: String = first_line
+                .chars()
+                .take(max_text_width.saturating_sub(1))
+                .collect();
             format!("{truncated}…")
         } else {
             first_line.to_string()
