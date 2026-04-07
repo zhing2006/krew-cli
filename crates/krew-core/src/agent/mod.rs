@@ -84,14 +84,12 @@ impl AgentRuntime {
         });
 
         // Build agent identity + optional custom system prompt.
-        let now = chrono::Local::now()
-            .format("%Y-%m-%d %H:%M (%A)")
-            .to_string();
+        let today = chrono::Local::now().format("%Y-%m-%d (%A)").to_string();
         let identity = build_identity_prompt(
             &self.config.display_name,
             &self.config.model,
             &self.config.name,
-            &now,
+            &today,
             self.language.as_deref(),
             peer_agents,
             whisper_targets.as_deref(),
@@ -258,7 +256,7 @@ pub fn build_identity_prompt(
     display_name: &str,
     model: &str,
     agent_name: &str,
-    now: &str,
+    today: &str,
     language: Option<&str>,
     peer_agents: Option<&[PeerAgent]>,
     whisper_targets: Option<&[String]>,
@@ -276,7 +274,7 @@ pub fn build_identity_prompt(
          Other agents in this conversation are DIFFERENT AI models, not you. \
          {other_agent_hint}\n\
          Respond as yourself — do not role-play or impersonate other agents.\n\
-         Current date/time: {now}{language_instruction}",
+         Current date: {today}{language_instruction}",
     );
 
     // 2. Peer agent collaboration hint.
