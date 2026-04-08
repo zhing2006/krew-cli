@@ -532,7 +532,7 @@ system_prompt = ""               # 自定义系统提示词（可选）
 tools = true                     # 启用工具（默认 false）
 enable_web_search = false        # 启用原生 Web 搜索（默认 false）
 enable_thinking = false          # 显示思考过程（默认 false）
-# thinking_effort = "medium"     # 思考力度: low | medium | high
+# thinking_effort = "medium"     # 思考力度: low | medium | high | max
 
 # OpenAI 专用
 # api_type = "responses"         # "responses"（Responses API）或 "chat"（Chat Completions）

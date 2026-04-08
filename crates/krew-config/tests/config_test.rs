@@ -347,6 +347,12 @@ fn thinking_effort_deserialize_high() {
 }
 
 #[test]
+fn thinking_effort_deserialize_max() {
+    let w: ThinkingEffortWrapper = toml::from_str("val = \"max\"").unwrap();
+    assert_eq!(w.val, ThinkingEffort::Max);
+}
+
+#[test]
 fn thinking_effort_deserialize_invalid() {
     let result: Result<ThinkingEffortWrapper, _> = toml::from_str("val = \"extreme\"");
     assert!(result.is_err());

@@ -413,7 +413,7 @@ struct Usage {
 - `max_tokens` **必填**，未设置时根据模型名自动填入最大输出 token 数
 - `temperature` clamp 到 0-1 范围
 - Web Search: tools 中添加 `{ type: "web_search_20250305", name: "web_search" }`
-- Thinking: Opus 4.6/Sonnet 4.6 使用 `adaptive` thinking + `output_config.effort`；旧模型使用 `enabled` + `budget_tokens`。启用 thinking 时强制 `temperature = 1.0`
+- Thinking: 使用能力函数矩阵判断模型支持。Opus 4.6/Sonnet 4.6 使用 `adaptive` thinking + `output_config.effort`（含 max）；Opus 4.5 使用 `enabled` + `budget_tokens` + `output_config.effort`（Max 降为 high）；其他旧模型仅使用 `enabled` + `budget_tokens`，不发送 effort。启用 thinking 时强制 `temperature = 1.0`
 
 ##### Google Client
 
@@ -552,11 +552,13 @@ struct RetryConfig {
 
 | Provider | 模型 | API 参数 | effort 映射 |
 | -------- | ---- | -------- | ----------- |
-| OpenAI Responses | 所有 | `reasoning: { effort, summary: "auto" }` | low→"low", medium→"medium", high→"high", 未设置→"medium" |
-| Anthropic | Opus 4.6 / Sonnet 4.6 | `thinking: { type: "adaptive" }` + `output_config: { effort }` | 使用 adaptive thinking |
-| Anthropic | 旧模型 | `thinking: { type: "enabled", budget_tokens }` | low→1024, medium→8192, high→32768, 未设置→8192 |
-| Google | Gemini 3.x | `thinkingConfig: { includeThoughts: true, thinkingLevel }` | low→"low", medium→"medium", high→"high", 未设置→"high" |
-| Google | Gemini 2.5 | `thinkingConfig: { includeThoughts: true, thinkingBudget }` | low→1024, medium→8192, high→24576, 未设置→-1 (动态) |
+| OpenAI Responses | 白名单模型 (gpt-5.4/5.4-pro/5.3-codex/5.2) | `reasoning: { effort, summary: "auto" }` | low→"low", medium→"medium", high→"high", max→"xhigh", 未设置→"medium" |
+| OpenAI Responses | 其他模型 | `reasoning: { effort, summary: "auto" }` | low→"low", medium→"medium", high→"high", max→"high" (降级), 未设置→"medium" |
+| Anthropic | Opus 4.6 / Sonnet 4.6 | `thinking: { type: "adaptive" }` + `output_config: { effort }` | 使用 adaptive thinking, effort 含 max |
+| Anthropic | Opus 4.5 | `thinking: { type: "enabled", budget_tokens }` + `output_config: { effort }` | budget: low→1024, medium→8192, high/max→32768; effort: max 降为 "high" |
+| Anthropic | 其他旧模型 | `thinking: { type: "enabled", budget_tokens }` | low→1024, medium→8192, high/max→32768, 未设置→8192, 不发送 effort |
+| Google | Gemini 3.x | `thinkingConfig: { includeThoughts: true, thinkingLevel }` | low→"low", medium→"medium", high/max→"high", 未设置→"high" |
+| Google | Gemini 2.5 | `thinkingConfig: { includeThoughts: true, thinkingBudget }` | low→1024, medium→8192, high/max→24576, 未设置→-1 (动态) |
 
 **Anthropic 强制约束**：启用 thinking 时强制 `temperature = 1.0`，覆盖用户配置（记录 warn 日志）。
 
@@ -1211,7 +1213,7 @@ struct AgentConfig {
     tools: bool,
     enable_web_search: bool,    // 启用模型原生 Web 搜索
     enable_thinking: bool,      // 启用思考/推理输出
-    thinking_effort: Option<ThinkingEffort>,  // 思考力度: low | medium | high
+    thinking_effort: Option<ThinkingEffort>,  // 思考力度: low | medium | high | max
     sampling: Option<SamplingConfig>,  // 采样参数（均可选，未设置则使用模型默认值）
 }
 
@@ -1219,6 +1221,7 @@ enum ThinkingEffort {
     Low,
     Medium,
     High,
+    Max,
 }
 
 /// Agent 级采样参数配置。
