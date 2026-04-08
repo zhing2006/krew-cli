@@ -472,6 +472,7 @@ pub enum ThinkingEffort {
     Low,
     Medium,
     High,
+    Max,
 }
 
 /// AI-to-AI routing strategy when an agent @-mentions another agent.

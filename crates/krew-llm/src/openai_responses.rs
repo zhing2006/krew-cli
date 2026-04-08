@@ -246,10 +246,27 @@ fn build_sampling_params(sampling: &SamplingConfig) -> serde_json::Map<String, s
 // Thinking/reasoning parameter injection
 // ---------------------------------------------------------------------------
 
+/// Check if a model supports xhigh reasoning effort (whitelist).
+///
+/// Matches exact model name or model name with date suffix (e.g. "gpt-5.4-20260101").
+fn supports_xhigh(model: &str) -> bool {
+    const XHIGH_MODELS: &[&str] = &["gpt-5.4", "gpt-5.4-pro", "gpt-5.3-codex", "gpt-5.2"];
+    XHIGH_MODELS.iter().any(|m| {
+        model == *m
+            || (model.starts_with(m)
+                && model.as_bytes().get(m.len()) == Some(&b'-')
+                && model
+                    .as_bytes()
+                    .get(m.len() + 1)
+                    .is_some_and(|c| c.is_ascii_digit()))
+    })
+}
+
 /// Build the reasoning parameter for the request body.
 fn build_reasoning_params(
     enable_thinking: bool,
     thinking_effort: Option<ThinkingEffort>,
+    model: &str,
 ) -> Option<serde_json::Value> {
     if !enable_thinking {
         return None;
@@ -258,6 +275,13 @@ fn build_reasoning_params(
     let effort = match thinking_effort {
         Some(ThinkingEffort::Low) => "low",
         Some(ThinkingEffort::High) => "high",
+        Some(ThinkingEffort::Max) => {
+            if supports_xhigh(model) {
+                "xhigh"
+            } else {
+                "high"
+            }
+        }
         Some(ThinkingEffort::Medium) | None => "medium",
     };
 
@@ -684,7 +708,8 @@ impl LlmClient for OpenAiResponsesClient {
         }
 
         // Add reasoning if thinking is enabled.
-        if let Some(reasoning) = build_reasoning_params(self.enable_thinking, self.thinking_effort)
+        if let Some(reasoning) =
+            build_reasoning_params(self.enable_thinking, self.thinking_effort, &self.model)
         {
             body["reasoning"] = reasoning;
         }
@@ -964,7 +989,7 @@ mod tests {
 
     #[test]
     fn reasoning_enabled_effort_high() {
-        let result = build_reasoning_params(true, Some(ThinkingEffort::High));
+        let result = build_reasoning_params(true, Some(ThinkingEffort::High), "gpt-5.1");
         let val = result.unwrap();
         assert_eq!(val["effort"], "high");
         assert_eq!(val["summary"], "auto");
@@ -972,7 +997,7 @@ mod tests {
 
     #[test]
     fn reasoning_enabled_effort_low() {
-        let result = build_reasoning_params(true, Some(ThinkingEffort::Low));
+        let result = build_reasoning_params(true, Some(ThinkingEffort::Low), "gpt-5.1");
         let val = result.unwrap();
         assert_eq!(val["effort"], "low");
         assert_eq!(val["summary"], "auto");
@@ -980,7 +1005,7 @@ mod tests {
 
     #[test]
     fn reasoning_enabled_effort_none_defaults_to_medium() {
-        let result = build_reasoning_params(true, None);
+        let result = build_reasoning_params(true, None, "gpt-5.1");
         let val = result.unwrap();
         assert_eq!(val["effort"], "medium");
         assert_eq!(val["summary"], "auto");
@@ -988,8 +1013,44 @@ mod tests {
 
     #[test]
     fn reasoning_disabled() {
-        let result = build_reasoning_params(false, Some(ThinkingEffort::High));
+        let result = build_reasoning_params(false, Some(ThinkingEffort::High), "gpt-5.4");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn reasoning_max_xhigh_supported() {
+        let result = build_reasoning_params(true, Some(ThinkingEffort::Max), "gpt-5.4");
+        assert_eq!(result.unwrap()["effort"], "xhigh");
+    }
+
+    #[test]
+    fn reasoning_max_xhigh_gpt_5_4_pro() {
+        let result = build_reasoning_params(true, Some(ThinkingEffort::Max), "gpt-5.4-pro");
+        assert_eq!(result.unwrap()["effort"], "xhigh");
+    }
+
+    #[test]
+    fn reasoning_max_xhigh_gpt_5_3_codex() {
+        let result = build_reasoning_params(true, Some(ThinkingEffort::Max), "gpt-5.3-codex");
+        assert_eq!(result.unwrap()["effort"], "xhigh");
+    }
+
+    #[test]
+    fn reasoning_max_xhigh_gpt_5_2() {
+        let result = build_reasoning_params(true, Some(ThinkingEffort::Max), "gpt-5.2");
+        assert_eq!(result.unwrap()["effort"], "xhigh");
+    }
+
+    #[test]
+    fn reasoning_max_downgraded_unsupported() {
+        let result = build_reasoning_params(true, Some(ThinkingEffort::Max), "gpt-5.1");
+        assert_eq!(result.unwrap()["effort"], "high");
+    }
+
+    #[test]
+    fn reasoning_max_downgraded_mini() {
+        let result = build_reasoning_params(true, Some(ThinkingEffort::Max), "gpt-5.4-mini");
+        assert_eq!(result.unwrap()["effort"], "high");
     }
 
     // ---- Tool definition conversion tests (3.13) ----

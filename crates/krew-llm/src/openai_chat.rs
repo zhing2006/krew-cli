@@ -209,11 +209,28 @@ fn build_sampling_params(sampling: &SamplingConfig) -> serde_json::Value {
 // Thinking/reasoning parameter injection
 // ---------------------------------------------------------------------------
 
+/// Check if a model supports xhigh reasoning effort (whitelist).
+///
+/// Matches exact model name or model name with date suffix (e.g. "gpt-5.4-20260101").
+fn supports_xhigh(model: &str) -> bool {
+    const XHIGH_MODELS: &[&str] = &["gpt-5.4", "gpt-5.4-pro", "gpt-5.3-codex", "gpt-5.2"];
+    XHIGH_MODELS.iter().any(|m| {
+        model == *m
+            || (model.starts_with(m)
+                && model.as_bytes().get(m.len()) == Some(&b'-')
+                && model
+                    .as_bytes()
+                    .get(m.len() + 1)
+                    .is_some_and(|c| c.is_ascii_digit()))
+    })
+}
+
 /// Map `enable_thinking` + `thinking_effort` to the `reasoning_effort` string
 /// used by OpenAI Chat Completions API (and LiteLLM proxy).
 fn build_reasoning_effort(
     enable_thinking: bool,
     thinking_effort: Option<ThinkingEffort>,
+    model: &str,
 ) -> Option<&'static str> {
     if !enable_thinking {
         return None;
@@ -221,6 +238,13 @@ fn build_reasoning_effort(
     Some(match thinking_effort {
         Some(ThinkingEffort::Low) => "low",
         Some(ThinkingEffort::High) => "high",
+        Some(ThinkingEffort::Max) => {
+            if supports_xhigh(model) {
+                "xhigh"
+            } else {
+                "high"
+            }
+        }
         Some(ThinkingEffort::Medium) | None => "medium",
     })
 }
@@ -409,7 +433,9 @@ impl LlmClient for OpenAiChatClient {
         }
 
         // Add reasoning_effort if thinking is enabled (for proxies like LiteLLM).
-        if let Some(effort) = build_reasoning_effort(self.enable_thinking, self.thinking_effort) {
+        if let Some(effort) =
+            build_reasoning_effort(self.enable_thinking, self.thinking_effort, &self.model)
+        {
             body["reasoning_effort"] = serde_json::json!(effort);
         }
 
@@ -864,6 +890,50 @@ mod tests {
         assert!(delta.id.is_empty());
         assert!(delta.name.is_empty());
         assert_eq!(delta.arguments, "more_args");
+    }
+
+    // ---- Reasoning effort tests ----
+
+    #[test]
+    fn reasoning_effort_max_xhigh_supported() {
+        let result = build_reasoning_effort(true, Some(ThinkingEffort::Max), "gpt-5.4");
+        assert_eq!(result, Some("xhigh"));
+    }
+
+    #[test]
+    fn reasoning_effort_max_xhigh_gpt_5_4_pro() {
+        let result = build_reasoning_effort(true, Some(ThinkingEffort::Max), "gpt-5.4-pro");
+        assert_eq!(result, Some("xhigh"));
+    }
+
+    #[test]
+    fn reasoning_effort_max_xhigh_gpt_5_2() {
+        let result = build_reasoning_effort(true, Some(ThinkingEffort::Max), "gpt-5.2");
+        assert_eq!(result, Some("xhigh"));
+    }
+
+    #[test]
+    fn reasoning_effort_max_downgraded_gpt_5_1() {
+        let result = build_reasoning_effort(true, Some(ThinkingEffort::Max), "gpt-5.1");
+        assert_eq!(result, Some("high"));
+    }
+
+    #[test]
+    fn reasoning_effort_max_downgraded_mini() {
+        let result = build_reasoning_effort(true, Some(ThinkingEffort::Max), "gpt-5.4-mini");
+        assert_eq!(result, Some("high"));
+    }
+
+    #[test]
+    fn reasoning_effort_high_unchanged() {
+        let result = build_reasoning_effort(true, Some(ThinkingEffort::High), "gpt-5.1");
+        assert_eq!(result, Some("high"));
+    }
+
+    #[test]
+    fn reasoning_effort_disabled() {
+        let result = build_reasoning_effort(false, Some(ThinkingEffort::Max), "gpt-5.4");
+        assert!(result.is_none());
     }
 
     #[test]

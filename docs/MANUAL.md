@@ -531,7 +531,7 @@ system_prompt = ""               # Custom system prompt (optional)
 tools = true                     # Enable tool use (default: false)
 enable_web_search = false        # Enable provider-native web search (default: false)
 enable_thinking = false          # Show model thinking/reasoning (default: false)
-# thinking_effort = "medium"     # Thinking effort: low | medium | high
+# thinking_effort = "medium"     # Thinking effort: low | medium | high | max
 
 # OpenAI-specific
 # api_type = "responses"         # "responses" (Responses API) or "chat" (Chat Completions)

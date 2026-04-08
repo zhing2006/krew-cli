@@ -303,8 +303,18 @@ fn build_sampling_params(
 // ---------------------------------------------------------------------------
 
 /// Check if a model supports adaptive thinking (Opus 4.6 / Sonnet 4.6).
-fn is_adaptive_model(model: &str) -> bool {
+fn supports_adaptive(model: &str) -> bool {
     (model.contains("opus") || model.contains("sonnet")) && model.contains("4-6")
+}
+
+/// Check if a model supports the effort parameter (Opus 4.6, Sonnet 4.6, Opus 4.5).
+fn supports_effort(model: &str) -> bool {
+    supports_adaptive(model) || (model.contains("opus") && model.contains("4-5"))
+}
+
+/// Check if a model supports effort = "max" (Opus 4.6 / Sonnet 4.6).
+fn supports_max_effort(model: &str) -> bool {
+    supports_adaptive(model)
 }
 
 /// Build the thinking parameter for the request body.
@@ -317,14 +327,15 @@ fn build_thinking_params(
         return None;
     }
 
-    if is_adaptive_model(model) {
+    if supports_adaptive(model) {
         // Opus 4.6 / Sonnet 4.6: use adaptive thinking.
         Some(serde_json::json!({"type": "adaptive"}))
     } else {
         // Older models: use enabled + budget_tokens.
+        // Max maps to same budget as High (32768).
         let budget = match thinking_effort {
             Some(ThinkingEffort::Low) => 1024,
-            Some(ThinkingEffort::High) => 32768,
+            Some(ThinkingEffort::High | ThinkingEffort::Max) => 32768,
             Some(ThinkingEffort::Medium) | None => 8192,
         };
         Some(serde_json::json!({
@@ -334,21 +345,31 @@ fn build_thinking_params(
     }
 }
 
-/// Build the output_config parameter for adaptive thinking effort.
+/// Build the output_config parameter for effort-capable models.
 fn build_output_config(
     enable_thinking: bool,
     thinking_effort: Option<ThinkingEffort>,
     model: &str,
 ) -> Option<serde_json::Value> {
-    if !enable_thinking || !is_adaptive_model(model) {
+    if !enable_thinking || !supports_effort(model) {
         return None;
     }
 
     thinking_effort.map(|effort| {
-        let effort_str = match effort {
-            ThinkingEffort::Low => "low",
-            ThinkingEffort::Medium => "medium",
-            ThinkingEffort::High => "high",
+        let effort_str = if effort == ThinkingEffort::Max {
+            if supports_max_effort(model) {
+                "max"
+            } else {
+                // Downgrade to high on models that don't support max.
+                "high"
+            }
+        } else {
+            match effort {
+                ThinkingEffort::Low => "low",
+                ThinkingEffort::Medium => "medium",
+                ThinkingEffort::High => "high",
+                ThinkingEffort::Max => unreachable!(),
+            }
         };
         serde_json::json!({"effort": effort_str})
     })
@@ -1181,6 +1202,83 @@ mod tests {
     fn thinking_disabled() {
         let result = build_thinking_params(false, Some(ThinkingEffort::High), "claude-opus-4-6");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn thinking_opus_4_6_max_effort() {
+        let thinking = build_thinking_params(true, Some(ThinkingEffort::Max), "claude-opus-4-6");
+        assert_eq!(thinking.unwrap()["type"], "adaptive");
+
+        let output = build_output_config(true, Some(ThinkingEffort::Max), "claude-opus-4-6");
+        assert_eq!(output.unwrap()["effort"], "max");
+    }
+
+    #[test]
+    fn thinking_sonnet_4_6_max_effort() {
+        let output = build_output_config(true, Some(ThinkingEffort::Max), "claude-sonnet-4-6");
+        assert_eq!(output.unwrap()["effort"], "max");
+    }
+
+    #[test]
+    fn thinking_opus_4_5_effort_supported() {
+        let output = build_output_config(
+            true,
+            Some(ThinkingEffort::Medium),
+            "claude-opus-4-5-20250901",
+        );
+        assert_eq!(output.unwrap()["effort"], "medium");
+    }
+
+    #[test]
+    fn thinking_opus_4_5_max_downgraded() {
+        let thinking =
+            build_thinking_params(true, Some(ThinkingEffort::Max), "claude-opus-4-5-20250901");
+        let val = thinking.unwrap();
+        assert_eq!(val["type"], "enabled");
+        assert_eq!(val["budget_tokens"], 32768);
+
+        let output =
+            build_output_config(true, Some(ThinkingEffort::Max), "claude-opus-4-5-20250901");
+        assert_eq!(output.unwrap()["effort"], "high");
+    }
+
+    #[test]
+    fn thinking_sonnet_4_5_no_effort() {
+        let output = build_output_config(
+            true,
+            Some(ThinkingEffort::High),
+            "claude-sonnet-4-5-20250901",
+        );
+        assert!(output.is_none());
+    }
+
+    #[test]
+    fn thinking_haiku_4_5_no_effort() {
+        let output = build_output_config(
+            true,
+            Some(ThinkingEffort::High),
+            "claude-haiku-4-5-20251001",
+        );
+        assert!(output.is_none());
+    }
+
+    #[test]
+    fn thinking_legacy_max_budget() {
+        let result = build_thinking_params(
+            true,
+            Some(ThinkingEffort::Max),
+            "claude-sonnet-4-5-20250901",
+        );
+        let val = result.unwrap();
+        assert_eq!(val["type"], "enabled");
+        assert_eq!(val["budget_tokens"], 32768);
+
+        let output = build_output_config(
+            true,
+            Some(ThinkingEffort::Max),
+            "claude-sonnet-4-5-20250901",
+        );
+        assert!(output.is_none());
     }
 
     #[test]

@@ -390,7 +390,7 @@ fn build_thinking_config(
         let budget = match thinking_effort {
             Some(ThinkingEffort::Low) => serde_json::json!(1024),
             Some(ThinkingEffort::Medium) => serde_json::json!(8192),
-            Some(ThinkingEffort::High) => serde_json::json!(24576),
+            Some(ThinkingEffort::High | ThinkingEffort::Max) => serde_json::json!(24576),
             None => serde_json::json!(-1), // -1 = dynamic
         };
         serde_json::json!({
@@ -402,7 +402,7 @@ fn build_thinking_config(
         let level = match thinking_effort {
             Some(ThinkingEffort::Low) => "low",
             Some(ThinkingEffort::Medium) => "medium",
-            Some(ThinkingEffort::High) | None => "high",
+            Some(ThinkingEffort::High | ThinkingEffort::Max) | None => "high",
         };
         serde_json::json!({
             "includeThoughts": true,

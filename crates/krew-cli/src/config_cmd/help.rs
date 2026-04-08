@@ -250,7 +250,7 @@ Merge rules (project config takes precedence):
                              Default: false
                              Whether to enable thinking/reasoning mode.
 
-  thinking_effort            "low" | "medium" | "high"
+  thinking_effort            "low" | "medium" | "high" | "max"
                              Default: (none)
                              Thinking effort level. Only used when enable_thinking is true.
 

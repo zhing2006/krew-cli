@@ -1,6 +1,6 @@
 {
   "name": "@zhing2026/krew-win32-x64",
-  "version": "0.11.1",
+  "version": "0.11.2",
   "description": "krew binary for Windows x64",
   "os": ["win32"],
   "cpu": ["x64"],
