@@ -42,7 +42,7 @@ reqwest = { workspace = true }
 tempfile = "3"
 krew-config = { workspace = true }
 
-[target.'cfg(windows)'.dependencies]
+[target.'cfg(windows)'.build-dependencies]
 static_vcruntime = "3"
 
 [target.'cfg(target_env = "musl")'.dependencies]
