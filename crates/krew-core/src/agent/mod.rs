@@ -84,12 +84,16 @@ impl AgentRuntime {
         });
 
         // Build agent identity + optional custom system prompt.
-        let today = chrono::Local::now().format("%Y-%m-%d (%A)").to_string();
+        // Hour-aligned timestamp: stays stable within an hour, matching typical
+        // provider prompt-cache TTLs (Anthropic 5min default / 1h beta, OpenAI
+        // ~5-10min, Gemini implicit cache). Day-only precision was over-conservative
+        // (cache never lives that long) and stripped useful time-of-day context.
+        let now = chrono::Local::now().format("%Y-%m-%d %H:00 (%A)").to_string();
         let identity = build_identity_prompt(
             &self.config.display_name,
             &self.config.model,
             &self.config.name,
-            &today,
+            &now,
             self.language.as_deref(),
             peer_agents,
             whisper_targets.as_deref(),
@@ -256,7 +260,7 @@ pub fn build_identity_prompt(
     display_name: &str,
     model: &str,
     agent_name: &str,
-    today: &str,
+    now: &str,
     language: Option<&str>,
     peer_agents: Option<&[PeerAgent]>,
     whisper_targets: Option<&[String]>,
@@ -274,7 +278,7 @@ pub fn build_identity_prompt(
          Other agents in this conversation are DIFFERENT AI models, not you. \
          {other_agent_hint}\n\
          Respond as yourself — do not role-play or impersonate other agents.\n\
-         Current date: {today}{language_instruction}",
+         Current date: {now}{language_instruction}",
     );
 
     // 2. Peer agent collaboration hint.
