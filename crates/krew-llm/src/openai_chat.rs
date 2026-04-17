@@ -589,12 +589,10 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                             // actual search queries arrives.
                             if let Some(grounding) = chunk.grounding {
                                 match grounding {
-                                    None => {
+                                    None if st.grounding_state == 0 => {
                                         // Empty metadata — grounding feature active but
                                         // no search confirmed yet.  Record it silently.
-                                        if st.grounding_state == 0 {
-                                            st.grounding_state = 1;
-                                        }
+                                        st.grounding_state = 1;
                                         // Fall through to process any event/delta normally.
                                     }
                                     Some(query) if st.grounding_state < 2 => {
