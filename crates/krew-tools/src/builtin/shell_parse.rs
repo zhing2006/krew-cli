@@ -99,12 +99,10 @@ fn has_complex_constructs(command: &str) -> bool {
             // Backtick command substitution.
             '`' => return true,
             // $() command substitution or $VAR expansion.
-            '$' => {
-                if i + 1 < len {
-                    let next = chars[i + 1];
-                    if next == '(' || next == '{' || next.is_alphanumeric() || next == '_' {
-                        return true;
-                    }
+            '$' if i + 1 < len => {
+                let next = chars[i + 1];
+                if next == '(' || next == '{' || next.is_alphanumeric() || next == '_' {
+                    return true;
                 }
             }
             // Redirections.
