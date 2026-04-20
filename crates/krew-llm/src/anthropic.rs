@@ -64,9 +64,9 @@ impl AnthropicClient {
 /// Get the default max_tokens for a given model name.
 fn default_max_tokens(model: &str) -> u32 {
     let has = |s: &str| model.contains(s);
-    if has("opus") && has("4-6") {
+    if has("opus") && (has("4-6") || has("4-7")) {
         128_000
-    } else if (has("sonnet") && has("4-6"))
+    } else if (has("sonnet") && (has("4-6") || has("4-7")))
         || (has("haiku") && has("4-5"))
         || (has("opus") && has("4-5"))
         || (has("sonnet") && has("4-5"))
@@ -302,9 +302,10 @@ fn build_sampling_params(
 // Thinking parameter injection
 // ---------------------------------------------------------------------------
 
-/// Check if a model supports adaptive thinking (Opus 4.6 / Sonnet 4.6).
+/// Check if a model supports adaptive thinking (Opus 4.6+ / Sonnet 4.6+).
 fn supports_adaptive(model: &str) -> bool {
-    (model.contains("opus") || model.contains("sonnet")) && model.contains("4-6")
+    (model.contains("opus") || model.contains("sonnet"))
+        && (model.contains("4-6") || model.contains("4-7"))
 }
 
 /// Check if a model supports the effort parameter (Opus 4.6, Sonnet 4.6, Opus 4.5).
@@ -1217,6 +1218,34 @@ mod tests {
     fn thinking_sonnet_4_6_max_effort() {
         let output = build_output_config(true, Some(ThinkingEffort::Max), "claude-sonnet-4-6");
         assert_eq!(output.unwrap()["effort"], "max");
+    }
+
+    #[test]
+    fn thinking_opus_4_7_adaptive() {
+        let result = build_thinking_params(true, None, "claude-opus-4-7");
+        let val = result.unwrap();
+        assert_eq!(val["type"], "adaptive");
+        assert!(val.get("budget_tokens").is_none());
+    }
+
+    #[test]
+    fn thinking_opus_4_7_with_effort() {
+        let thinking = build_thinking_params(true, Some(ThinkingEffort::High), "claude-opus-4-7");
+        assert_eq!(thinking.unwrap()["type"], "adaptive");
+
+        let output = build_output_config(true, Some(ThinkingEffort::High), "claude-opus-4-7");
+        assert_eq!(output.unwrap()["effort"], "high");
+    }
+
+    #[test]
+    fn thinking_opus_4_7_max_effort() {
+        let output = build_output_config(true, Some(ThinkingEffort::Max), "claude-opus-4-7");
+        assert_eq!(output.unwrap()["effort"], "max");
+    }
+
+    #[test]
+    fn max_tokens_opus_4_7() {
+        assert_eq!(default_max_tokens("claude-opus-4-7"), 128_000);
     }
 
     #[test]

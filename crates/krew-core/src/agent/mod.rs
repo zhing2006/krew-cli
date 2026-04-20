@@ -88,7 +88,9 @@ impl AgentRuntime {
         // provider prompt-cache TTLs (Anthropic 5min default / 1h beta, OpenAI
         // ~5-10min, Gemini implicit cache). Day-only precision was over-conservative
         // (cache never lives that long) and stripped useful time-of-day context.
-        let now = chrono::Local::now().format("%Y-%m-%d %H:00 (%A)").to_string();
+        let now = chrono::Local::now()
+            .format("%Y-%m-%d %H:00 (%A)")
+            .to_string();
         let identity = build_identity_prompt(
             &self.config.display_name,
             &self.config.model,
