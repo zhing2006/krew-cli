@@ -64,6 +64,7 @@ pub async fn list_models(config: &ListModelsConfig) -> Result<Vec<ModelInfo>, Ll
 pub fn fallback_models(provider_type: ProviderType) -> Vec<ModelInfo> {
     let ids = match provider_type {
         ProviderType::Anthropic => vec![
+            "claude-opus-4-7",
             "claude-opus-4-6",
             "claude-sonnet-4-6",
             "claude-haiku-4-5-20251001",
