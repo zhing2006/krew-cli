@@ -330,7 +330,8 @@ mod tests {
     #[test]
     fn fallback_anthropic() {
         let models = fallback_models(ProviderType::Anthropic);
-        assert_eq!(models.len(), 3);
+        assert_eq!(models.len(), 4);
+        assert!(models.iter().any(|m| m.id == "claude-opus-4-7"));
         assert!(models.iter().any(|m| m.id == "claude-opus-4-6"));
         assert!(models.iter().any(|m| m.id == "claude-sonnet-4-6"));
         assert!(models.iter().any(|m| m.id == "claude-haiku-4-5-20251001"));
