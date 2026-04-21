@@ -329,8 +329,12 @@ fn build_thinking_params(
     }
 
     if supports_adaptive(model) {
-        // Opus 4.6 / Sonnet 4.6: use adaptive thinking.
-        Some(serde_json::json!({"type": "adaptive"}))
+        // Opus 4.6+ / Sonnet 4.6+: use adaptive thinking with summarized display
+        // so the model emits thinking summary blocks the TUI can render.
+        Some(serde_json::json!({
+            "type": "adaptive",
+            "display": "summarized",
+        }))
     } else {
         // Older models: use enabled + budget_tokens.
         // Max maps to same budget as High (32768).
@@ -1151,6 +1155,7 @@ mod tests {
         let result = build_thinking_params(true, None, "claude-opus-4-6-20250801");
         let val = result.unwrap();
         assert_eq!(val["type"], "adaptive");
+        assert_eq!(val["display"], "summarized");
         assert!(val.get("budget_tokens").is_none());
     }
 
@@ -1225,6 +1230,7 @@ mod tests {
         let result = build_thinking_params(true, None, "claude-opus-4-7");
         let val = result.unwrap();
         assert_eq!(val["type"], "adaptive");
+        assert_eq!(val["display"], "summarized");
         assert!(val.get("budget_tokens").is_none());
     }
 
