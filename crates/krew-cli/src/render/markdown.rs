@@ -5,6 +5,7 @@
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use unicode_width::UnicodeWidthStr;
 
 use super::highlight::highlight_code_to_lines;
 
@@ -41,6 +42,18 @@ struct MarkdownRenderer {
     in_blockquote: bool,
     /// Whether the next block-level element should be preceded by a blank line.
     needs_newline: bool,
+    /// Whether we are inside a table.
+    in_table: bool,
+    /// Whether we are inside a table head section.
+    in_table_head: bool,
+    /// Header cells, captured when TableHead ends.
+    table_header: Vec<String>,
+    /// Body rows, each a vec of cells.
+    table_rows: Vec<Vec<String>>,
+    /// Cells of the row currently being assembled.
+    table_current_row: Vec<String>,
+    /// Text of the cell currently being assembled.
+    table_current_cell: String,
 }
 
 #[derive(Clone)]
@@ -63,6 +76,12 @@ impl MarkdownRenderer {
             after_list_item_start: false,
             in_blockquote: false,
             needs_newline: false,
+            in_table: false,
+            in_table_head: false,
+            table_header: Vec::new(),
+            table_rows: Vec::new(),
+            table_current_row: Vec::new(),
+            table_current_cell: String::new(),
         }
     }
 
@@ -94,6 +113,13 @@ impl MarkdownRenderer {
             return;
         }
 
+        if self.in_table {
+            // Cell content is captured as plain text; inline formatting is
+            // intentionally flattened so column-width math stays accurate.
+            self.table_current_cell.push_str(text);
+            return;
+        }
+
         let style = self.current_style();
 
         // Handle text that contains newlines.
@@ -121,9 +147,15 @@ impl MarkdownRenderer {
                 Event::End(tag) => self.handle_end(tag),
                 Event::Text(text) => self.emit_text(&text),
                 Event::Code(code) => {
-                    let style = self.current_style().fg(Color::Cyan);
-                    self.current_spans
-                        .push(Span::styled(format!("`{code}`"), style));
+                    if self.in_table {
+                        self.table_current_cell.push('`');
+                        self.table_current_cell.push_str(&code);
+                        self.table_current_cell.push('`');
+                    } else {
+                        let style = self.current_style().fg(Color::Cyan);
+                        self.current_spans
+                            .push(Span::styled(format!("`{code}`"), style));
+                    }
                 }
                 Event::SoftBreak => {
                     // Treat soft breaks as hard line breaks. CommonMark spec
@@ -248,6 +280,28 @@ impl MarkdownRenderer {
             Tag::Link { .. } => {
                 self.push_style(|s| s.fg(Color::Cyan).add_modifier(Modifier::UNDERLINED));
             }
+            Tag::Table(_) => {
+                self.flush_line();
+                if self.needs_newline {
+                    self.lines.push(Line::default());
+                }
+                self.needs_newline = false;
+                self.in_table = true;
+                self.table_header.clear();
+                self.table_rows.clear();
+                self.table_current_row.clear();
+                self.table_current_cell.clear();
+            }
+            Tag::TableHead => {
+                self.in_table_head = true;
+                self.table_current_row.clear();
+            }
+            Tag::TableRow => {
+                self.table_current_row.clear();
+            }
+            Tag::TableCell => {
+                self.table_current_cell.clear();
+            }
             _ => {}
         }
     }
@@ -294,6 +348,25 @@ impl MarkdownRenderer {
             TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
                 self.pop_style();
             }
+            TagEnd::TableCell => {
+                let cell = std::mem::take(&mut self.table_current_cell);
+                self.table_current_row.push(cell);
+            }
+            TagEnd::TableRow => {
+                let row = std::mem::take(&mut self.table_current_row);
+                self.table_rows.push(row);
+            }
+            TagEnd::TableHead => {
+                self.in_table_head = false;
+                // Cells assembled during head go into table_header instead of body.
+                self.table_header = std::mem::take(&mut self.table_current_row);
+            }
+            TagEnd::Table => {
+                self.in_table = false;
+                let table_lines = self.render_table_lines();
+                self.lines.extend(table_lines);
+                self.needs_newline = true;
+            }
             _ => {}
         }
     }
@@ -305,6 +378,79 @@ impl MarkdownRenderer {
         } else {
             String::new()
         };
+    }
+
+    fn render_table_lines(&self) -> Vec<Line<'static>> {
+        let header = &self.table_header;
+        let rows = &self.table_rows;
+        if header.is_empty() && rows.is_empty() {
+            return Vec::new();
+        }
+
+        let num_cols = header
+            .len()
+            .max(rows.iter().map(|r| r.len()).max().unwrap_or(0));
+        if num_cols == 0 {
+            return Vec::new();
+        }
+
+        let mut widths = vec![0usize; num_cols];
+        let mut update_widths = |row: &[String]| {
+            for (i, cell) in row.iter().enumerate() {
+                if i >= num_cols {
+                    break;
+                }
+                let w = UnicodeWidthStr::width(cell.as_str());
+                if w > widths[i] {
+                    widths[i] = w;
+                }
+            }
+        };
+        update_widths(header);
+        for r in rows {
+            update_widths(r);
+        }
+
+        // Build the +---+---+ separator string used at top, header divider, and bottom.
+        let mut sep = String::from("+");
+        for &w in &widths {
+            sep.push_str(&"-".repeat(w + 2));
+            sep.push('+');
+        }
+
+        let border_style = Style::new().fg(Color::DarkGray);
+        let cell_style = Style::default();
+
+        let render_row = |row: &[String]| -> Line<'static> {
+            let mut spans: Vec<Span<'static>> = Vec::with_capacity(num_cols * 2 + 1);
+            spans.push(Span::styled("|".to_string(), border_style));
+            for (i, &w) in widths.iter().enumerate() {
+                let cell = row.get(i).map(|s| s.as_str()).unwrap_or("");
+                let pad = w.saturating_sub(UnicodeWidthStr::width(cell));
+                let mut s = String::with_capacity(2 + cell.len() + pad);
+                s.push(' ');
+                s.push_str(cell);
+                for _ in 0..pad {
+                    s.push(' ');
+                }
+                s.push(' ');
+                spans.push(Span::styled(s, cell_style));
+                spans.push(Span::styled("|".to_string(), border_style));
+            }
+            Line::from(spans)
+        };
+
+        let mut out = Vec::new();
+        out.push(Line::from(Span::styled(sep.clone(), border_style)));
+        if !header.is_empty() {
+            out.push(render_row(header));
+            out.push(Line::from(Span::styled(sep.clone(), border_style)));
+        }
+        for r in rows {
+            out.push(render_row(r));
+        }
+        out.push(Line::from(Span::styled(sep, border_style)));
+        out
     }
 
     fn finish(mut self) -> Vec<Line<'static>> {
@@ -493,6 +639,49 @@ mod tests {
         assert!(texts[1].contains("item 2"));
         assert_eq!(texts[2], "");
         assert_eq!(texts[3], "Some text.");
+    }
+
+    #[test]
+    fn test_table_basic_ascii_output() {
+        let md = "| a | b |\n|---|---|\n| 1 | 2 |\n";
+        let lines = render_markdown(md);
+        let texts: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        // Expect: top border, header row, header divider, data row, bottom border.
+        assert_eq!(texts.len(), 5);
+        assert!(texts[0].starts_with('+') && texts[0].ends_with('+'));
+        assert!(texts[1].contains('a') && texts[1].contains('b'));
+        assert!(texts[2].starts_with('+'));
+        assert!(texts[3].contains('1') && texts[3].contains('2'));
+        assert!(texts[4].starts_with('+'));
+    }
+
+    #[test]
+    fn test_table_cjk_column_widths() {
+        // CJK chars are width 2 — column for "语言" must be at least 4 wide so
+        // "Rust" (width 4) fits, and "语言" itself fits without truncation.
+        let md = "| 语言 | 类型 |\n|---|---|\n| Rust | 静态 |\n| Python | 动态 |\n";
+        let lines = render_markdown(md);
+        // Every line must have the same display width — that's the whole point
+        // of computing column widths up front.
+        let widths: Vec<usize> = lines
+            .iter()
+            .map(|l| {
+                let s: String = l.spans.iter().map(|sp| sp.content.as_ref()).collect();
+                UnicodeWidthStr::width(s.as_str())
+            })
+            .collect();
+        assert!(widths.windows(2).all(|w| w[0] == w[1]), "widths={widths:?}");
+    }
+
+    #[test]
+    fn test_table_no_body_rows() {
+        // Header-only table: still emits top border, header, divider, bottom border.
+        let md = "| a | b |\n|---|---|\n";
+        let lines = render_markdown(md);
+        assert_eq!(lines.len(), 4);
     }
 
     #[test]

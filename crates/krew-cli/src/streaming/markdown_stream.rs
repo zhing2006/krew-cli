@@ -60,8 +60,30 @@ impl MarkdownStreamCollector {
             None => return Vec::new(),
         };
 
-        // Render the buffer up to (and including) the last newline.
-        let renderable = &self.buffer[..=last_newline];
+        // Defer trailing lines that look like table rows ("|...|"). Until a
+        // non-table line lands, we don't know whether the run is a real table
+        // (needs separator + body) or just text with literal pipes. Committing
+        // the header row early would leave it stranded above the eventual
+        // table once pulldown_cmark recognises the block as a table.
+        let renderable_full = &self.buffer[..=last_newline];
+        let lines: Vec<&str> = renderable_full.split_inclusive('\n').collect();
+        let mut keep = lines.len();
+        while keep > 0 {
+            let line = lines[keep - 1].trim_end_matches('\n');
+            if looks_like_table_row(line) {
+                keep -= 1;
+            } else {
+                break;
+            }
+        }
+        let commit_boundary: usize = lines[..keep].iter().map(|s| s.len()).sum();
+
+        if commit_boundary == 0 {
+            // Everything pending is a (possible) table — wait for resolution.
+            return Vec::new();
+        }
+
+        let renderable = &self.buffer[..commit_boundary];
         let all_lines = render_markdown(renderable);
 
         // Don't commit a trailing blank line — it may be a separator for
@@ -81,7 +103,7 @@ impl MarkdownStreamCollector {
         };
 
         self.committed_line_count = complete_count;
-        self.committed_byte_offset = last_newline + 1;
+        self.committed_byte_offset = commit_boundary;
         new_lines
     }
 
@@ -129,6 +151,13 @@ fn is_blank_line(line: &Line<'_>) -> bool {
             .spans
             .iter()
             .all(|s| s.content.is_empty() || s.content.chars().all(|c| c == ' '))
+}
+
+/// True if the line could be part of a markdown table (header, separator, or body row).
+/// Conservative: any line whose trimmed form starts and ends with `|` qualifies.
+fn looks_like_table_row(line: &str) -> bool {
+    let t = line.trim();
+    t.len() >= 2 && t.starts_with('|') && t.ends_with('|')
 }
 
 #[cfg(test)]
@@ -269,6 +298,90 @@ mod tests {
             text.contains("line two"),
             "second line text should be present"
         );
+    }
+
+    #[test]
+    fn table_streaming_defers_until_complete() {
+        // Regression: when a table arrives chunk-by-chunk, the header used to
+        // be committed as plain text before the separator arrived, leaving a
+        // stranded line above the eventual rendered table.
+        let mut collector = MarkdownStreamCollector::new();
+
+        // Header alone — must NOT commit (could still be a paragraph).
+        collector.push_delta("| 语言 | 类型 |\n");
+        let after_header = collector.commit_complete_lines();
+        assert!(
+            after_header.is_empty(),
+            "header-only must defer, got {:?}",
+            after_header
+                .iter()
+                .map(|l| l
+                    .spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>())
+                .collect::<Vec<_>>()
+        );
+
+        // Separator + body row — still all table rows, still defers.
+        collector.push_delta("|---|---|\n| Rust | 静态 |\n");
+        let after_body = collector.commit_complete_lines();
+        assert!(
+            after_body.is_empty(),
+            "all-table-row tail must keep deferring"
+        );
+
+        // Trailing paragraph forces the table to flush.
+        collector.push_delta("\n收工。\n");
+        let final_lines = collector.commit_complete_lines();
+        let texts: Vec<String> = final_lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        // Must contain ASCII-bordered table lines plus the trailing paragraph.
+        assert!(
+            texts.iter().any(|t| t.starts_with('+') && t.ends_with('+')),
+            "expected ASCII border line, got {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t.contains("Rust")),
+            "expected data row, got {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t.contains("收工")),
+            "expected trailing paragraph, got {texts:?}"
+        );
+    }
+
+    #[test]
+    fn table_only_response_renders_on_finalize() {
+        // If the entire response is a table with no trailing paragraph, the
+        // commit phase will defer everything — finalize must still emit it.
+        let mut collector = MarkdownStreamCollector::new();
+        collector.push_delta("| a | b |\n|---|---|\n| 1 | 2 |\n");
+        let mid = collector.commit_complete_lines();
+        assert!(mid.is_empty(), "all-table response defers during streaming");
+
+        let out = collector.finalize();
+        let texts: Vec<String> = out
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert!(
+            texts.iter().any(|t| t.starts_with('+')),
+            "finalize must flush deferred table, got {texts:?}"
+        );
+        assert!(texts.iter().any(|t| t.contains('1') && t.contains('2')));
+    }
+
+    #[test]
+    fn looks_like_table_row_basics() {
+        assert!(looks_like_table_row("| a | b |"));
+        assert!(looks_like_table_row("|---|---|"));
+        assert!(looks_like_table_row("  | x |  "));
+        assert!(!looks_like_table_row("hello | world"));
+        assert!(!looks_like_table_row("| hanging"));
+        assert!(!looks_like_table_row(""));
     }
 
     #[test]
