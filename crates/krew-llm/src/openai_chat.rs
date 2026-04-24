@@ -213,7 +213,14 @@ fn build_sampling_params(sampling: &SamplingConfig) -> serde_json::Value {
 ///
 /// Matches exact model name or model name with date suffix (e.g. "gpt-5.4-20260101").
 fn supports_xhigh(model: &str) -> bool {
-    const XHIGH_MODELS: &[&str] = &["gpt-5.4", "gpt-5.4-pro", "gpt-5.3-codex", "gpt-5.2"];
+    const XHIGH_MODELS: &[&str] = &[
+        "gpt-5.5",
+        "gpt-5.5-pro",
+        "gpt-5.4",
+        "gpt-5.4-pro",
+        "gpt-5.3-codex",
+        "gpt-5.2",
+    ];
     XHIGH_MODELS.iter().any(|m| {
         model == *m
             || (model.starts_with(m)
@@ -895,6 +902,18 @@ mod tests {
     #[test]
     fn reasoning_effort_max_xhigh_supported() {
         let result = build_reasoning_effort(true, Some(ThinkingEffort::Max), "gpt-5.4");
+        assert_eq!(result, Some("xhigh"));
+    }
+
+    #[test]
+    fn reasoning_effort_max_xhigh_gpt_5_5() {
+        let result = build_reasoning_effort(true, Some(ThinkingEffort::Max), "gpt-5.5");
+        assert_eq!(result, Some("xhigh"));
+    }
+
+    #[test]
+    fn reasoning_effort_max_xhigh_gpt_5_5_pro() {
+        let result = build_reasoning_effort(true, Some(ThinkingEffort::Max), "gpt-5.5-pro");
         assert_eq!(result, Some("xhigh"));
     }
 

@@ -69,7 +69,7 @@ pub fn fallback_models(provider_type: ProviderType) -> Vec<ModelInfo> {
             "claude-sonnet-4-6",
             "claude-haiku-4-5-20251001",
         ],
-        ProviderType::OpenAI => vec!["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"],
+        ProviderType::OpenAI => vec!["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"],
         ProviderType::Google => vec!["gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview"],
     };
     ids.into_iter()
@@ -340,7 +340,8 @@ mod tests {
     #[test]
     fn fallback_openai() {
         let models = fallback_models(ProviderType::OpenAI);
-        assert_eq!(models.len(), 3);
+        assert_eq!(models.len(), 4);
+        assert!(models.iter().any(|m| m.id == "gpt-5.5"));
         assert!(models.iter().any(|m| m.id == "gpt-5.4"));
         assert!(models.iter().any(|m| m.id == "gpt-5.4-mini"));
         assert!(models.iter().any(|m| m.id == "gpt-5.4-nano"));

@@ -680,9 +680,9 @@ compact_keep_rounds = 10               # 压缩时保留最近 N 轮对话（默
 # Agent 定义
 [[agents]]
 name = "gpt"
-display_name = "GPT-5.2"
+display_name = "GPT-5.5"
 provider = "openai"
-model = "gpt-5.2"
+model = "gpt-5.5"
 api_type = "responses"           # responses | chat，按模型选择
 color = "green"
 system_prompt = ""

@@ -51,9 +51,9 @@ agent_to_agent_max_rounds = 10         # max AI-to-AI rounds per user turn (0 = 
 
 [[agents]]
 name = "gpt"
-display_name = "GPT-5.2"
+display_name = "GPT-5.5"
 provider = "openai"
-model = "gpt-5.2"
+model = "gpt-5.5"
 api_type = "responses"
 color = "green"
 system_prompt = ""

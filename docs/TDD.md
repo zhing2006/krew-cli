@@ -552,7 +552,7 @@ struct RetryConfig {
 
 | Provider | 模型 | API 参数 | effort 映射 |
 | -------- | ---- | -------- | ----------- |
-| OpenAI Responses | 白名单模型 (gpt-5.4/5.4-pro/5.3-codex/5.2) | `reasoning: { effort, summary: "auto" }` | low→"low", medium→"medium", high→"high", max→"xhigh", 未设置→"medium" |
+| OpenAI Responses | 白名单模型 (gpt-5.5/5.5-pro/5.4/5.4-pro/5.3-codex/5.2) | `reasoning: { effort, summary: "auto" }` | low→"low", medium→"medium", high→"high", max→"xhigh", 未设置→"medium" |
 | OpenAI Responses | 其他模型 | `reasoning: { effort, summary: "auto" }` | low→"low", medium→"medium", high→"high", max→"high" (降级), 未设置→"medium" |
 | Anthropic | Opus 4.6 / Sonnet 4.6 | `thinking: { type: "adaptive" }` + `output_config: { effort }` | 使用 adaptive thinking, effort 含 max |
 | Anthropic | Opus 4.5 | `thinking: { type: "enabled", budget_tokens }` + `output_config: { effort }` | budget: low→1024, medium→8192, high/max→32768; effort: max 降为 "high" |
@@ -792,7 +792,7 @@ impl SlashCommand {
 
 ```txt
 Agents in session:
-  [gpt]    GPT-5.2          openai/gpt-5.2           3,284 tokens (1,250 in / 2,034 out)
+  [gpt]    GPT-5.5          openai/gpt-5.5           3,284 tokens (1,250 in / 2,034 out)
   [opus]   Claude Opus      anthropic/claude-opus-4-6 5,642 tokens (3,512 in / 2,130 out)
 ──────────────────────────────────────────────────────
   Total: 8,926 tokens
