@@ -232,6 +232,11 @@ fn supports_xhigh(model: &str) -> bool {
     })
 }
 
+/// Check if a model uses DeepSeek V4 thinking controls.
+fn is_deepseek_v4(model: &str) -> bool {
+    model.to_ascii_lowercase().starts_with("deepseek-v4")
+}
+
 /// Map `enable_thinking` + `thinking_effort` to the `reasoning_effort` string
 /// used by OpenAI Chat Completions API (and LiteLLM proxy).
 fn build_reasoning_effort(
@@ -241,6 +246,15 @@ fn build_reasoning_effort(
 ) -> Option<&'static str> {
     if !enable_thinking {
         return None;
+    }
+    if is_deepseek_v4(model) {
+        return Some(match thinking_effort {
+            Some(ThinkingEffort::Max) => "max",
+            Some(ThinkingEffort::Low)
+            | Some(ThinkingEffort::Medium)
+            | Some(ThinkingEffort::High)
+            | None => "high",
+        });
     }
     Some(match thinking_effort {
         Some(ThinkingEffort::Low) => "low",
@@ -253,6 +267,15 @@ fn build_reasoning_effort(
             }
         }
         Some(ThinkingEffort::Medium) | None => "medium",
+    })
+}
+
+/// Build DeepSeek's OpenAI-compatible thinking extension.
+fn build_deepseek_thinking(model: &str, enable_thinking: bool) -> Option<serde_json::Value> {
+    is_deepseek_v4(model).then(|| {
+        serde_json::json!({
+            "type": if enable_thinking { "enabled" } else { "disabled" },
+        })
     })
 }
 
@@ -444,6 +467,9 @@ impl LlmClient for OpenAiChatClient {
             build_reasoning_effort(self.enable_thinking, self.thinking_effort, &self.model)
         {
             body["reasoning_effort"] = serde_json::json!(effort);
+        }
+        if let Some(thinking) = build_deepseek_thinking(&self.model, self.enable_thinking) {
+            body["thinking"] = thinking;
         }
 
         // Add web_search_options if enabled (OpenAI native + LiteLLM proxy).
@@ -945,6 +971,54 @@ mod tests {
     fn reasoning_effort_high_unchanged() {
         let result = build_reasoning_effort(true, Some(ThinkingEffort::High), "gpt-5.1");
         assert_eq!(result, Some("high"));
+    }
+
+    #[test]
+    fn reasoning_effort_deepseek_v4_max_maps_to_max() {
+        let pro = build_reasoning_effort(true, Some(ThinkingEffort::Max), "deepseek-v4-pro");
+        let flash = build_reasoning_effort(true, Some(ThinkingEffort::Max), "deepseek-v4-flash");
+
+        assert_eq!(pro, Some("max"));
+        assert_eq!(flash, Some("max"));
+    }
+
+    #[test]
+    fn reasoning_effort_deepseek_v4_non_max_maps_to_high() {
+        assert_eq!(
+            build_reasoning_effort(true, Some(ThinkingEffort::Low), "deepseek-v4-pro"),
+            Some("high")
+        );
+        assert_eq!(
+            build_reasoning_effort(true, Some(ThinkingEffort::Medium), "deepseek-v4-flash"),
+            Some("high")
+        );
+        assert_eq!(
+            build_reasoning_effort(true, Some(ThinkingEffort::High), "deepseek-v4-pro"),
+            Some("high")
+        );
+        assert_eq!(
+            build_reasoning_effort(true, None, "DeepSeek-V4-Flash"),
+            Some("high")
+        );
+    }
+
+    #[test]
+    fn deepseek_v4_thinking_extension_enabled() {
+        let thinking = build_deepseek_thinking("deepseek-v4-pro", true).unwrap();
+
+        assert_eq!(thinking, serde_json::json!({ "type": "enabled" }));
+    }
+
+    #[test]
+    fn deepseek_v4_thinking_extension_disabled() {
+        let thinking = build_deepseek_thinking("deepseek-v4-flash", false).unwrap();
+
+        assert_eq!(thinking, serde_json::json!({ "type": "disabled" }));
+    }
+
+    #[test]
+    fn non_deepseek_v4_has_no_thinking_extension() {
+        assert!(build_deepseek_thinking("gpt-5.4", false).is_none());
     }
 
     #[test]
