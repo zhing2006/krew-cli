@@ -198,9 +198,9 @@ reply_order = ["gpt", "opus"]
 
 [[agents]]
 name = "gpt"
-display_name = "GPT-5.2"
+display_name = "GPT-5.5"
 provider = "openai"
-model = "gpt-5.2"
+model = "gpt-5.5"
 api_type = "responses"
 color = "green"
 tools = true
@@ -260,7 +260,7 @@ reply_order = ["gpt", "opus"]
 name = "gpt"
 display_name = "GPT"
 provider = "openai"
-model = "gpt-5.2"
+model = "gpt-5.5"
 api_type = "responses"
 color = "green"
 tools = true
