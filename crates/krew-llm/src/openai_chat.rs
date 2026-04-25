@@ -293,13 +293,32 @@ fn build_reasoning_effort(
     })
 }
 
-/// Build provider-specific OpenAI-compatible thinking extensions.
-fn build_compatible_thinking(model: &str, enable_thinking: bool) -> Option<serde_json::Value> {
-    (is_deepseek_v4(model) || is_kimi_k26(model)).then(|| {
-        serde_json::json!({
-            "type": if enable_thinking { "enabled" } else { "disabled" },
-        })
-    })
+/// Build OpenAI-compatible thinking-control fields for hybrid-thinking models.
+///
+/// DeepSeek V4 and Kimi K2.6 are served via two incompatible OpenAI-compatible
+/// APIs that disagree on the field name:
+/// - DeepSeek 官方 / Moonshot 官方: `thinking: {"type": "enabled"|"disabled"}`.
+/// - Aliyun DashScope / 百炼: top-level `enable_thinking: <bool>` (passed via
+///   OpenAI SDK's `extra_body`).
+///
+/// We send both so the same config works across LiteLLM routes — backends that
+/// don't recognize a field silently ignore it.
+fn build_compatible_thinking_fields(
+    model: &str,
+    enable_thinking: bool,
+) -> Vec<(&'static str, serde_json::Value)> {
+    if !(is_deepseek_v4(model) || is_kimi_k26(model)) {
+        return Vec::new();
+    }
+    vec![
+        (
+            "thinking",
+            serde_json::json!({
+                "type": if enable_thinking { "enabled" } else { "disabled" },
+            }),
+        ),
+        ("enable_thinking", serde_json::json!(enable_thinking)),
+    ]
 }
 
 // ---------------------------------------------------------------------------
@@ -491,8 +510,8 @@ impl LlmClient for OpenAiChatClient {
         {
             body["reasoning_effort"] = serde_json::json!(effort);
         }
-        if let Some(thinking) = build_compatible_thinking(&self.model, self.enable_thinking) {
-            body["thinking"] = thinking;
+        for (key, value) in build_compatible_thinking_fields(&self.model, self.enable_thinking) {
+            body[key] = value;
         }
 
         // Add web_search_options if enabled (OpenAI native + LiteLLM proxy).
@@ -1028,41 +1047,60 @@ mod tests {
         );
     }
 
-    #[test]
-    fn deepseek_v4_thinking_extension_enabled() {
-        let thinking = build_compatible_thinking("deepseek-v4-pro", true).unwrap();
-
-        assert_eq!(thinking, serde_json::json!({ "type": "enabled" }));
+    fn enabled_pair(enabled: bool) -> Vec<(&'static str, serde_json::Value)> {
+        vec![
+            (
+                "thinking",
+                serde_json::json!({
+                    "type": if enabled { "enabled" } else { "disabled" },
+                }),
+            ),
+            ("enable_thinking", serde_json::json!(enabled)),
+        ]
     }
 
     #[test]
-    fn deepseek_v4_thinking_extension_disabled() {
-        let thinking = build_compatible_thinking("deepseek-v4-flash", false).unwrap();
-
-        assert_eq!(thinking, serde_json::json!({ "type": "disabled" }));
+    fn deepseek_v4_thinking_fields_enabled() {
+        assert_eq!(
+            build_compatible_thinking_fields("deepseek-v4-pro", true),
+            enabled_pair(true)
+        );
     }
 
     #[test]
-    fn deepseek_v4_thinking_extension_matches_provider_slug() {
-        let thinking = build_compatible_thinking("dashscope/deepseek-v4-pro", true).unwrap();
-
-        assert_eq!(thinking, serde_json::json!({ "type": "enabled" }));
+    fn deepseek_v4_thinking_fields_disabled() {
+        assert_eq!(
+            build_compatible_thinking_fields("deepseek-v4-flash", false),
+            enabled_pair(false)
+        );
     }
 
     #[test]
-    fn kimi_k26_thinking_extension_enabled() {
-        let direct = build_compatible_thinking("kimi-k2.6", true).unwrap();
-        let provider = build_compatible_thinking("moonshotai/kimi-k2.6", true).unwrap();
-
-        assert_eq!(direct, serde_json::json!({ "type": "enabled" }));
-        assert_eq!(provider, serde_json::json!({ "type": "enabled" }));
+    fn deepseek_v4_thinking_fields_match_provider_slug() {
+        assert_eq!(
+            build_compatible_thinking_fields("dashscope/deepseek-v4-pro", true),
+            enabled_pair(true)
+        );
     }
 
     #[test]
-    fn kimi_k26_thinking_extension_disabled() {
-        let thinking = build_compatible_thinking("moonshotai/kimi-k2.6", false).unwrap();
+    fn kimi_k26_thinking_fields_enabled() {
+        assert_eq!(
+            build_compatible_thinking_fields("kimi-k2.6", true),
+            enabled_pair(true)
+        );
+        assert_eq!(
+            build_compatible_thinking_fields("moonshotai/kimi-k2.6", true),
+            enabled_pair(true)
+        );
+    }
 
-        assert_eq!(thinking, serde_json::json!({ "type": "disabled" }));
+    #[test]
+    fn kimi_k26_thinking_fields_disabled() {
+        assert_eq!(
+            build_compatible_thinking_fields("moonshotai/kimi-k2.6", false),
+            enabled_pair(false)
+        );
     }
 
     #[test]
@@ -1076,8 +1114,10 @@ mod tests {
     }
 
     #[test]
-    fn non_deepseek_v4_has_no_thinking_extension() {
-        assert!(build_compatible_thinking("gpt-5.4", false).is_none());
+    fn non_hybrid_thinking_models_have_no_thinking_fields() {
+        assert!(build_compatible_thinking_fields("gpt-5.4", false).is_empty());
+        assert!(build_compatible_thinking_fields("claude-opus-4-7", true).is_empty());
+        assert!(build_compatible_thinking_fields("deepseek-v3.1", true).is_empty());
     }
 
     #[test]
