@@ -209,6 +209,20 @@ fn build_sampling_params(sampling: &SamplingConfig) -> serde_json::Value {
 // Thinking/reasoning parameter injection
 // ---------------------------------------------------------------------------
 
+/// Return the provider-independent model slug.
+fn model_slug(model: &str) -> &str {
+    model.rsplit('/').next().unwrap_or(model)
+}
+
+/// Check whether the model slug matches an exact family name or a dashed variant.
+fn slug_matches_family(model: &str, family: &str) -> bool {
+    let slug = model_slug(model).to_ascii_lowercase();
+    slug == family
+        || slug
+            .strip_prefix(family)
+            .is_some_and(|rest| rest.starts_with('-'))
+}
+
 /// Check if a model supports xhigh reasoning effort (whitelist).
 ///
 /// Matches exact model name or model name with date suffix (e.g. "gpt-5.4-20260101").
@@ -221,11 +235,12 @@ fn supports_xhigh(model: &str) -> bool {
         "gpt-5.3-codex",
         "gpt-5.2",
     ];
+    let slug = model_slug(model).to_ascii_lowercase();
     XHIGH_MODELS.iter().any(|m| {
-        model == *m
-            || (model.starts_with(m)
-                && model.as_bytes().get(m.len()) == Some(&b'-')
-                && model
+        slug == *m
+            || (slug.starts_with(m)
+                && slug.as_bytes().get(m.len()) == Some(&b'-')
+                && slug
                     .as_bytes()
                     .get(m.len() + 1)
                     .is_some_and(|c| c.is_ascii_digit()))
@@ -234,7 +249,12 @@ fn supports_xhigh(model: &str) -> bool {
 
 /// Check if a model uses DeepSeek V4 thinking controls.
 fn is_deepseek_v4(model: &str) -> bool {
-    model.to_ascii_lowercase().starts_with("deepseek-v4")
+    slug_matches_family(model, "deepseek-v4")
+}
+
+/// Check if a model uses Kimi K2.6 thinking controls.
+fn is_kimi_k26(model: &str) -> bool {
+    slug_matches_family(model, "kimi-k2.6")
 }
 
 /// Map `enable_thinking` + `thinking_effort` to the `reasoning_effort` string
@@ -245,6 +265,9 @@ fn build_reasoning_effort(
     model: &str,
 ) -> Option<&'static str> {
     if !enable_thinking {
+        return None;
+    }
+    if is_kimi_k26(model) {
         return None;
     }
     if is_deepseek_v4(model) {
@@ -270,9 +293,9 @@ fn build_reasoning_effort(
     })
 }
 
-/// Build DeepSeek's OpenAI-compatible thinking extension.
-fn build_deepseek_thinking(model: &str, enable_thinking: bool) -> Option<serde_json::Value> {
-    is_deepseek_v4(model).then(|| {
+/// Build provider-specific OpenAI-compatible thinking extensions.
+fn build_compatible_thinking(model: &str, enable_thinking: bool) -> Option<serde_json::Value> {
+    (is_deepseek_v4(model) || is_kimi_k26(model)).then(|| {
         serde_json::json!({
             "type": if enable_thinking { "enabled" } else { "disabled" },
         })
@@ -468,7 +491,7 @@ impl LlmClient for OpenAiChatClient {
         {
             body["reasoning_effort"] = serde_json::json!(effort);
         }
-        if let Some(thinking) = build_deepseek_thinking(&self.model, self.enable_thinking) {
+        if let Some(thinking) = build_compatible_thinking(&self.model, self.enable_thinking) {
             body["thinking"] = thinking;
         }
 
@@ -977,9 +1000,12 @@ mod tests {
     fn reasoning_effort_deepseek_v4_max_maps_to_max() {
         let pro = build_reasoning_effort(true, Some(ThinkingEffort::Max), "deepseek-v4-pro");
         let flash = build_reasoning_effort(true, Some(ThinkingEffort::Max), "deepseek-v4-flash");
+        let dashscope =
+            build_reasoning_effort(true, Some(ThinkingEffort::Max), "dashscope/deepseek-v4-pro");
 
         assert_eq!(pro, Some("max"));
         assert_eq!(flash, Some("max"));
+        assert_eq!(dashscope, Some("max"));
     }
 
     #[test]
@@ -1004,21 +1030,54 @@ mod tests {
 
     #[test]
     fn deepseek_v4_thinking_extension_enabled() {
-        let thinking = build_deepseek_thinking("deepseek-v4-pro", true).unwrap();
+        let thinking = build_compatible_thinking("deepseek-v4-pro", true).unwrap();
 
         assert_eq!(thinking, serde_json::json!({ "type": "enabled" }));
     }
 
     #[test]
     fn deepseek_v4_thinking_extension_disabled() {
-        let thinking = build_deepseek_thinking("deepseek-v4-flash", false).unwrap();
+        let thinking = build_compatible_thinking("deepseek-v4-flash", false).unwrap();
 
         assert_eq!(thinking, serde_json::json!({ "type": "disabled" }));
     }
 
     #[test]
+    fn deepseek_v4_thinking_extension_matches_provider_slug() {
+        let thinking = build_compatible_thinking("dashscope/deepseek-v4-pro", true).unwrap();
+
+        assert_eq!(thinking, serde_json::json!({ "type": "enabled" }));
+    }
+
+    #[test]
+    fn kimi_k26_thinking_extension_enabled() {
+        let direct = build_compatible_thinking("kimi-k2.6", true).unwrap();
+        let provider = build_compatible_thinking("moonshotai/kimi-k2.6", true).unwrap();
+
+        assert_eq!(direct, serde_json::json!({ "type": "enabled" }));
+        assert_eq!(provider, serde_json::json!({ "type": "enabled" }));
+    }
+
+    #[test]
+    fn kimi_k26_thinking_extension_disabled() {
+        let thinking = build_compatible_thinking("moonshotai/kimi-k2.6", false).unwrap();
+
+        assert_eq!(thinking, serde_json::json!({ "type": "disabled" }));
+    }
+
+    #[test]
+    fn kimi_k26_does_not_send_reasoning_effort() {
+        let direct = build_reasoning_effort(true, Some(ThinkingEffort::High), "kimi-k2.6");
+        let provider =
+            build_reasoning_effort(true, Some(ThinkingEffort::Max), "moonshotai/kimi-k2.6");
+
+        assert!(direct.is_none());
+        assert!(provider.is_none());
+    }
+
+    #[test]
     fn non_deepseek_v4_has_no_thinking_extension() {
-        assert!(build_deepseek_thinking("gpt-5.4", false).is_none());
+        assert!(build_compatible_thinking("gpt-5.4", false).is_none());
     }
 
     #[test]
