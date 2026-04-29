@@ -26,7 +26,7 @@ Run multiple AI models (GPT, Claude, Gemini, etc.) in a single terminal session 
 ## Features
 
 - **Multi-Agent Sessions** — Chat with multiple AI models simultaneously in one terminal
-- **@ Addressing** — `@all` to broadcast, `@name` to target, no prefix to continue with last respondent
+- **@ Addressing** — `@all` to broadcast, `@name` to target, no prefix to continue with the last respondent or the first available agent in `reply_order` at session start
 - **# Whisper** — `#name` for private messages invisible to other agents, multi-target whisper groups
 - **Shared Context** — All agents share conversation history (whisper messages are filtered by visibility), enabling cross-agent collaboration
 - **AI-to-AI Routing** — Agents can `@mention` each other, triggering automatic dispatch (immediate/queued strategies)
@@ -220,7 +220,7 @@ Commands:
 ```
 › @all What's the best data structure for a message queue in Rust?
 › @opus Can you elaborate on the lock-free ring buffer?
-› Tell me more                    # sends to the last respondent
+› Tell me more                    # sends to the last respondent, or first available agent at session start
 › #opus What do you think of GPT's approach?   # whisper (private)
 ```
 
