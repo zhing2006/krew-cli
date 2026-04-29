@@ -197,7 +197,7 @@ $ krew -p "@all hello" --format json
 | `@all <message>` | 向所有 Agent 广播，按配置顺序依次回答 |
 | `@<agent_name> <message>` | 仅指定 Agent 回答，其他 Agent 静默但可见该消息 |
 | `@<name1> @<name2> <message>` | 指定多个 Agent 依次回答（按 `@` 出现顺序） |
-| `<message>`（无 `@` 前缀） | 发给上一个回答的 Agent（延续对话）；若无上一个回答者则提示用户指定 |
+| `<message>`（无 `@`/`#` 前缀） | 发给上一个回答的 Agent（延续对话）；若无上一个回答者则发给 `reply_order` 中第一个可用的 Agent |
 | `#<agent_name> <message>` | 向指定 Agent 发送密语（私密消息），其他 Agent 仅看到占位符 |
 | `#<name1> #<name2> <message>` | 多目标密语：组内成员互相可见消息，组外 Agent 看到占位符 |
 

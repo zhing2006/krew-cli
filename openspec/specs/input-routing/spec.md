@@ -27,6 +27,10 @@
 - **WHEN** 用户输入 `just chatting`（无 @ 前缀）
 - **THEN** 系统 SHALL 解析为 `Addressee::LastRespondent`，消息正文为 `just chatting`
 
+#### Scenario: 无上一个回答者时使用首个可用 Agent
+- **WHEN** 用户在会话开头输入 `just chatting`（无 @ 前缀），且还没有上一个回答者
+- **THEN** 系统 SHALL 将消息路由到 `reply_order` 中第一个可用的 Agent；若 `reply_order` 中没有可用 Agent，则提示用户使用 `@name` 指定目标
+
 ### Requirement: 未知 @ 当作普通文本
 未知的 `@token`（不匹配任何已配置 Agent）和裸 `@` SHALL 被当作普通文本，不报错，不影响寻址解析。
 
@@ -53,9 +57,9 @@
 - **WHEN** 用户发送消息给多个 Agent 或 @all
 - **THEN** 用户消息 SHALL 显示为 `> ●●● message`，每个圆点颜色对应各 Agent 的配置颜色
 
-#### Scenario: 无目标无指示符
+#### Scenario: 无前缀消息显示隐式目标
 - **WHEN** 用户发送无 @ 的消息（LastRespondent）
-- **THEN** 用户消息 SHALL 显示为 `> message`，不带任何指示符
+- **THEN** 用户消息 SHALL 显示隐式目标 Agent 的路由指示符
 
 ### Requirement: Echo 回复
 当消息寻址到的 Agent 有 LLM 客户端时，SHALL 调用 agent loop 进行实际 LLM 对话。仅当 Agent 为 builtin echo 类型时，回显消息 SHALL 以黄色菱形 `◆` 前缀和路由标记显示。
@@ -105,6 +109,10 @@
 - **WHEN** 用户输入 `just chatting`（无 @ 或 # 前缀）
 - **THEN** 系统 SHALL 解析为 `Addressee::LastRespondent`，`is_whisper = false`，消息正文为 `just chatting`
 
+#### Scenario: 无上一个回答者时使用首个可用 Agent
+- **WHEN** 用户在会话开头输入 `just chatting`（无 @ 或 # 前缀），且还没有上一个回答者
+- **THEN** 系统 SHALL 将消息路由到 `reply_order` 中第一个可用的 Agent，`is_whisper = false`；若 `reply_order` 中没有可用 Agent，则提示用户使用 `@name` 指定目标
+
 #### Scenario: 单目标密语
 - **WHEN** 用户输入 `#opus hello` 且 `opus` 在已配置 agents 中
 - **THEN** 系统 SHALL 解析为 `Addressee::Single("opus")`，`is_whisper = true`，消息正文为 `#opus hello`
@@ -132,9 +140,9 @@
 - **WHEN** 用户发送普通消息给多个 Agent 或 @all
 - **THEN** 用户消息 SHALL 显示为 `> ●●● message`，每个圆点颜色对应各 Agent 的配置颜色
 
-#### Scenario: 无目标无指示符
-- **WHEN** 用户发送无 @ 的消息（LastRespondent）
-- **THEN** 用户消息 SHALL 显示为 `> message`，不带任何指示符
+#### Scenario: 无前缀消息显示隐式目标
+- **WHEN** 用户发送无 @ 或 # 的消息（LastRespondent）
+- **THEN** 用户消息 SHALL 显示隐式目标 Agent 的路由指示符
 
 #### Scenario: 密语消息锁图标
 - **WHEN** 用户发送密语消息

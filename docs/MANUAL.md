@@ -735,7 +735,7 @@ Covers: file locations, merge rules, all fields with defaults, CLI command refer
 | `@all <message>` | Broadcast to all agents (respond in `reply_order`) |
 | `@name <message>` | Send to a specific agent |
 | `@a @b <message>` | Send to multiple agents (in @ order) |
-| `<message>` (no @) | Send to last respondent |
+| `<message>` (no @ or #) | Send to the last respondent; at the start of a session, send to the first available agent in `reply_order` |
 
 `@name` tokens can appear anywhere in the message. Unrecognized `@tokens` are treated as plain text. The full original message (including @ tokens) is sent to the LLM.
 
@@ -1347,7 +1347,7 @@ If the variable is set but you still get auth errors, check that the key hasn't 
 
 ### Why doesn't my message go to any agent?
 
-If you type a message without `@` or `#` and there's no previous respondent (e.g. at the start of a session), krew doesn't know who to send it to. Use `@name` or `@all` to specify a target.
+If you type a message without `@` or `#`, krew sends it to the last respondent. If no agent has responded yet, it sends the message to the first available agent in `reply_order`. If no response starts, check that the target agent is configured and has a valid API key.
 
 ### Why does shell keep asking for approval?
 

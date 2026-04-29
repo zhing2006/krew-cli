@@ -329,7 +329,7 @@ fn parse_input(input: &str, known_agents: &[String]) -> Result<(Addressee, Strin
 | `@all` | 所有 Agent（按 reply_order 串行） | 全部可见 |
 | `@gpt` | 仅 gpt | 全部可见（上下文共享） |
 | `@gpt @opus` | gpt 和 opus（按 @ 出现顺序串行） | 全部可见 |
-| 无识别的 @ | 上一个回答者（无则提示指定） | 全部可见 |
+| 无识别的 @/# | 上一个回答者；无则使用 `reply_order` 中第一个可用的 Agent | 全部可见 |
 | `#opus` | 仅 opus | 仅 opus 可见内容，其他 Agent 看到占位符 |
 | `#opus #gemini` | opus 和 gemini | 组内成员互相可见，组外 Agent 看到占位符 |
 

@@ -13,6 +13,20 @@ use crate::render;
 use super::App;
 use super::state::{MAX_PENDING_MESSAGES, PendingMessage};
 
+fn resolve_implicit_target(
+    last_respondent: Option<&str>,
+    reply_order: &[String],
+    available: &std::collections::HashSet<String>,
+) -> Option<String> {
+    if let Some(name) = last_respondent {
+        return Some(name.to_string());
+    }
+    reply_order
+        .iter()
+        .find(|name| available.contains(name.as_str()))
+        .cloned()
+}
+
 impl App {
     /// Send the current input as a message or execute a slash command.
     pub(crate) fn send_message(
@@ -121,103 +135,8 @@ impl App {
         trimmed: &str,
         terminal: &mut custom_terminal::Terminal,
     ) -> anyhow::Result<()> {
-        // Push to input history.
         self.history_push(trimmed.to_string());
-
-        // Reset AI-to-AI round counter on new user message.
-        self.ai_conversation_rounds = 0;
-        self.a2a_insert_cursor = 0;
-
-        // Parse @ addressee.
-        let agent_names: Vec<String> = self.config.agents.iter().map(|a| a.name.clone()).collect();
-        let (addressee, body, is_whisper) = match router::parse_input(trimmed, &agent_names) {
-            Ok(result) => result,
-            Err(e) => {
-                self.show_error(terminal, &e.to_string())?;
-                return Ok(());
-            }
-        };
-
-        let resolved_last = match &addressee {
-            Addressee::LastRespondent => self.last_respondent.clone(),
-            _ => None,
-        };
-
-        if matches!(&addressee, Addressee::LastRespondent) && resolved_last.is_none() {
-            self.show_error(
-                terminal,
-                "No agent has replied yet — use @name to specify a target agent",
-            )?;
-            return Ok(());
-        }
-
-        // Fork semantics.
-        if self.rewound {
-            self.session_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
-            self.session_created_at = chrono::Utc::now();
-            self.rewound = false;
-        }
-
-        let available: std::collections::HashSet<String> = self.agents.keys().cloned().collect();
-        let target_names = router::resolve_target_names(
-            &addressee,
-            &self.config.settings.reply_order,
-            &available,
-            resolved_last.as_deref(),
-        );
-
-        self.insert_user_message(terminal, &target_names, trimmed, is_whisper)?;
-
-        let whisper_targets = if is_whisper {
-            let targets: Vec<String> = target_names.iter().map(|n| n.to_string()).collect();
-            self.current_whisper_targets = Some(targets.clone());
-            Some(targets)
-        } else {
-            self.current_whisper_targets = None;
-            None
-        };
-
-        let addressee_str = match &addressee {
-            Addressee::All => Some("all".to_string()),
-            Addressee::Single(name) => Some(name.clone()),
-            Addressee::Multiple(names) => Some(names.join(",")),
-            Addressee::LastRespondent => resolved_last.clone(),
-        };
-        self.messages.push(
-            ChatMessage::user_with_addressee(body, addressee_str)
-                .with_whisper_targets(whisper_targets),
-        );
-
-        self.save_session();
-
-        self.pending_agents = router::resolve_dispatch_queue(
-            &addressee,
-            &self.config.settings.reply_order,
-            &available,
-            resolved_last.as_deref(),
-        );
-
-        let unavailable: Vec<String> = self
-            .pending_agents
-            .iter()
-            .filter(|name| !self.agents.contains_key(name.as_str()))
-            .cloned()
-            .collect();
-        if !unavailable.is_empty() {
-            self.pending_agents
-                .retain(|name| self.agents.contains_key(name.as_str()));
-            let names = unavailable.join(", ");
-            self.show_error(
-                terminal,
-                &format!("Agent unavailable (possibly missing API key): {names}"),
-            )?;
-            if self.pending_agents.is_empty() {
-                return Ok(());
-            }
-        }
-
-        self.start_next_agent(terminal)?;
-        Ok(())
+        self.submit_user_message(trimmed, terminal)
     }
 
     /// Send pre-expanded custom command text as a user message.
@@ -234,39 +153,55 @@ impl App {
             return Ok(());
         }
 
+        self.submit_user_message(trimmed, terminal)
+    }
+
+    /// Submit already-trimmed user text through the shared routing pipeline.
+    fn submit_user_message(
+        &mut self,
+        trimmed: &str,
+        terminal: &mut custom_terminal::Terminal,
+    ) -> anyhow::Result<()> {
         // Reset AI-to-AI round counter on new user message.
         self.ai_conversation_rounds = 0;
         self.a2a_insert_cursor = 0;
 
+        // Parse @ addressee.
         let agent_names: Vec<String> = self.config.agents.iter().map(|a| a.name.clone()).collect();
         let (addressee, body, is_whisper) = match router::parse_input(trimmed, &agent_names) {
             Ok(result) => result,
             Err(e) => {
-                return self.show_error(terminal, &e.to_string());
+                self.show_error(terminal, &e.to_string())?;
+                return Ok(());
             }
         };
 
+        let available: std::collections::HashSet<String> = self.agents.keys().cloned().collect();
+
         let resolved_last = match &addressee {
-            Addressee::LastRespondent => self.last_respondent.clone(),
+            Addressee::LastRespondent => resolve_implicit_target(
+                self.last_respondent.as_deref(),
+                &self.config.settings.reply_order,
+                &available,
+            ),
             _ => None,
         };
 
         if matches!(&addressee, Addressee::LastRespondent) && resolved_last.is_none() {
-            return self.show_error(
+            self.show_error(
                 terminal,
-                "No agent has replied yet — use @name to specify a target agent",
-            );
+                "No agents available — use @name to specify a target agent",
+            )?;
+            return Ok(());
         }
 
-        // Fork semantics: generate new session ID on first real message after rewind.
-        // All validation has passed at this point — the message will be sent.
+        // Fork semantics.
         if self.rewound {
             self.session_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
             self.session_created_at = chrono::Utc::now();
             self.rewound = false;
         }
 
-        let available: std::collections::HashSet<String> = self.agents.keys().cloned().collect();
         let target_names = router::resolve_target_names(
             &addressee,
             &self.config.settings.reply_order,
@@ -276,7 +211,6 @@ impl App {
 
         self.insert_user_message(terminal, &target_names, trimmed, is_whisper)?;
 
-        // Set whisper state for dispatch lifecycle.
         let whisper_targets = if is_whisper {
             let targets: Vec<String> = target_names.iter().map(|n| n.to_string()).collect();
             self.current_whisper_targets = Some(targets.clone());
@@ -420,5 +354,60 @@ impl App {
             lines.push(Line::from(Span::raw(line.to_string())));
         }
         render::insert_lines(terminal, lines)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_implicit_target;
+    use std::collections::HashSet;
+
+    fn names(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    fn available(values: &[&str]) -> HashSet<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn implicit_target_prefers_last_respondent() {
+        let target = resolve_implicit_target(
+            Some("opus"),
+            &names(&["gpt", "opus"]),
+            &available(&["gpt", "opus"]),
+        );
+
+        assert_eq!(target.as_deref(), Some("opus"));
+    }
+
+    #[test]
+    fn implicit_target_uses_first_reply_order_agent_without_last() {
+        let target =
+            resolve_implicit_target(None, &names(&["gpt", "opus"]), &available(&["gpt", "opus"]));
+
+        assert_eq!(target.as_deref(), Some("gpt"));
+    }
+
+    #[test]
+    fn implicit_target_skips_unavailable_reply_order_entries() {
+        let target =
+            resolve_implicit_target(None, &names(&["missing", "opus"]), &available(&["opus"]));
+
+        assert_eq!(target.as_deref(), Some("opus"));
+    }
+
+    #[test]
+    fn implicit_target_returns_none_without_available_agent() {
+        let target = resolve_implicit_target(None, &names(&["missing"]), &available(&["opus"]));
+
+        assert_eq!(target, None);
+    }
+
+    #[test]
+    fn implicit_target_returns_none_with_empty_reply_order() {
+        let target = resolve_implicit_target(None, &[], &available(&["gpt"]));
+
+        assert_eq!(target, None);
     }
 }
