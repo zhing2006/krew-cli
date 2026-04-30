@@ -2,7 +2,8 @@ use std::io::Write;
 use tempfile::NamedTempFile;
 
 use krew_config::{
-    AgentConfig, ApprovalMode, Config, ConfigError, McpServerConfig, ProviderConfig, ThinkingEffort,
+    AgentConfig, ApprovalMode, Config, ConfigError, McpServerConfig, ProviderConfig, ProviderType,
+    ThinkingEffort,
 };
 
 const VALID_CONFIG: &str = r#"
@@ -417,6 +418,51 @@ fn provider_config_vertex_fields() {
     let provider: ProviderConfig = toml::from_str(toml_str).unwrap();
     assert_eq!(provider.vertex_project.as_deref(), Some("my-proj"));
     assert_eq!(provider.vertex_location.as_deref(), Some("us-central1"));
+}
+
+#[test]
+fn provider_config_vertex_anthropic_type() {
+    let toml_str = r#"
+        type = "vertex-anthropic"
+        api_key_env = "VERTEX_ANTHROPIC_API_KEY"
+        base_url = "https://litellm.example.com/vertex_ai"
+        vertex_project = "my-proj"
+        vertex_location = "global"
+    "#;
+    let provider: ProviderConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(provider.provider_type, ProviderType::VertexAnthropic);
+    assert_eq!(
+        provider.api_key_env.as_deref(),
+        Some("VERTEX_ANTHROPIC_API_KEY")
+    );
+    assert_eq!(
+        provider.base_url.as_deref(),
+        Some("https://litellm.example.com/vertex_ai")
+    );
+    assert_eq!(provider.vertex_project.as_deref(), Some("my-proj"));
+    assert_eq!(provider.vertex_location.as_deref(), Some("global"));
+}
+
+#[test]
+fn provider_config_existing_provider_type_names_unchanged() {
+    let openai: ProviderConfig = toml::from_str(r#"type = "openai""#).unwrap();
+    let anthropic: ProviderConfig = toml::from_str(r#"type = "anthropic""#).unwrap();
+    let google: ProviderConfig = toml::from_str(r#"type = "google""#).unwrap();
+    assert_eq!(openai.provider_type, ProviderType::OpenAI);
+    assert_eq!(anthropic.provider_type, ProviderType::Anthropic);
+    assert_eq!(google.provider_type, ProviderType::Google);
+}
+
+#[test]
+fn provider_config_vertex_anthropic_fields_missing() {
+    let toml_str = r#"
+        type = "vertex-anthropic"
+        api_key_env = "VERTEX_ANTHROPIC_API_KEY"
+    "#;
+    let provider: ProviderConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(provider.provider_type, ProviderType::VertexAnthropic);
+    assert!(provider.vertex_project.is_none());
+    assert!(provider.vertex_location.is_none());
 }
 
 #[test]

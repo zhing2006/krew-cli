@@ -14,7 +14,7 @@ use krew_config::{SamplingConfig, ThinkingEffort};
 use std::pin::Pin;
 
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
-const ANTHROPIC_VERSION: &str = "2023-06-01";
+pub(crate) const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 /// Anthropic Messages API client.
 pub struct AnthropicClient {
@@ -83,7 +83,7 @@ fn default_max_tokens(model: &str) -> u32 {
 // ---------------------------------------------------------------------------
 
 /// Result of message conversion: system text + messages array.
-pub struct ConvertedMessages {
+pub(crate) struct ConvertedMessages {
     /// System prompt text (None if no system messages).
     pub system: Option<String>,
     /// Anthropic messages array.
@@ -98,7 +98,7 @@ pub struct ConvertedMessages {
 /// - Other agents' assistant → role per `other_agent_role` with `[agent_name]` prefix
 ///
 /// Consecutive same-role messages are merged.
-pub fn convert_messages(
+pub(crate) fn convert_messages(
     messages: &[ChatMessage],
     self_agent_name: &str,
     other_agent_role: &OtherAgentRole,
@@ -254,7 +254,7 @@ fn flush_pending_anthropic(pending: &mut Vec<RoleContent>, result: &mut Vec<serd
 /// Maps: temperature (clamped to 0-1), top_p, top_k, max_tokens (required),
 /// stop_sequences.
 /// Ignores: frequency_penalty, presence_penalty.
-fn build_sampling_params(
+pub(crate) fn build_sampling_params(
     sampling: &SamplingConfig,
     model: &str,
     enable_thinking: bool,
@@ -319,7 +319,7 @@ fn supports_max_effort(model: &str) -> bool {
 }
 
 /// Build the thinking parameter for the request body.
-fn build_thinking_params(
+pub(crate) fn build_thinking_params(
     enable_thinking: bool,
     thinking_effort: Option<ThinkingEffort>,
     model: &str,
@@ -351,7 +351,7 @@ fn build_thinking_params(
 }
 
 /// Build the output_config parameter for effort-capable models.
-fn build_output_config(
+pub(crate) fn build_output_config(
     enable_thinking: bool,
     thinking_effort: Option<ThinkingEffort>,
     model: &str,
@@ -385,7 +385,7 @@ fn build_output_config(
 // ---------------------------------------------------------------------------
 
 /// Convert ToolDefinitions to Anthropic format.
-fn convert_tools(tools: &[ToolDefinition]) -> Vec<serde_json::Value> {
+pub(crate) fn convert_tools(tools: &[ToolDefinition]) -> Vec<serde_json::Value> {
     tools
         .iter()
         .map(|t| {
@@ -423,7 +423,9 @@ struct SseState {
 }
 
 /// Parse Anthropic SSE events into StreamEvents.
-fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamEvent> + Send {
+pub(crate) fn build_event_stream(
+    response: reqwest::Response,
+) -> impl Stream<Item = StreamEvent> + Send {
     use eventsource_stream::Eventsource;
     use futures::StreamExt;
 
@@ -729,13 +731,10 @@ impl LlmClient for AnthropicClient {
             provider_name: "Anthropic",
         };
         let auth = AuthMode::Header("x-api-key", &self.api_key);
-        let mut extra_headers = vec![
-            (
-                "anthropic-version".to_string(),
-                ANTHROPIC_VERSION.to_string(),
-            ),
-            ("content-type".to_string(), "application/json".to_string()),
-        ];
+        let mut extra_headers = vec![(
+            "anthropic-version".to_string(),
+            ANTHROPIC_VERSION.to_string(),
+        )];
         extra_headers.extend_from_slice(&self.extra_headers);
         let response = common::send_with_retry(
             &req_config,

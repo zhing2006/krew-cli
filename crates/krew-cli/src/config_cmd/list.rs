@@ -27,11 +27,7 @@ async fn list_providers() -> anyhow::Result<()> {
     println!("{}", "-".repeat(76));
 
     for (name, cfg) in &providers {
-        let type_label = match cfg.provider_type {
-            krew_config::ProviderType::OpenAI => "OpenAI",
-            krew_config::ProviderType::Anthropic => "Anthropic",
-            krew_config::ProviderType::Google => "Google",
-        };
+        let type_label = cfg.provider_type.label();
 
         let key_method = if let Some(ref env) = cfg.api_key_env {
             let set = std::env::var(env).is_ok();

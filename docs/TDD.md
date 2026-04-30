@@ -22,7 +22,7 @@
 ├──────────────┴──────────────┴────────────────────┤
 │               LLM Client Layer                   │
 │  (多 Provider 统一抽象: OpenAI/Anthropic/Google/  │
-│   OpenAI-Compatible)                              │
+│   Vertex Anthropic/OpenAI-Compatible)             │
 ├──────────────────────────────────────────────────┤
 │              Storage Layer                       │
 │         (TOML 文件会话持久化 + 配置管理)            │
@@ -415,6 +415,36 @@ struct Usage {
 - Web Search: tools 中添加 `{ type: "web_search_20250305", name: "web_search" }`
 - Thinking: 使用能力函数矩阵判断模型支持。Opus 4.6/Sonnet 4.6 使用 `adaptive` thinking + `output_config.effort`（含 max）；Opus 4.5 使用 `enabled` + `budget_tokens` + `output_config.effort`（Max 降为 high）；其他旧模型仅使用 `enabled` + `budget_tokens`，不发送 effort。启用 thinking 时强制 `temperature = 1.0`
 
+##### Vertex Anthropic Client
+
+- API: Vertex AI `publishers/anthropic/models/{model}:streamRawPredict` (stream=true)
+- 使用 `Authorization: Bearer <token>` 认证；`api_key` / `api_key_env` 可以是 Google OAuth access token 或 LiteLLM virtual key
+- 请求体复用 Anthropic Messages 字段，但 `model` 在 URL 中，body 顶层不发送 `model`
+- body 顶层发送 `anthropic_version = "vertex-2023-10-16"`
+- 复用 Anthropic 的 message conversion、tool conversion、thinking/output_config、sampling 参数和 SSE parser
+- 支持 Google 官方 Vertex endpoint 和 LiteLLM Vertex passthrough root（如 `/vertex_ai`、`/vertex_ai/v1`）
+- Web Search: tools 中添加 `{ type: "web_search_20250305", name: "web_search" }`
+- `vertex_project` 和 `vertex_location` 运行时必填；缺失时 agent 初始化跳过并给出 warning
+- `extra_headers`: 支持 provider 级别的自定义 HTTP headers（仅 chat/inference 请求）
+
+Vertex Anthropic host 选择：
+
+| location | host |
+| -------- | ---- |
+| `global` | `aiplatform.googleapis.com` |
+| `us` | `aiplatform.us.rep.googleapis.com` |
+| `eu` | `aiplatform.eu.rep.googleapis.com` |
+| 其他 region | `{location}-aiplatform.googleapis.com` |
+
+Vertex Anthropic URL 拼接：
+
+| base_url | 请求路径 |
+| -------- | -------- |
+| 未设置 | `https://{host}/v1/projects/{project}/locations/{location}/publishers/anthropic/models/{model}:streamRawPredict` |
+| `https://litellm.example.com/vertex_ai` | `https://litellm.example.com/vertex_ai/v1/projects/...` |
+| `https://litellm.example.com/vertex_ai/v1` | `https://litellm.example.com/vertex_ai/v1/projects/...` |
+| `https://proxy.example.com` | `https://proxy.example.com/v1/projects/...` |
+
 ##### Google Client
 
 - API: Gemini `/models/{model}:streamGenerateContent` (stream=true)
@@ -508,6 +538,7 @@ struct RetryConfig {
 | OpenAI (Responses API) | `tools` 数组加 `{ type: "web_search" }` | `web_search` |
 | OpenAI (Chat Completions) | `web_search_options: { search_context_size: "medium" }` | `web_search` |
 | Anthropic | `tools` 数组加 `{ type: "web_search_20250305", name: "web_search" }` | `web_search_20250305` |
+| Vertex Anthropic | `tools` 数组加 `{ type: "web_search_20250305", name: "web_search" }` | `web_search_20250305` |
 | Google Gemini | `tools` 数组加 `{ google_search: {} }` | `google_search` |
 | OpenAI-Compatible | 取决于服务商是否支持 | - |
 
@@ -1245,18 +1276,19 @@ enum ApiType {
 
 #[derive(Deserialize)]
 struct ProviderConfig {
-    provider_type: ProviderType,        // openai | anthropic | google
+    provider_type: ProviderType,        // openai | anthropic | google | vertex-anthropic
     api_key: Option<String>,            // 方式二：直接填写（不推荐）
     api_key_env: Option<String>,        // 方式一：环境变量名（优先）
-    base_url: Option<String>,
-    vertex_project: Option<String>,     // Google Vertex AI 项目 ID
-    vertex_location: Option<String>,    // Google Vertex AI 区域（如 "us-central1"）
+    base_url: Option<String>,           // 自定义 endpoint；vertex-anthropic 可指向 passthrough root
+    vertex_project: Option<String>,     // Google Vertex AI 项目 ID；vertex-anthropic 必填
+    vertex_location: Option<String>,    // Google Vertex AI 区域（如 "global"、"us-east5"）
 }
 
 enum ProviderType {
     OpenAI,
     Anthropic,
     Google,
+    VertexAnthropic,                    // serde rename = "vertex-anthropic"
 }
 
 #[derive(Deserialize)]
@@ -1346,7 +1378,7 @@ System Prompt 层级合并顺序：
 /// Provider data for writing to config file.
 struct ProviderWriteData {
     name: String,
-    provider_type: ProviderType,        // openai | anthropic | google
+    provider_type: ProviderType,        // openai | anthropic | google | vertex-anthropic
     api_key: Option<String>,
     api_key_env: Option<String>,
     base_url: Option<String>,
@@ -1421,6 +1453,9 @@ fn fallback_models(provider_type: ProviderType) -> Vec<ModelInfo>;
 | Anthropic | `GET {base_url}/v1/models` | `x-api-key` + `anthropic-version` | `claude-` 前缀 |
 | Google Gemini | `GET generativelanguage.googleapis.com/v1beta/models?key=` | Query parameter | `gemini-` 前缀 |
 | Google Vertex | `GET {location}-aiplatform.googleapis.com/v1/...` | Bearer token | `gemini-` 前缀 |
+| Vertex Anthropic | `GET https://{host}/v1/projects/{project}/locations/{location}/publishers/anthropic/models` | Bearer token | `claude-` 前缀 |
+
+Vertex Anthropic 的 `host` 规则与 chat/inference 一致：`global` 使用 `aiplatform.googleapis.com`，`us` 使用 `aiplatform.us.rep.googleapis.com`，`eu` 使用 `aiplatform.eu.rep.googleapis.com`，其他 region 使用 `{location}-aiplatform.googleapis.com`。当 `base_url` 指向 LiteLLM Vertex passthrough 或自定义代理时，URL builder 先去除尾部 `/`；若 base 以 `/v1` 结尾则直接追加 `/projects/...`，否则追加 `/v1/projects/...`。返回的 model name 去除 `publishers/anthropic/models/` 前缀，保留 Vertex 原生 ID。
 
 超时：官方 OpenAI/Anthropic/Google 为 5 秒，OpenAI 兼容 Provider 为 15 秒（兼容服务可能返回大量模型）。结果按 ID 字母排序。API 调用失败时回退到硬编码列表。
 

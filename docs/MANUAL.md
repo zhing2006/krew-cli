@@ -550,7 +550,7 @@ enable_thinking = false          # Show model thinking/reasoning (default: false
 
 ### 5.4 Provider configuration
 
-Each provider requires a `type` field specifying the provider type: `"openai"`, `"anthropic"`, or `"google"`.
+Each provider requires a `type` field specifying the provider type: `"openai"`, `"anthropic"`, `"google"`, or `"vertex-anthropic"`.
 
 ```toml
 # OpenAI
@@ -584,12 +584,29 @@ vertex_location = "us-central1"
 # vertex_location = "global"
 # extra_headers = { "X-Vertex-AI-LLM-Request-Type" = "shared", "X-Vertex-AI-LLM-Shared-Request-Type" = "priority" }
 
+# Vertex Anthropic (Google official Vertex endpoint)
+[providers.vertex-anthropic]
+type = "vertex-anthropic"
+api_key_env = "VERTEX_ANTHROPIC_API_KEY" # Bearer token source
+vertex_project = "my-project"
+vertex_location = "global"
+
+# Vertex Anthropic (LiteLLM Vertex passthrough)
+# [providers.vertex-anthropic-litellm]
+# type = "vertex-anthropic"
+# api_key_env = "LITELLM_API_KEY"        # LiteLLM virtual key / proxy key
+# vertex_project = "my-project"
+# vertex_location = "global"
+# base_url = "https://litellm.example.com/vertex_ai"
+
 # OpenAI-Compatible (e.g. Doubao, LiteLLM)
 [providers.doubao]
 type = "openai"
 api_key_env = "DOUBAO_API_KEY"
 base_url = "https://ark.cn-beijing.volces.com/api/v3"
 ```
+
+**`vertex-anthropic` fields** — `api_key` / `api_key_env` are Bearer token sources, either a Google OAuth access token or a LiteLLM virtual key. `vertex_project` and `vertex_location` are required at runtime. `base_url` is optional; omit it for Google official Vertex endpoint, or set it to a LiteLLM Vertex passthrough root such as `https://litellm.example.com/vertex_ai`.
 
 **`extra_headers`** — Optional key-value table of extra HTTP headers to include in chat/inference requests. Does not apply to `list_models` or other non-inference API calls. Do not use header names that conflict with provider-internal or authentication headers (e.g. `Authorization`, `x-api-key`, `anthropic-version`).
 
@@ -650,10 +667,10 @@ krew config init --project    # Only set up project-level config (.krew/settings
 - Both exist → exit with message
 
 **User config setup** guides you through adding providers:
-1. Select provider type (Anthropic / OpenAI / Google / OpenAI-Compatible)
+1. Select provider type (Anthropic / OpenAI / Google / Vertex Anthropic / OpenAI-Compatible)
 2. Enter provider name (auto-suggested based on type)
 3. Choose API key method (environment variable or config file)
-4. Optionally set base_url (OpenAI-Compatible) or Vertex fields (Google)
+4. Optionally set base_url (OpenAI-Compatible or Vertex Anthropic passthrough) and Vertex fields (Google / Vertex Anthropic)
 5. For OpenAI-Compatible providers: select API type — "Chat Completions (recommended)" (default) or "Responses API". Official OpenAI providers default to Responses API automatically without prompting.
 6. Loop — add more providers or finish
 

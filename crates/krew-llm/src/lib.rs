@@ -6,6 +6,7 @@ pub mod google;
 pub mod list_models;
 pub mod openai_chat;
 pub mod openai_responses;
+pub mod vertex_anthropic;
 
 pub use anthropic::AnthropicClient;
 pub use google::GoogleClient;
@@ -14,6 +15,7 @@ pub use list_models::{ListModelsConfig, ModelInfo, fallback_models, list_models}
 pub use openai_chat::OpenAiChatClient;
 pub use openai_responses::OpenAiResponsesClient;
 pub use types::*;
+pub use vertex_anthropic::VertexAnthropicClient;
 
 use chrono::{DateTime, Utc};
 use futures::Stream;

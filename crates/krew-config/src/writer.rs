@@ -69,12 +69,7 @@ pub fn add_provider(path: &Path, data: &ProviderWriteData) -> Result<(), ConfigE
     let mut table = Table::new();
     table.set_implicit(true);
 
-    let type_str = match data.provider_type {
-        ProviderType::OpenAI => "openai",
-        ProviderType::Anthropic => "anthropic",
-        ProviderType::Google => "google",
-    };
-    table["type"] = toml_edit::value(type_str);
+    table["type"] = toml_edit::value(data.provider_type.as_str());
 
     if let Some(ref key) = data.api_key {
         table["api_key"] = toml_edit::value(key.as_str());

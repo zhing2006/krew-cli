@@ -25,11 +25,7 @@ async fn add_provider() -> anyhow::Result<()> {
     println!(
         "Added provider \"{}\" ({})",
         data.name,
-        match data.provider_type {
-            krew_config::ProviderType::OpenAI => "OpenAI",
-            krew_config::ProviderType::Anthropic => "Anthropic",
-            krew_config::ProviderType::Google => "Google",
-        }
+        data.provider_type.label()
     );
 
     Ok(())

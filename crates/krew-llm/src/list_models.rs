@@ -6,6 +6,7 @@ use krew_config::ProviderType;
 use serde::Deserialize;
 
 use crate::LlmError;
+use crate::vertex_anthropic::build_vertex_anthropic_models_url;
 
 /// Timeout for list models HTTP requests.
 const LIST_MODELS_TIMEOUT: Duration = Duration::from_secs(15);
@@ -53,6 +54,7 @@ pub async fn list_models(config: &ListModelsConfig) -> Result<Vec<ModelInfo>, Ll
                     list_google_gemini(config).await?
                 }
             }
+            ProviderType::VertexAnthropic => list_vertex_anthropic(config).await?,
         }
     };
 
@@ -71,6 +73,12 @@ pub fn fallback_models(provider_type: ProviderType) -> Vec<ModelInfo> {
         ],
         ProviderType::OpenAI => vec!["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"],
         ProviderType::Google => vec!["gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview"],
+        ProviderType::VertexAnthropic => vec![
+            "claude-opus-4-7",
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5@20251001",
+        ],
     };
     ids.into_iter()
         .map(|id| ModelInfo { id: id.to_string() })
@@ -323,9 +331,98 @@ async fn list_vertex(config: &ListModelsConfig) -> Result<Vec<ModelInfo>, LlmErr
         .collect())
 }
 
+// ── Vertex Anthropic ─────────────────────────────────────────────────
+
+async fn list_vertex_anthropic(config: &ListModelsConfig) -> Result<Vec<ModelInfo>, LlmError> {
+    let project = config
+        .vertex_project
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            LlmError::Api("Vertex Anthropic list models requires vertex_project".into())
+        })?;
+    let location = config
+        .vertex_location
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            LlmError::Api("Vertex Anthropic list models requires vertex_location".into())
+        })?;
+
+    let url = build_vertex_anthropic_models_url(config.base_url.as_deref(), project, location);
+
+    let client = reqwest::Client::builder()
+        .timeout(LIST_MODELS_TIMEOUT)
+        .build()
+        .map_err(LlmError::Network)?;
+
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", config.api_key))
+        .send()
+        .await
+        .map_err(LlmError::Network)?;
+
+    if !resp.status().is_success() {
+        return Err(LlmError::Api(format!(
+            "Vertex Anthropic list models failed: {}",
+            resp.status()
+        )));
+    }
+
+    let body: VertexModelsResponse = resp.json().await.map_err(LlmError::Network)?;
+
+    Ok(body
+        .models
+        .into_iter()
+        .map(|m| extract_vertex_anthropic_model_id(&m.name))
+        .filter(|id| id.starts_with("claude-"))
+        .map(|id| ModelInfo { id })
+        .collect())
+}
+
+fn extract_vertex_anthropic_model_id(name: &str) -> String {
+    name.strip_prefix("publishers/anthropic/models/")
+        .unwrap_or(name)
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    async fn run_get_capture_server(
+        response_body: &'static str,
+    ) -> (String, tokio::task::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = Vec::new();
+            loop {
+                let mut chunk = [0_u8; 1024];
+                let n = socket.read(&mut chunk).await.unwrap();
+                assert!(n > 0, "connection closed before headers");
+                buffer.extend_from_slice(&chunk[..n]);
+                let request = String::from_utf8_lossy(&buffer);
+                if request.contains("\r\n\r\n") {
+                    break;
+                }
+            }
+
+            let request = String::from_utf8_lossy(&buffer).to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+            request
+        });
+        (format!("http://{addr}/vertex_ai"), handle)
+    }
 
     #[test]
     fn fallback_anthropic() {
@@ -357,6 +454,16 @@ mod tests {
                 .iter()
                 .any(|m| m.id == "gemini-3.1-flash-lite-preview")
         );
+    }
+
+    #[test]
+    fn fallback_vertex_anthropic() {
+        let models = fallback_models(ProviderType::VertexAnthropic);
+        assert_eq!(models.len(), 4);
+        assert!(models.iter().any(|m| m.id == "claude-opus-4-7"));
+        assert!(models.iter().any(|m| m.id == "claude-opus-4-6"));
+        assert!(models.iter().any(|m| m.id == "claude-sonnet-4-6"));
+        assert!(models.iter().any(|m| m.id == "claude-haiku-4-5@20251001"));
     }
 
     #[test]
@@ -411,6 +518,14 @@ mod tests {
     }
 
     #[test]
+    fn vertex_anthropic_model_id_extraction() {
+        let id = extract_vertex_anthropic_model_id(
+            "publishers/anthropic/models/claude-sonnet-4-5@20250929",
+        );
+        assert_eq!(id, "claude-sonnet-4-5@20250929");
+    }
+
+    #[test]
     fn vertex_url_construction() {
         let project = "my-project";
         let location = "us-central1";
@@ -421,6 +536,87 @@ mod tests {
             url,
             "https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/publishers/google/models"
         );
+    }
+
+    #[test]
+    fn vertex_anthropic_url_construction() {
+        assert_eq!(
+            build_vertex_anthropic_models_url(None, "my-project", "global"),
+            "https://aiplatform.googleapis.com/v1/projects/my-project/locations/global/publishers/anthropic/models"
+        );
+        assert_eq!(
+            build_vertex_anthropic_models_url(None, "my-project", "eu"),
+            "https://aiplatform.eu.rep.googleapis.com/v1/projects/my-project/locations/eu/publishers/anthropic/models"
+        );
+        assert_eq!(
+            build_vertex_anthropic_models_url(None, "my-project", "us-east5"),
+            "https://us-east5-aiplatform.googleapis.com/v1/projects/my-project/locations/us-east5/publishers/anthropic/models"
+        );
+        assert_eq!(
+            build_vertex_anthropic_models_url(
+                Some("https://litellm.example.com/vertex_ai"),
+                "proj",
+                "global",
+            ),
+            "https://litellm.example.com/vertex_ai/v1/projects/proj/locations/global/publishers/anthropic/models"
+        );
+        assert_eq!(
+            build_vertex_anthropic_models_url(
+                Some("https://litellm.example.com/vertex_ai/v1"),
+                "proj",
+                "global",
+            ),
+            "https://litellm.example.com/vertex_ai/v1/projects/proj/locations/global/publishers/anthropic/models"
+        );
+        assert_eq!(
+            build_vertex_anthropic_models_url(Some("https://proxy.example.com"), "proj", "global"),
+            "https://proxy.example.com/v1/projects/proj/locations/global/publishers/anthropic/models"
+        );
+    }
+
+    #[test]
+    fn vertex_anthropic_filter_logic() {
+        let names = vec![
+            "publishers/anthropic/models/claude-opus-4-7",
+            "publishers/google/models/gemini-3.1-pro-preview",
+            "other-model",
+        ];
+        let filtered: Vec<String> = names
+            .into_iter()
+            .map(extract_vertex_anthropic_model_id)
+            .filter(|id| id.starts_with("claude-"))
+            .collect();
+        assert_eq!(filtered, vec!["claude-opus-4-7"]);
+    }
+
+    #[tokio::test]
+    async fn list_vertex_anthropic_passthrough_auth_and_sorting() {
+        let body = r#"{
+            "models": [
+                {"name": "publishers/anthropic/models/claude-sonnet-4-5@20250929"},
+                {"name": "publishers/anthropic/models/not-claude"},
+                {"name": "publishers/anthropic/models/claude-opus-4-7"}
+            ]
+        }"#;
+        let (base_url, handle) = run_get_capture_server(body).await;
+        let models = list_models(&ListModelsConfig {
+            provider_type: ProviderType::VertexAnthropic,
+            base_url: Some(base_url),
+            api_key: "sk-litellm".into(),
+            vertex_project: Some("proj".into()),
+            vertex_location: Some("global".into()),
+        })
+        .await
+        .unwrap();
+        let request = handle.await.unwrap();
+
+        assert!(request.starts_with(
+            "GET /vertex_ai/v1/projects/proj/locations/global/publishers/anthropic/models "
+        ));
+        assert!(request.contains("authorization: Bearer sk-litellm"));
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "claude-opus-4-7");
+        assert_eq!(models[1].id, "claude-sonnet-4-5@20250929");
     }
 
     #[test]
