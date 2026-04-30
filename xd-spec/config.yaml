@@ -1,0 +1,20 @@
+schema: spec-driven-cn
+
+# Project context (optional)
+# Injected into all artifact instructions emitted by `xd-spec instructions artifact`.
+# Add tech stack, conventions, style guides, domain knowledge, etc.
+# Example:
+#   context: |
+#     Tech stack: UE5 C++ + Verse
+#     Perforce workflow; commit messages in Chinese
+#     Domain: XDRPG client
+
+# Per-artifact rules (optional)
+# Appended to schema-defined guidance. Keys are artifact ids
+# (e.g. proposal / specs / design / tasks).
+# Example:
+#   rules:
+#     proposal:
+#       - Cite the relevant P4 changelist
+#     tasks:
+#       - Each task must be covered by a BDD test

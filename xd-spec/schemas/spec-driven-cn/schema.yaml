@@ -1,0 +1,206 @@
+name: spec-driven-cn
+version: 1
+description: 默认的 xd-spec 工作流 —— proposal → specs → design → tasks
+artifacts:
+  - id: proposal
+    generates: proposal.md
+    description: 描述本次变更的初始提案文档
+    template: proposal.md
+    instruction: |
+      创建提案文档，明确本次变更“为什么需要做”。
+
+      章节说明：
+      - **Why**：用 1-2 句话描述要解决的问题或抓住的机会。这次变更解决了什么？为什么是现在？
+      - **What Changes**：以列表形式列出改动内容。明确写出新增能力、修改点或移除项；破坏性改动用 **BREAKING** 标记。每条 bullet 必须使用严格格式 `- **<分类/子分类/名称>:** <说明>`。
+      - **涉及能力**：识别哪些 spec 会被新增或修改：
+        - **新增能力**：列出本次引入的能力，每一项都会成为一个新的增量 spec 文件。
+          **重要**：每个能力名都必须使用至少三层的层级路径：`分类/子分类/名称`（kebab-case）。该路径决定 spec 目录结构，**不允许扁平命名**。
+          先执行 `xd-spec spec list` 查看现有 spec 目录树，再为每个新能力分配一条与项目领域结构一致的分类路径。
+          示例：`CLI/Config/env-config`、`Backend/Auth/user-auth`、`Client/HTTP/openai-client`、`Build/Deps/dependency-management`。
+          错误示例：`env-config`、`user-auth`（缺少分类层级的扁平命名）。
+        - **修改能力**：列出“需求层面”发生变化的已有能力。仅当 spec 级别的行为发生变化时才在此列出（仅实现细节调整不算）。每一项都需要一个增量 spec 文件。运行 `xd-spec spec list` 获取已有 spec 的完整路径（如 `Backend/Auth/user-auth`），并在增量 spec 目录下沿用同样的路径。如果没有需求变更则留空。
+      - **影响范围**：受影响的代码、API、依赖或系统。
+
+      重要：涉及能力一节是关键。它在提案阶段与 spec 阶段之间建立了契约。
+      填写之前请先调研已有 spec。这里列出的每个能力都需要在 spec 阶段对应一个 spec 文件。
+
+      内容尽量精简（1-2 页）。聚焦于“为什么”，不要写“怎么做” —— 实现细节属于 design.md。
+
+      这是整条工作流的根基 —— specs、design、tasks 都建立在它之上。
+    requires: []
+
+  - id: specs
+    generates: "specs/**/*.md"
+    description: 本次变更对应的详细规格说明
+    template: spec.md
+    instruction: |
+      编写规格文件，定义系统“应当做什么”。
+
+      为提案中“涉及能力”一节列出的每一项能力创建一个 spec 文件。
+
+      **重要**：增量 spec 的目录结构必须与提案中定义的层级分类路径一致。spec 文件在变更目录中的相对路径，决定它在归档时落入 `xd-spec/specs/` 的位置。
+      - 创建任何 spec 文件之前，先确认提案里每条能力路径都至少有三层（如 `分类/子分类/名称`）。如有扁平命名或只有两层，先回到提案中修正。
+      - 新增能力：使用提案中的分类路径创建增量 spec。
+        正确：`specs/CLI/Config/env-config/spec.md`、`specs/Backend/Auth/user-auth/spec.md`
+        错误：`specs/env-config/spec.md`、`specs/user-auth/spec.md`（扁平、缺少层级）
+      - 修改能力：先用 `xd-spec spec list` 查到已有 spec 的完整路径，然后增量 spec 沿用同一路径（例如已有 spec 在 `xd-spec/specs/Backend/Auth/user-auth/`，则在 `specs/Backend/Auth/user-auth/spec.md` 创建增量 spec）。
+
+      增量操作（使用 ## 二级标题）：
+      - **ADDED Requirements**：新增能力
+      - **MODIFIED Requirements**：变更行为 —— 必须包含完整的更新后内容
+      - **REMOVED Requirements**：废弃功能 —— 必须写明 **Reason** 和 **Migration**
+      - **RENAMED Requirements**：仅做改名 —— 使用 FROM:/TO: 格式
+
+      格式要求：
+      - 每个需求：`### Requirement: <名称>`，下接需求描述
+      - 规范性表述统一使用 SHALL/MUST（避免 should/may）
+      - 每个场景：`#### Scenario: <名称>`，使用 WHEN/THEN 句式
+      - **重要**：场景必须使用恰好 4 个 `#`（即 `####`）。使用 3 个 `#` 或写成列表会被静默忽略。
+      - 每个需求必须至少包含一个场景。
+
+      MODIFIED 类型需求的处理流程：
+      1. 在 xd-spec/specs/ 对应的 spec 中找到原需求（用 `xd-spec spec list` 查完整路径）
+      2. 复制整段需求块（从 `### Requirement:` 到所有场景）
+      3. 粘贴到 `## MODIFIED Requirements` 之下，并修改为新的行为描述
+      4. 标题文本必须严格一致（忽略空白）
+
+      常见坑：MODIFIED 只贴了片段会在归档时丢失细节。
+      如果只是新增关注点而不改动既有行为，请使用 ADDED 而不是 MODIFIED。
+
+      示例：
+      ```
+      ## ADDED Requirements
+
+      ### Requirement: 用户可以导出数据
+      系统 SHALL 允许用户以 CSV 格式导出自己的数据。
+
+      #### Scenario: 导出成功
+      - **WHEN** 用户点击“导出”按钮
+      - **THEN** 系统下载一个包含全部用户数据的 CSV 文件
+
+      ## REMOVED Requirements
+
+      ### Requirement: 旧版导出
+      **Reason**: 已被新的导出系统取代
+      **Migration**: 改用新的导出接口 /api/v2/export
+      ```
+
+      Spec 必须可被验证 —— 每个场景都是一条潜在的测试用例。
+    requires:
+      - proposal
+
+  - id: design
+    generates: design.md
+    description: 包含实现细节的技术设计文档
+    template: design.md
+    instruction: |
+      编写设计文档，说明该变更“怎么实现”。
+
+      何时需要 design.md（满足任一项即建议补一份）：
+      - 跨切面变更（涉及多个服务/模块），或引入新的架构模式
+      - 引入新的外部依赖，或对数据模型有显著改动
+      - 涉及安全、性能或迁移复杂度
+      - 存在歧义，需要在编码前先做技术决策
+
+      章节说明：
+      - **背景**：背景信息、当前状态、约束条件、相关方
+      - **目标 / 非目标**：本设计要达成什么、明确不做什么
+      - **关键决策**：关键技术选择及理由（为什么选 X 而不选 Y？）。每条决策都要列出考虑过的备选方案。
+      - **风险 / 取舍**：已知的局限以及可能出问题的地方。格式：[风险] → 缓解措施
+      - **迁移计划**：上线步骤、回滚方案（如适用）
+      - **遗留问题**：尚未拍板的决策或未明的事项
+
+      聚焦于架构与方案，不要写逐行实现。
+      动机回到 proposal 看，需求回到 specs 看。
+
+      好的设计文档讲清楚“技术决策背后的为什么”。
+    requires:
+      - proposal
+
+  - id: tasks
+    generates: tasks.md
+    description: 可被追踪的实施任务清单
+    template: tasks.md
+    instruction: |
+      生成本次实施工作的任务清单。
+
+      **重要：严格按照下列模板格式编写。** apply 阶段会按复选框格式解析进度，
+      未使用 `- [ ]` 的任务不会被追踪。
+
+      规范要求：
+      - 相关任务集中放在以 `## 数字` 开头的分组下
+      - 每条任务必须是复选框：`- [ ] X.Y 任务描述`
+      - 任务粒度要小到一次会话能完成
+      - 按依赖顺序排列（哪些必须先做？）
+
+      示例：
+      ```
+      ## 1. 准备工作
+
+      - [ ] 1.1 创建新的模块结构
+      - [ ] 1.2 在 package.json 中加入依赖
+
+      ## 2. 核心实现
+
+      - [ ] 2.1 实现数据导出函数
+      - [ ] 2.2 添加 CSV 格式化工具
+      ```
+
+      “要做什么”参考 specs，“怎么做”参考 design。
+      每条任务都要可被验证 —— 你能明确知道它什么时候算做完。
+    requires:
+      - specs
+      - design
+
+  - id: design_report
+    generates: design-report.md
+    description: 由 design-refine 工作流产出的多轮设计 review 报告(覆盖 proposal / specs / design / tasks)
+    template: design-report.md
+    phase: review
+    instruction: |
+      该 artifact 为非阻塞的 review 阶段产出（`phase: review`）。它由
+      `xd-spec instructions workflow design-refine` 工作流自动生成、
+      不应手工撰写。scaffold 阶段只落空模板，frontmatter 含
+      `status: in-progress`、`rounds_completed: 0`、`session_id: null`；
+      工作流每跑完一轮 reviewer 调用，就追加一节 `## Round <N>`。
+
+      字段格式由 `Core/Refine/report-format` spec 固化：必含
+      `kind`、`change`、`workflow`、`type`、`status`、`rounds_completed`、
+      `reviewer`、`session_id`、`started_at`、`updated_at`。`kind` /
+      `change` / `workflow` 一旦写入不再改写；其余字段每轮更新。
+
+      该报告缺失不阻塞 validate / status / apply / archive 任一路径。
+      archive 时该报告随 change 整体迁入
+      `xd-spec/changes/archive/<name>/`，**不**会被合并到任何
+      `xd-spec/specs/` 下的项目级 spec。
+    requires:
+      - design
+
+  - id: code_report
+    generates: code-report.md
+    description: 由 code-refine 工作流产出的多轮代码 review 报告。工作流自身不耦合任何 VCS,审查目标由调用方在 prompt 里提供。
+    template: code-report.md
+    phase: review
+    instruction: |
+      该 artifact 为非阻塞的 review 阶段产出（`phase: review`）。它由
+      `xd-spec instructions workflow code-refine` 工作流自动生成、
+      不应手工撰写。scaffold 阶段只落空模板，frontmatter 含
+      `status: in-progress`、`rounds_completed: 0`、`session_id: null`；
+      工作流每跑完一轮 reviewer 调用，就追加一节 `## Round <N>`。
+
+      字段格式与 `design-report.md` 同形（`kind: code-report`、
+      `workflow: code-refine`），详见 `Core/Refine/report-format` spec。
+
+      该报告缺失不阻塞 validate / status / apply / archive 任一路径。
+      archive 时该报告随 change 整体迁入
+      `xd-spec/changes/archive/<name>/`，**不**会被合并到任何
+      `xd-spec/specs/` 下的项目级 spec。
+    requires:
+      - tasks
+
+apply:
+  requires: [tasks]
+  tracks: tasks.md
+  instruction: |
+    阅读上下文文件，按顺序处理待完成的任务，做完一条就勾掉一条。
+    遇到阻塞或需要澄清时停下来。
