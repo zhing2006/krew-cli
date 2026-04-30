@@ -135,6 +135,7 @@ fn help_contains_agents_fields() {
 fn help_contains_providers_fields() {
     let out = help_output();
     for field in [
+        "vertex-anthropic",
         "api_key_env",
         "base_url",
         "vertex_project",
@@ -143,6 +144,18 @@ fn help_contains_providers_fields() {
     ] {
         assert!(out.contains(field), "missing [providers] field: {field}");
     }
+    assert!(
+        out.contains("Bearer token"),
+        "missing vertex-anthropic Bearer token semantics"
+    );
+    assert!(
+        out.contains("LiteLLM Vertex passthrough"),
+        "missing vertex-anthropic base_url semantics"
+    );
+    assert!(
+        out.contains("[providers.vertex-anthropic]"),
+        "missing vertex-anthropic example block"
+    );
 }
 
 #[test]

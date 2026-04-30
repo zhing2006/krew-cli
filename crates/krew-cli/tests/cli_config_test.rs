@@ -205,3 +205,52 @@ fn batch_generated_config_loads_and_validates() {
     assert_eq!(config.agents[0].name, "claude");
     assert!(config.agents[0].enable_thinking);
 }
+
+#[test]
+fn vertex_anthropic_generated_config_loads_and_validates() {
+    use krew_config::ProviderType;
+    use krew_config::RawConfig;
+    use krew_config::writer::{AgentWriteData, ProviderWriteData, add_provider, batch_add_agents};
+
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("settings.toml");
+
+    add_provider(
+        &config_path,
+        &ProviderWriteData {
+            name: "vertex-anthropic".into(),
+            provider_type: ProviderType::VertexAnthropic,
+            api_key: None,
+            api_key_env: Some("VERTEX_ANTHROPIC_API_KEY".into()),
+            base_url: Some("https://litellm.example.com/vertex_ai".into()),
+            vertex_project: Some("my-project".into()),
+            vertex_location: Some("global".into()),
+            extra_headers: None,
+        },
+    )
+    .unwrap();
+
+    let agents = vec![AgentWriteData {
+        name: "claude".into(),
+        display_name: "Claude".into(),
+        provider: "vertex-anthropic".into(),
+        model: "claude-opus-4-7".into(),
+        color: "blue".into(),
+        enable_thinking: true,
+        enable_web_search: true,
+        tools: true,
+        api_type: None,
+        system_prompt: None,
+    }];
+    batch_add_agents(&config_path, &agents).unwrap();
+
+    let raw = RawConfig::load(&config_path).expect("RawConfig::load should succeed");
+    let config = raw.resolve();
+    config.validate().expect("Config::validate should succeed");
+
+    let provider = &config.providers["vertex-anthropic"];
+    assert_eq!(provider.provider_type, ProviderType::VertexAnthropic);
+    assert_eq!(provider.vertex_project.as_deref(), Some("my-project"));
+    assert_eq!(provider.vertex_location.as_deref(), Some("global"));
+    assert!(config.agents[0].enable_web_search);
+}

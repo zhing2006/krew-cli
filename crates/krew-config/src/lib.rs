@@ -324,7 +324,7 @@ pub struct SamplingConfig {
 /// LLM provider SDK configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProviderConfig {
-    /// Provider type: openai, anthropic, google.
+    /// Provider type: openai, anthropic, google, vertex-anthropic.
     #[serde(rename = "type")]
     pub provider_type: ProviderType,
     /// API key value (not recommended; prefer `api_key_env`).
@@ -364,6 +364,31 @@ pub enum ProviderType {
     Anthropic,
     /// Google Gemini API.
     Google,
+    /// Claude on Google Vertex AI.
+    #[serde(rename = "vertex-anthropic")]
+    VertexAnthropic,
+}
+
+impl ProviderType {
+    /// Return the TOML string representation for this provider type.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenAI => "openai",
+            Self::Anthropic => "anthropic",
+            Self::Google => "google",
+            Self::VertexAnthropic => "vertex-anthropic",
+        }
+    }
+
+    /// Return a human-readable provider type label for CLI output.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::OpenAI => "OpenAI",
+            Self::Anthropic => "Anthropic",
+            Self::Google => "Google",
+            Self::VertexAnthropic => "Vertex Anthropic",
+        }
+    }
 }
 
 /// MCP (Model Context Protocol) server configuration.

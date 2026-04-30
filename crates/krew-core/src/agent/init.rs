@@ -5,7 +5,7 @@ use std::sync::Arc;
 use krew_config::{ApiType, Config, ProviderType};
 use krew_llm::{
     AnthropicClient, GoogleClient, LlmClient, LlmClientConfig, OpenAiChatClient,
-    OpenAiResponsesClient,
+    OpenAiResponsesClient, VertexAnthropicClient,
 };
 use krew_tools::ToolRegistry;
 use krew_tools::builtin::SkillInfo;
@@ -141,6 +141,36 @@ pub fn init_agents(config: &Config, cwd: Option<PathBuf>) -> InitAgentsResult {
             continue;
         };
 
+        let vertex_anthropic_location = if provider_config.provider_type
+            == ProviderType::VertexAnthropic
+        {
+            let Some(project) = provider_config
+                .vertex_project
+                .as_deref()
+                .filter(|value| !value.is_empty())
+            else {
+                warnings.push(format!(
+                    "Agent '{}': vertex_project missing for vertex-anthropic provider '{}', skipped",
+                    agent_config.name, agent_config.provider
+                ));
+                continue;
+            };
+            let Some(location) = provider_config
+                .vertex_location
+                .as_deref()
+                .filter(|value| !value.is_empty())
+            else {
+                warnings.push(format!(
+                    "Agent '{}': vertex_location missing for vertex-anthropic provider '{}', skipped",
+                    agent_config.name, agent_config.provider
+                ));
+                continue;
+            };
+            Some((project.to_string(), location.to_string()))
+        } else {
+            None
+        };
+
         // Build shared client config.
         let extra_headers: Vec<(String, String)> = provider_config
             .extra_headers
@@ -176,6 +206,11 @@ pub fn init_agents(config: &Config, cwd: Option<PathBuf>) -> InitAgentsResult {
                 provider_config.vertex_project.as_deref(),
                 provider_config.vertex_location.as_deref(),
             )),
+            ProviderType::VertexAnthropic => {
+                let (project, location) = vertex_anthropic_location
+                    .expect("vertex-anthropic project and location validated");
+                Arc::new(VertexAnthropicClient::new(client_config, project, location))
+            }
         };
 
         // Create tool registry for this agent.
@@ -261,5 +296,76 @@ pub fn register_sub_agents(
         if let Some(registry) = Arc::get_mut(&mut runtime.tools) {
             registry.register(spec, Box::new(tool));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use krew_config::{AgentConfig, ProviderConfig};
+
+    fn vertex_anthropic_config(project: Option<&str>, location: Option<&str>) -> Config {
+        let mut config = Config::default();
+        config.agents.push(AgentConfig {
+            name: "claude".into(),
+            display_name: "Claude".into(),
+            provider: "vertex-anthropic".into(),
+            model: "claude-opus-4-7".into(),
+            api_type: None,
+            color: "blue".into(),
+            system_prompt: None,
+            tools: false,
+            enable_web_search: true,
+            sampling: None,
+            enable_thinking: false,
+            thinking_effort: None,
+        });
+        config.providers.insert(
+            "vertex-anthropic".into(),
+            ProviderConfig {
+                provider_type: ProviderType::VertexAnthropic,
+                api_key: Some("ya29.token".into()),
+                api_key_env: None,
+                base_url: Some("https://litellm.example.com/vertex_ai".into()),
+                vertex_project: project.map(str::to_string),
+                vertex_location: location.map(str::to_string),
+                extra_headers: None,
+            },
+        );
+        config
+    }
+
+    #[test]
+    fn init_agents_creates_vertex_anthropic_agent() {
+        let config = vertex_anthropic_config(Some("proj"), Some("global"));
+        let result = init_agents(&config, None);
+        assert!(result.warnings.is_empty());
+        assert!(result.agents.contains_key("claude"));
+    }
+
+    #[test]
+    fn init_agents_skips_vertex_anthropic_missing_project() {
+        let config = vertex_anthropic_config(None, Some("global"));
+        let result = init_agents(&config, None);
+        assert!(!result.agents.contains_key("claude"));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("vertex_project missing"))
+        );
+    }
+
+    #[test]
+    fn init_agents_skips_vertex_anthropic_missing_location() {
+        let config = vertex_anthropic_config(Some("proj"), None);
+        let result = init_agents(&config, None);
+        assert!(!result.agents.contains_key("claude"));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("vertex_location missing"))
+        );
     }
 }

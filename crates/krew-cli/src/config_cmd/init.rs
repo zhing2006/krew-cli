@@ -110,7 +110,13 @@ async fn run_user_init(user_path: &std::path::Path) -> anyhow::Result<()> {
 /// Collect data for a single provider via interactive prompts.
 pub fn collect_provider_data(existing_names: &[String]) -> anyhow::Result<ProviderWriteData> {
     // 1. Select provider type.
-    let type_labels = &["Anthropic", "OpenAI", "Google", "OpenAI-Compatible"];
+    let type_labels = &[
+        "Anthropic",
+        "OpenAI",
+        "Google",
+        "Vertex Anthropic",
+        "OpenAI-Compatible",
+    ];
     let type_idx = Select::new()
         .with_prompt("Select provider type")
         .items(type_labels)
@@ -121,7 +127,8 @@ pub fn collect_provider_data(existing_names: &[String]) -> anyhow::Result<Provid
         0 => (ProviderType::Anthropic, false),
         1 => (ProviderType::OpenAI, false),
         2 => (ProviderType::Google, false),
-        3 => (ProviderType::OpenAI, true),
+        3 => (ProviderType::VertexAnthropic, false),
+        4 => (ProviderType::OpenAI, true),
         _ => unreachable!(),
     };
 
@@ -130,7 +137,8 @@ pub fn collect_provider_data(existing_names: &[String]) -> anyhow::Result<Provid
         0 => "anthropic",
         1 => "openai",
         2 => "google",
-        3 => "openai-compatible",
+        3 => "vertex-anthropic",
+        4 => "openai-compatible",
         _ => "provider",
     };
     let suggested_name = unique_name(base_name, existing_names);
@@ -166,7 +174,8 @@ pub fn collect_provider_data(existing_names: &[String]) -> anyhow::Result<Provid
             0 => "ANTHROPIC_API_KEY",
             1 => "OPENAI_API_KEY",
             2 => "GOOGLE_API_KEY",
-            3 => "OPENAI_API_KEY",
+            3 => "VERTEX_ANTHROPIC_API_KEY",
+            4 => "OPENAI_API_KEY",
             _ => "API_KEY",
         };
         let env_name: String = Input::new()
@@ -175,7 +184,12 @@ pub fn collect_provider_data(existing_names: &[String]) -> anyhow::Result<Provid
             .interact_text()?;
         (None, Some(env_name))
     } else {
-        let key: String = Password::new().with_prompt("API key").interact()?;
+        let key_prompt = if provider_type == ProviderType::VertexAnthropic {
+            "Bearer token"
+        } else {
+            "API key"
+        };
+        let key: String = Password::new().with_prompt(key_prompt).interact()?;
         (Some(key), None)
     };
 
@@ -183,6 +197,16 @@ pub fn collect_provider_data(existing_names: &[String]) -> anyhow::Result<Provid
     let base_url = if is_compatible {
         let url: String = Input::new().with_prompt("Base URL").interact_text()?;
         Some(url)
+    } else if provider_type == ProviderType::VertexAnthropic {
+        let url: String = Input::new()
+            .with_prompt("Base URL (empty for Google Vertex AI)")
+            .allow_empty(true)
+            .interact_text()?;
+        if url.trim().is_empty() {
+            None
+        } else {
+            Some(url)
+        }
     } else {
         let default_url = match type_idx {
             0 => "https://api.anthropic.com",
@@ -197,8 +221,17 @@ pub fn collect_provider_data(existing_names: &[String]) -> anyhow::Result<Provid
         if url == default_url { None } else { Some(url) }
     };
 
-    // 5. Google: Gemini API vs Vertex AI.
-    let (vertex_project, vertex_location) = if provider_type == ProviderType::Google {
+    // 5. Vertex fields.
+    let (vertex_project, vertex_location) = if provider_type == ProviderType::VertexAnthropic {
+        let project: String = Input::new()
+            .with_prompt("Vertex AI project ID")
+            .interact_text()?;
+        let location: String = Input::new()
+            .with_prompt("Vertex AI location")
+            .default("global".to_string())
+            .interact_text()?;
+        (Some(project), Some(location))
+    } else if provider_type == ProviderType::Google {
         let google_modes = &["Gemini API", "Vertex AI"];
         let mode_idx = Select::new()
             .with_prompt("Google API mode")
@@ -696,11 +729,7 @@ fn prompt_api_type_if_compatible(
 }
 
 fn provider_type_label(t: ProviderType) -> &'static str {
-    match t {
-        ProviderType::OpenAI => "OpenAI",
-        ProviderType::Anthropic => "Anthropic",
-        ProviderType::Google => "Google",
-    }
+    t.label()
 }
 
 fn print_provider_summary(providers: &[(String, ProviderConfig)]) {

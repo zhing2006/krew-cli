@@ -180,27 +180,35 @@ Merge rules (project config takes precedence):
 
 ─── [providers.<name>] ───────────────────────────────────────────────────────
 
-  type                       "openai" | "anthropic" | "google"   (required)
+  type                       "openai" | "anthropic" | "google" |
+                             "vertex-anthropic"   (required)
                              Provider type. "openai" also covers OpenAI-compatible
-                             services via base_url.
+                             services via base_url. "vertex-anthropic" calls
+                             Claude on Google Vertex AI.
 
   api_key                    String
                              API key value (not recommended; prefer api_key_env).
 
   api_key_env                String
                              Environment variable name holding the API key.
+                             For vertex-anthropic, api_key/api_key_env is a
+                             Bearer token source: Google OAuth access token or
+                             LiteLLM virtual key.
 
   base_url                   String
                              Custom API endpoint URL. Use for OpenAI-compatible services
-                             or self-hosted proxies.
+                             or self-hosted proxies. For vertex-anthropic, omit
+                             for Google official Vertex endpoint or set to a
+                             LiteLLM Vertex passthrough root such as
+                             https://litellm.example.com/vertex_ai.
 
   vertex_project             String
                              Google Vertex AI project ID. Setting this enables Vertex AI
-                             mode (google provider only).
+                             mode for google, and is required for vertex-anthropic.
 
   vertex_location            String
                              Google Vertex AI location, e.g. "us-central1"
-                             (google provider only).
+                             or "global". Required for vertex-anthropic.
 
   extra_headers              Table (key-value pairs)
                              Extra HTTP headers for chat/inference requests.
@@ -335,6 +343,13 @@ Merge rules (project config takes precedence):
   [providers.google]
   type = "google"
   api_key_env = "GEMINI_API_KEY"
+
+  [providers.vertex-anthropic]
+  type = "vertex-anthropic"
+  api_key_env = "VERTEX_ANTHROPIC_API_KEY"
+  vertex_project = "my-project"
+  vertex_location = "global"
+  # base_url = "https://litellm.example.com/vertex_ai"
 
   [settings]
   approval_mode = "auto-edit"

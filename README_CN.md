@@ -82,6 +82,7 @@ cargo install --path crates/krew-cli
 | OpenAI | GPT-5.2 | Responses / Chat Completions |
 | Anthropic | Claude Opus 4.6, Sonnet 4.6 | Messages |
 | Google | Gemini 3.1 Pro | generateContent（+ Vertex AI） |
+| Vertex Anthropic | Claude Opus 4.7, Sonnet 4.6 | Vertex AI Claude `streamRawPredict` |
 | OpenAI 兼容 | 豆包、LiteLLM 等 | Responses / Chat Completions |
 
 ## 快速开始
@@ -110,6 +111,7 @@ Select provider type:
 > Anthropic
   OpenAI
   Google
+  Vertex Anthropic
   OpenAI-Compatible
 Provider name [anthropic]: ↵
 API key storage method:
@@ -148,6 +150,7 @@ krew
 npm install -g @zhing2026/krew
 export OPENAI_API_KEY="sk-..."
 export ANTHROPIC_API_KEY="sk-ant-..."
+export VERTEX_ANTHROPIC_API_KEY="$(gcloud auth print-access-token)"
 ```
 
 创建 `~/.krew/settings.toml`（用户级——跨项目共享）：
@@ -160,6 +163,14 @@ api_key_env = "OPENAI_API_KEY"
 [providers.anthropic]
 type = "anthropic"
 api_key_env = "ANTHROPIC_API_KEY"
+
+[providers.vertex-anthropic]
+type = "vertex-anthropic"
+api_key_env = "VERTEX_ANTHROPIC_API_KEY"
+vertex_project = "my-project"
+vertex_location = "global"
+# 可选 LiteLLM Vertex passthrough root:
+# base_url = "https://litellm.example.com/vertex_ai"
 ```
 
 在项目目录下创建 `.krew/settings.toml`（项目级——Agent 定义）：

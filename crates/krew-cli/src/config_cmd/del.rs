@@ -24,17 +24,7 @@ async fn del_provider() -> anyhow::Result<()> {
 
     let labels: Vec<String> = providers
         .iter()
-        .map(|(n, c)| {
-            format!(
-                "{} ({})",
-                n,
-                match c.provider_type {
-                    krew_config::ProviderType::OpenAI => "OpenAI",
-                    krew_config::ProviderType::Anthropic => "Anthropic",
-                    krew_config::ProviderType::Google => "Google",
-                }
-            )
-        })
+        .map(|(n, c)| format!("{} ({})", n, c.provider_type.label()))
         .collect();
 
     let idx = Select::new()

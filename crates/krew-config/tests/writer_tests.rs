@@ -146,6 +146,48 @@ fn add_provider_with_vertex_fields() {
 }
 
 #[test]
+fn add_provider_with_vertex_anthropic_fields() {
+    let (dir, path) = temp_file("");
+    let mut headers = std::collections::HashMap::new();
+    headers.insert(
+        "x-pass-anthropic-beta".into(),
+        "context-1m-2025-08-07".into(),
+    );
+
+    add_provider(
+        &path,
+        &ProviderWriteData {
+            name: "vertex-anthropic".into(),
+            provider_type: ProviderType::VertexAnthropic,
+            api_key: None,
+            api_key_env: Some("VERTEX_ANTHROPIC_API_KEY".into()),
+            base_url: Some("https://litellm.example.com/vertex_ai".into()),
+            vertex_project: Some("my-project".into()),
+            vertex_location: Some("global".into()),
+            extra_headers: Some(headers),
+        },
+    )
+    .unwrap();
+
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.contains("[providers.vertex-anthropic]"));
+    assert!(content.contains("type = \"vertex-anthropic\""));
+    assert!(content.contains("api_key_env = \"VERTEX_ANTHROPIC_API_KEY\""));
+    assert!(content.contains("base_url = \"https://litellm.example.com/vertex_ai\""));
+    assert!(content.contains("vertex_project = \"my-project\""));
+    assert!(content.contains("vertex_location = \"global\""));
+    assert!(content.contains("x-pass-anthropic-beta"));
+
+    let providers = list_providers(&path).unwrap();
+    let (_, provider) = providers
+        .iter()
+        .find(|(name, _)| name == "vertex-anthropic")
+        .unwrap();
+    assert_eq!(provider.provider_type, ProviderType::VertexAnthropic);
+    drop(dir);
+}
+
+#[test]
 fn add_provider_with_base_url() {
     let (dir, path) = temp_file("");
     add_provider(
