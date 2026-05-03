@@ -148,6 +148,8 @@ artifacts:
 
       “要做什么”参考 specs，“怎么做”参考 design。
       每条任务都要可被验证 —— 你能明确知道它什么时候算做完。
+
+      **可选（SHOULD）：依赖与并行性。** 按模板末尾追加 `## N. Dependency & Parallelism`（`N` 为接续上方任务分组的下一个序号），固定三个英文子标题：`### Dependencies`、`### Parallel sets`、`### Resource contention`。`### Parallel sets` 只列真正可并行的集合；被资源竞争强制串行的对放到 `### Resource contention`。可整段省略；段内不出现任何 `- [ ]` / `- [x]` 行。
     requires:
       - specs
       - design
@@ -164,10 +166,8 @@ artifacts:
       `status: in-progress`、`rounds_completed: 0`、`session_id: null`；
       工作流每跑完一轮 reviewer 调用，就追加一节 `## Round <N>`。
 
-      字段格式由 `Core/Refine/report-format` spec 固化：必含
-      `kind`、`change`、`workflow`、`type`、`status`、`rounds_completed`、
-      `reviewer`、`session_id`、`started_at`、`updated_at`。`kind` /
-      `change` / `workflow` 一旦写入不再改写；其余字段每轮更新。
+      字段定义见 `templates/design-report.md` 模板与 `Core/Refine/report-format` spec ——
+      以这两处为准，不要从本 instruction 推断字段列表。
 
       该报告缺失不阻塞 validate / status / apply / archive 任一路径。
       archive 时该报告随 change 整体迁入
@@ -178,7 +178,7 @@ artifacts:
 
   - id: code_report
     generates: code-report.md
-    description: 由 code-refine 工作流产出的多轮代码 review 报告。工作流自身不耦合任何 VCS,审查目标由调用方在 prompt 里提供。
+    description: 由 code-refine 工作流产出的多轮代码 review 报告。工作流自身不耦合任何 VCS，审查目标由调用方在 prompt 里提供。
     template: code-report.md
     phase: review
     instruction: |
@@ -188,13 +188,28 @@ artifacts:
       `status: in-progress`、`rounds_completed: 0`、`session_id: null`；
       工作流每跑完一轮 reviewer 调用，就追加一节 `## Round <N>`。
 
-      字段格式与 `design-report.md` 同形（`kind: code-report`、
-      `workflow: code-refine`），详见 `Core/Refine/report-format` spec。
+      字段定义见 `templates/code-report.md` 模板与 `Core/Refine/report-format` spec ——
+      以这两处为准，不要从本 instruction 推断字段列表。
 
       该报告缺失不阻塞 validate / status / apply / archive 任一路径。
       archive 时该报告随 change 整体迁入
       `xd-spec/changes/archive/<name>/`，**不**会被合并到任何
       `xd-spec/specs/` 下的项目级 spec。
+    requires:
+      - tasks
+
+  - id: manifest
+    generates: manifest.yaml
+    description: 本次 apply 产出的产出物索引
+    template: manifest.yaml
+    phase: manifest
+    instruction: |
+      由 apply 工作流的末步产出（所有任务勾完后）。两个顶层键，缺一不可：
+        - `change`：change 的 id（必须等于 change 目录名）。
+        - `artifact_paths`：本次 apply 创建或修改的文件路径列表（仓库相对、正斜杠、去重）；非空。
+      不接受其它顶层键。`xd-spec validate` 仅在 manifest 存在但非法时拒绝
+      （缺失则放行，propose / apply 不被阻塞）；`xd-spec change archive`
+      会拒绝缺失或非法的 manifest。
     requires:
       - tasks
 

@@ -1,0 +1,6 @@
+# 本次 apply 产出的产出物索引。
+# `change` 必须等于 change 目录名。
+# `artifact_paths` 列出本次 apply 创建或修改的文件路径
+# （仓库相对、正斜杠、去重），每条一项。
+change: <change-name>
+artifact_paths: []
