@@ -55,7 +55,16 @@ pub struct MessageEntry {
     /// Whisper targets: agents that can see this message (TOML native array).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub whisper_targets: Option<Vec<String>>,
+    /// Extended-thinking blocks (Anthropic). Omitted from TOML when absent or
+    /// empty so pre-thinking session files load unchanged and the persistence
+    /// helper can pass `Some(vec![])` without leaving an empty array on disk.
+    #[serde(default, skip_serializing_if = "thinking_blocks_is_absent_or_empty")]
+    pub thinking_blocks: Option<Vec<ThinkingBlockEntry>>,
     pub created_at: DateTime<Utc>,
+}
+
+fn thinking_blocks_is_absent_or_empty(value: &Option<Vec<ThinkingBlockEntry>>) -> bool {
+    value.as_ref().is_none_or(Vec::is_empty)
 }
 
 /// A single tool call made by an assistant.
@@ -67,6 +76,18 @@ pub struct ToolCallEntry {
     /// Opaque thought signature (Google thinking mode).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thought_signature: Option<String>,
+}
+
+/// A single extended-thinking block persisted on an assistant message.
+///
+/// The `block_type` tag distinguishes the two Anthropic variants and lets the
+/// TOML form omit `text`/`signature` for redacted blocks. New variants can be
+/// added later without breaking older session files.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "block_type", rename_all = "snake_case")]
+pub enum ThinkingBlockEntry {
+    Thinking { text: String, signature: String },
+    RedactedThinking { data: String },
 }
 
 /// A server-side tool use (e.g. web_search) recorded for resume display.

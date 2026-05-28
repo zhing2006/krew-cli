@@ -5,7 +5,8 @@
 
 use crate::common::{self, AuthMode, RequestConfig, RoleContent, merge_consecutive_same_role};
 use crate::{
-    ChatMessage, ChatRole, LlmClient, LlmClientConfig, LlmError, StreamEvent, ToolDefinition, Usage,
+    ChatMessage, ChatRole, LlmClient, LlmClientConfig, LlmError, StreamEvent, ThinkingBlock,
+    ToolDefinition, Usage,
 };
 use futures::Stream;
 use krew_config::OtherAgentRole;
@@ -15,6 +16,13 @@ use std::pin::Pin;
 
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 pub(crate) const ANTHROPIC_VERSION: &str = "2023-06-01";
+
+// Anthropic SSE / Messages API protocol strings shared between the request
+// serialiser (thinking_blocks_to_json) and the SSE state machine.
+const BLOCK_TYPE_THINKING: &str = "thinking";
+const BLOCK_TYPE_REDACTED_THINKING: &str = "redacted_thinking";
+const DELTA_TYPE_THINKING: &str = "thinking_delta";
+const DELTA_TYPE_SIGNATURE: &str = "signature_delta";
 
 /// Anthropic Messages API client.
 pub struct AnthropicClient {
@@ -163,11 +171,20 @@ pub(crate) fn convert_messages(
             continue;
         }
 
+        let is_other_agent = matches!(&msg.role, ChatRole::Assistant)
+            && msg
+                .name
+                .as_ref()
+                .is_some_and(|name| name != self_agent_name);
+
         // Assistant messages with tool_calls: Anthropic uses tool_use content blocks.
         if let (ChatRole::Assistant, Some(tcs)) = (&msg.role, &msg.tool_calls) {
             flush_pending_anthropic(&mut pending, &mut result);
 
             let mut content_blocks: Vec<serde_json::Value> = Vec::new();
+            if !is_other_agent {
+                content_blocks.extend(thinking_blocks_to_json(&msg.thinking_blocks));
+            }
             if !msg.content.is_empty() {
                 content_blocks.push(serde_json::json!({
                     "type": "text",
@@ -191,13 +208,30 @@ pub(crate) fn convert_messages(
             continue;
         }
 
-        // Regular messages.
-        let is_other_agent = matches!(&msg.role, ChatRole::Assistant)
-            && msg
-                .name
-                .as_ref()
-                .is_some_and(|name| name != self_agent_name);
+        // Current-agent assistant with thinking blocks but no tool_calls:
+        // emit as a discrete assistant message preserving block order so the
+        // signature accompanies the terminal turn.
+        if matches!(msg.role, ChatRole::Assistant)
+            && !is_other_agent
+            && !msg.thinking_blocks.is_empty()
+        {
+            flush_pending_anthropic(&mut pending, &mut result);
 
+            let mut content_blocks = thinking_blocks_to_json(&msg.thinking_blocks);
+            if !msg.content.is_empty() {
+                content_blocks.push(serde_json::json!({
+                    "type": "text",
+                    "text": msg.content,
+                }));
+            }
+            result.push(serde_json::json!({
+                "role": "assistant",
+                "content": content_blocks,
+            }));
+            continue;
+        }
+
+        // Regular messages.
         let role = match &msg.role {
             ChatRole::User | ChatRole::Tool => "user",
             ChatRole::Assistant if is_other_agent => match other_agent_role {
@@ -229,6 +263,28 @@ pub(crate) fn convert_messages(
         system,
         messages: result,
     }
+}
+
+/// Serialize a slice of `ThinkingBlock`s into Anthropic content-block JSON.
+///
+/// `Thinking` becomes `{"type":"thinking","thinking":...,"signature":...}` and
+/// `Redacted` becomes `{"type":"redacted_thinking","data":...}`. Order is
+/// preserved so the caller can prepend the result directly to a content array.
+fn thinking_blocks_to_json(blocks: &[ThinkingBlock]) -> Vec<serde_json::Value> {
+    blocks
+        .iter()
+        .map(|block| match block {
+            ThinkingBlock::Thinking { text, signature } => serde_json::json!({
+                "type": BLOCK_TYPE_THINKING,
+                "thinking": text,
+                "signature": signature,
+            }),
+            ThinkingBlock::Redacted { data } => serde_json::json!({
+                "type": BLOCK_TYPE_REDACTED_THINKING,
+                "data": data,
+            }),
+        })
+        .collect()
 }
 
 /// Merge and flush pending role-content items into the result vector.
@@ -420,6 +476,13 @@ struct SseState {
     tool_name: String,
     /// Accumulated tool_use arguments JSON.
     tool_args: String,
+    /// Accumulated text for the current `thinking` content block.
+    thinking_text: String,
+    /// Signature string collected from `signature_delta` events for the
+    /// current `thinking` block.
+    thinking_signature: String,
+    /// Opaque `data` field captured from a `redacted_thinking` content block.
+    redacted_data: Option<String>,
 }
 
 /// Parse Anthropic SSE events into StreamEvents.
@@ -488,6 +551,21 @@ pub(crate) fn build_event_stream(
                                         state.tool_args.clear();
                                     }
 
+                                    if block_type == BLOCK_TYPE_THINKING {
+                                        state.thinking_text.clear();
+                                        state.thinking_signature.clear();
+                                        state.redacted_data = None;
+                                    }
+
+                                    if block_type == BLOCK_TYPE_REDACTED_THINKING {
+                                        state.thinking_text.clear();
+                                        state.thinking_signature.clear();
+                                        state.redacted_data = block
+                                            .get("data")
+                                            .and_then(|d| d.as_str())
+                                            .map(str::to_string);
+                                    }
+
                                     // Server-side tool (e.g. web_search): emit start,
                                     // accumulate input JSON, emit done at content_block_stop.
                                     if block_type == "server_tool_use" {
@@ -530,11 +608,12 @@ pub(crate) fn build_event_stream(
                                                 ));
                                             }
                                         }
-                                        "thinking_delta" => {
+                                        DELTA_TYPE_THINKING => {
                                             if let Some(thinking) =
                                                 delta.get("thinking").and_then(|t| t.as_str())
                                                 && !thinking.is_empty()
                                             {
+                                                state.thinking_text.push_str(thinking);
                                                 return Some((
                                                     StreamEvent::ThinkingDelta(
                                                         thinking.to_string(),
@@ -551,8 +630,12 @@ pub(crate) fn build_event_stream(
                                                 state.tool_args.push_str(json);
                                             }
                                         }
-                                        "signature_delta" => {
-                                            // Internal — ignore.
+                                        DELTA_TYPE_SIGNATURE => {
+                                            if let Some(sig) =
+                                                delta.get("signature").and_then(|s| s.as_str())
+                                            {
+                                                state.thinking_signature.push_str(sig);
+                                            }
                                         }
                                         _ => {}
                                     }
@@ -593,6 +676,62 @@ pub(crate) fn build_event_stream(
                                     state.tool_name.clear();
                                     state.tool_args.clear();
                                     return Some((event, (sse_stream, state, done)));
+                                }
+                                if state.current_block_type.as_deref() == Some(BLOCK_TYPE_THINKING)
+                                {
+                                    let text = std::mem::take(&mut state.thinking_text);
+                                    let signature = std::mem::take(&mut state.thinking_signature);
+                                    state.current_block_type = None;
+                                    state.redacted_data = None;
+                                    // A thinking block without a signature is illegal
+                                    // replay state — emitting it would persist a block
+                                    // that the next request would reject with HTTP 400.
+                                    // Treat as fatal so direct stream consumers cannot
+                                    // observe a later `Done` after the error.
+                                    if signature.is_empty() {
+                                        done = true;
+                                        return Some((
+                                            StreamEvent::Error(
+                                                "Anthropic thinking block missing signature".into(),
+                                            ),
+                                            (sse_stream, state, done),
+                                        ));
+                                    }
+                                    return Some((
+                                        StreamEvent::ThinkingBlockDone(ThinkingBlock::Thinking {
+                                            text,
+                                            signature,
+                                        }),
+                                        (sse_stream, state, done),
+                                    ));
+                                }
+                                if state.current_block_type.as_deref()
+                                    == Some(BLOCK_TYPE_REDACTED_THINKING)
+                                {
+                                    let data = state.redacted_data.take();
+                                    state.thinking_text.clear();
+                                    state.thinking_signature.clear();
+                                    state.current_block_type = None;
+                                    // Missing `data` means the upstream content_block_start
+                                    // never carried the opaque payload — replaying an empty
+                                    // redacted_thinking block would be rejected with HTTP 400.
+                                    // Fatal: do not let later events surface a `Done` after this.
+                                    let Some(data) = data else {
+                                        done = true;
+                                        return Some((
+                                            StreamEvent::Error(
+                                                "Anthropic redacted_thinking block missing data"
+                                                    .into(),
+                                            ),
+                                            (sse_stream, state, done),
+                                        ));
+                                    };
+                                    return Some((
+                                        StreamEvent::ThinkingBlockDone(ThinkingBlock::Redacted {
+                                            data,
+                                        }),
+                                        (sse_stream, state, done),
+                                    ));
                                 }
                                 state.current_block_type = None;
                                 continue;
@@ -759,7 +898,52 @@ impl LlmClient for AnthropicClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ToolCallInfo;
+    use futures::StreamExt;
     use krew_config::SamplingConfig;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    /// Spin up a one-shot TCP server that returns `response_body` as the
+    /// HTTP body and returns the URL the client should hit. The server only
+    /// handles a single request and then exits.
+    async fn run_sse_server(response_body: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = Vec::new();
+            loop {
+                let mut chunk = [0u8; 1024];
+                let n = socket.read(&mut chunk).await.unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                buffer.extend_from_slice(&chunk[..n]);
+                if buffer.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+        format!("http://{addr}/")
+    }
+
+    async fn collect_sse_events(sse: &'static str) -> Vec<StreamEvent> {
+        let url = run_sse_server(sse).await;
+        let response = reqwest::get(&url).await.unwrap();
+        let mut stream = Box::pin(build_event_stream(response));
+        let mut events = Vec::new();
+        while let Some(event) = stream.next().await {
+            events.push(event);
+        }
+        events
+    }
 
     // ---- SSE parsing tests (5.8) ----
 
@@ -799,7 +983,289 @@ mod tests {
         let data = r#"{"delta":{"type":"signature_delta","signature":"abc"}}"#;
         let v: serde_json::Value = serde_json::from_str(data).unwrap();
         assert_eq!(v["delta"]["type"].as_str(), Some("signature_delta"));
-        // signature_delta should be silently ignored (no StreamEvent).
+    }
+
+    // ---- Thinking block aggregation tests (2.5) ----
+
+    #[tokio::test]
+    async fn sse_thinking_block_aggregates_text_and_signature() {
+        let sse = "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n\
+                   event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"Step 1 \"}}\n\n\
+                   event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"and Step 2.\"}}\n\n\
+                   event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"sig-xyz\"}}\n\n\
+                   event: content_block_stop\ndata: {\"index\":0}\n\n\
+                   event: message_delta\ndata: {\"usage\":{\"output_tokens\":3}}\n\n\
+                   event: message_stop\ndata: {}\n\n";
+        let events = collect_sse_events(sse).await;
+
+        let deltas: Vec<&String> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ThinkingDelta(text) => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(deltas.len(), 2);
+        assert_eq!(deltas[0], "Step 1 ");
+        assert_eq!(deltas[1], "and Step 2.");
+
+        let block = events
+            .iter()
+            .find_map(|e| match e {
+                StreamEvent::ThinkingBlockDone(block) => Some(block.clone()),
+                _ => None,
+            })
+            .expect("ThinkingBlockDone must be emitted");
+        assert_eq!(
+            block,
+            ThinkingBlock::Thinking {
+                text: "Step 1 and Step 2.".to_string(),
+                signature: "sig-xyz".to_string(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn sse_redacted_thinking_block_emits_redacted_variant_no_delta() {
+        let sse = "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"redacted_thinking\",\"data\":\"opaque-blob\"}}\n\n\
+                   event: content_block_stop\ndata: {\"index\":0}\n\n\
+                   event: message_delta\ndata: {\"usage\":{\"output_tokens\":1}}\n\n\
+                   event: message_stop\ndata: {}\n\n";
+        let events = collect_sse_events(sse).await;
+
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::ThinkingDelta(_))),
+            "redacted_thinking must not emit ThinkingDelta"
+        );
+
+        let block = events
+            .iter()
+            .find_map(|e| match e {
+                StreamEvent::ThinkingBlockDone(block) => Some(block.clone()),
+                _ => None,
+            })
+            .expect("ThinkingBlockDone must be emitted");
+        assert_eq!(
+            block,
+            ThinkingBlock::Redacted {
+                data: "opaque-blob".to_string(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn sse_signature_delta_no_longer_ignored() {
+        let sse = "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n\
+                   event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"think\"}}\n\n\
+                   event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"captured-sig\"}}\n\n\
+                   event: content_block_stop\ndata: {\"index\":0}\n\n\
+                   event: message_stop\ndata: {}\n\n";
+        let events = collect_sse_events(sse).await;
+
+        let signature = events
+            .iter()
+            .find_map(|e| match e {
+                StreamEvent::ThinkingBlockDone(ThinkingBlock::Thinking { signature, .. }) => {
+                    Some(signature.clone())
+                }
+                _ => None,
+            })
+            .expect("Thinking block with signature must be emitted");
+        assert_eq!(signature, "captured-sig");
+    }
+
+    #[tokio::test]
+    async fn sse_interrupted_thinking_block_does_not_emit_done() {
+        // Stream ends before content_block_stop arrives.
+        let sse = "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n\
+                   event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"partial\"}}\n\n";
+        let events = collect_sse_events(sse).await;
+
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::ThinkingBlockDone(_))),
+            "incomplete thinking block must not emit ThinkingBlockDone"
+        );
+    }
+
+    #[tokio::test]
+    async fn sse_thinking_block_without_signature_emits_error_no_done() {
+        // content_block_stop arrives but no signature_delta was ever seen —
+        // emitting a block with an empty signature would be replayed verbatim
+        // and rejected by Anthropic with HTTP 400. The Error must also be
+        // terminal so downstream consumers don't observe a later `Done`.
+        let sse = "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n\
+                   event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"reasoning\"}}\n\n\
+                   event: content_block_stop\ndata: {\"index\":0}\n\n\
+                   event: message_stop\ndata: {}\n\n";
+        let events = collect_sse_events(sse).await;
+
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::ThinkingBlockDone(_))),
+            "thinking block without signature must not emit ThinkingBlockDone"
+        );
+        let err_idx = events
+            .iter()
+            .position(|e| matches!(e, StreamEvent::Error(msg) if msg.contains("missing signature")))
+            .expect("must surface a missing-signature error");
+        assert!(
+            !events[err_idx + 1..]
+                .iter()
+                .any(|e| matches!(e, StreamEvent::Done(_))),
+            "no Done event may follow a fatal malformed-thinking error"
+        );
+    }
+
+    #[tokio::test]
+    async fn sse_redacted_thinking_block_without_data_emits_error_no_done() {
+        // redacted_thinking block_start arrives without `data`. The block is
+        // unusable for replay; the parser must surface an Error rather than
+        // fabricate an empty Redacted block. The Error must also be terminal.
+        let sse = "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"redacted_thinking\"}}\n\n\
+                   event: content_block_stop\ndata: {\"index\":0}\n\n\
+                   event: message_stop\ndata: {}\n\n";
+        let events = collect_sse_events(sse).await;
+
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::ThinkingBlockDone(_))),
+            "redacted_thinking without data must not emit ThinkingBlockDone"
+        );
+        let err_idx = events
+            .iter()
+            .position(|e| matches!(e, StreamEvent::Error(msg) if msg.contains("missing data")))
+            .expect("must surface a missing-data error");
+        assert!(
+            !events[err_idx + 1..]
+                .iter()
+                .any(|e| matches!(e, StreamEvent::Done(_))),
+            "no Done event may follow a fatal malformed-redacted error"
+        );
+    }
+
+    // ---- convert_messages thinking-block tests (3.3) ----
+
+    fn assistant_with_thinking_and_tool_call(
+        agent_name: &str,
+        blocks: Vec<ThinkingBlock>,
+    ) -> ChatMessage {
+        ChatMessage {
+            role: ChatRole::Assistant,
+            content: "I'll use a tool.".to_string(),
+            name: Some(agent_name.to_string()),
+            tool_calls: Some(vec![ToolCallInfo {
+                id: "tool_1".to_string(),
+                name: "read_file".to_string(),
+                arguments: r#"{"path":"a.rs"}"#.to_string(),
+                thought_signature: None,
+            }]),
+            tool_call_id: None,
+            server_tool_uses: Vec::new(),
+            addressee: None,
+            whisper_targets: None,
+            created_at: chrono::Utc::now(),
+            usage: None,
+            images: Vec::new(),
+            thinking_blocks: blocks,
+        }
+    }
+
+    fn assistant_thinking_only(
+        agent_name: &str,
+        content: &str,
+        blocks: Vec<ThinkingBlock>,
+    ) -> ChatMessage {
+        ChatMessage {
+            role: ChatRole::Assistant,
+            content: content.to_string(),
+            name: Some(agent_name.to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+            server_tool_uses: Vec::new(),
+            addressee: None,
+            whisper_targets: None,
+            created_at: chrono::Utc::now(),
+            usage: None,
+            images: Vec::new(),
+            thinking_blocks: blocks,
+        }
+    }
+
+    #[test]
+    fn convert_assistant_with_thinking_and_tool_use() {
+        let msg = assistant_with_thinking_and_tool_call(
+            "agent1",
+            vec![ThinkingBlock::Thinking {
+                text: "think first".to_string(),
+                signature: "sig-abc".to_string(),
+            }],
+        );
+        let result = convert_messages(&[msg], "agent1", &OtherAgentRole::User);
+        let blocks = result.messages[0]["content"].as_array().unwrap();
+        assert_eq!(blocks[0]["type"], "thinking");
+        assert_eq!(blocks[0]["thinking"], "think first");
+        assert_eq!(blocks[0]["signature"], "sig-abc");
+        assert_eq!(blocks[1]["type"], "text");
+        assert_eq!(blocks[2]["type"], "tool_use");
+        assert_eq!(blocks[2]["id"], "tool_1");
+    }
+
+    #[test]
+    fn convert_assistant_with_redacted_thinking() {
+        let msg = assistant_with_thinking_and_tool_call(
+            "agent1",
+            vec![ThinkingBlock::Redacted {
+                data: "opaque".to_string(),
+            }],
+        );
+        let result = convert_messages(&[msg], "agent1", &OtherAgentRole::User);
+        let first = &result.messages[0]["content"][0];
+        assert_eq!(first["type"], "redacted_thinking");
+        assert_eq!(first["data"], "opaque");
+        assert!(first.get("thinking").is_none());
+        assert!(first.get("signature").is_none());
+    }
+
+    #[test]
+    fn convert_other_agent_thinking_dropped() {
+        let msg = assistant_with_thinking_and_tool_call(
+            "other-agent",
+            vec![ThinkingBlock::Thinking {
+                text: "secret".to_string(),
+                signature: "sig".to_string(),
+            }],
+        );
+        let result = convert_messages(&[msg], "agent1", &OtherAgentRole::Assistant);
+        let blocks = result.messages[0]["content"].as_array().unwrap();
+        for block in blocks {
+            assert_ne!(block["type"], "thinking");
+            assert_ne!(block["type"], "redacted_thinking");
+        }
+    }
+
+    #[test]
+    fn convert_assistant_thinking_only_no_tool_use() {
+        let msg = assistant_thinking_only(
+            "agent1",
+            "final answer",
+            vec![ThinkingBlock::Thinking {
+                text: "deliberation".to_string(),
+                signature: "sig-end".to_string(),
+            }],
+        );
+        let result = convert_messages(&[msg], "agent1", &OtherAgentRole::User);
+        assert_eq!(result.messages.len(), 1);
+        let blocks = result.messages[0]["content"].as_array().unwrap();
+        assert_eq!(blocks[0]["type"], "thinking");
+        assert_eq!(blocks[0]["signature"], "sig-end");
+        assert_eq!(blocks[1]["type"], "text");
+        assert_eq!(blocks[1]["text"], "final answer");
     }
 
     #[test]
@@ -1424,6 +1890,7 @@ mod tests {
                 media_type: "image/png".to_string(),
                 filename: Some("test.png".to_string()),
             }],
+            thinking_blocks: Vec::new(),
         };
         let converted = convert_messages(&[msg], "agent", &OtherAgentRole::User);
         let tool_result = &converted.messages[0]["content"][0];
@@ -1454,6 +1921,7 @@ mod tests {
             created_at: chrono::Utc::now(),
             usage: None,
             images: vec![],
+            thinking_blocks: Vec::new(),
         };
         let converted = convert_messages(&[msg], "agent", &OtherAgentRole::User);
         let tool_result = &converted.messages[0]["content"][0];
@@ -1461,5 +1929,201 @@ mod tests {
         // content should be a plain string, not an array
         assert!(tool_result["content"].is_string());
         assert_eq!(tool_result["content"], "file content here");
+    }
+
+    // ---- End-to-end thinking + tool_use replay test (8.1) ----
+
+    struct CapturedRequest {
+        body: serde_json::Value,
+    }
+
+    /// Run a server that handles two sequential POSTs. The first reply is
+    /// `first_sse`; the second reply is `second_sse`. Returns the body the
+    /// client sent on the second POST.
+    async fn run_two_request_server(
+        first_sse: &'static str,
+        second_sse: &'static str,
+    ) -> (String, tokio::task::JoinHandle<CapturedRequest>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            // First request: discard body, send first_sse.
+            let (mut socket, _) = listener.accept().await.unwrap();
+            consume_http_request(&mut socket).await;
+            write_http_response(&mut socket, first_sse).await;
+            drop(socket);
+
+            // Second request: capture body, send second_sse.
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let body = consume_http_request(&mut socket).await;
+            write_http_response(&mut socket, second_sse).await;
+            CapturedRequest {
+                body: serde_json::from_slice(&body).unwrap(),
+            }
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    async fn consume_http_request(socket: &mut tokio::net::TcpStream) -> Vec<u8> {
+        let mut buffer = Vec::new();
+        let mut content_length: usize = 0;
+        loop {
+            let mut chunk = [0u8; 1024];
+            let n = socket.read(&mut chunk).await.unwrap_or(0);
+            if n == 0 {
+                break;
+            }
+            buffer.extend_from_slice(&chunk[..n]);
+            let request = String::from_utf8_lossy(&buffer);
+            if let Some(header_end) = request.find("\r\n\r\n") {
+                content_length = request[..header_end]
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                let body_len = buffer.len() - header_end - 4;
+                if body_len >= content_length {
+                    break;
+                }
+            }
+        }
+        let header_end = String::from_utf8_lossy(&buffer).find("\r\n\r\n").unwrap();
+        let body_start = header_end + 4;
+        buffer[body_start..body_start + content_length].to_vec()
+    }
+
+    async fn write_http_response(socket: &mut tokio::net::TcpStream, body: &str) {
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn end_to_end_thinking_block_replayed_on_second_turn() {
+        // First SSE: thinking + tool_use.
+        let first_sse = "event: message_start\ndata: {\"message\":{\"usage\":{\"input_tokens\":5}}}\n\n\
+                         event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n\
+                         event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"I will read the file\"}}\n\n\
+                         event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"e2e-sig\"}}\n\n\
+                         event: content_block_stop\ndata: {\"index\":0}\n\n\
+                         event: content_block_start\ndata: {\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"read_file\"}}\n\n\
+                         event: content_block_delta\ndata: {\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\\\"a.rs\\\"}\"}}\n\n\
+                         event: content_block_stop\ndata: {\"index\":1}\n\n\
+                         event: message_delta\ndata: {\"usage\":{\"output_tokens\":3}}\n\n\
+                         event: message_stop\ndata: {}\n\n";
+        let second_sse = "event: message_stop\ndata: {}\n\n";
+        let (base_url, handle) = run_two_request_server(first_sse, second_sse).await;
+
+        let config = LlmClientConfig {
+            agent_name: "claude".to_string(),
+            model: "claude-opus-4-7".to_string(),
+            api_key: "test-key".to_string(),
+            base_url: Some(base_url),
+            other_agent_role: OtherAgentRole::User,
+            retry_config: krew_config::RetryConfig::default(),
+            enable_thinking: true,
+            thinking_effort: None,
+            enable_web_search: false,
+            extra_headers: Vec::new(),
+        };
+        let client = AnthropicClient::new(config);
+
+        // First request: drive the stream and aggregate thinking + tool_call.
+        let user = ChatMessage::text(ChatRole::User, "read it", None);
+        let mut stream = client
+            .chat_stream(
+                std::slice::from_ref(&user),
+                &[],
+                &SamplingConfig::default(),
+                None,
+            )
+            .await
+            .unwrap();
+        let mut aggregated = ThinkingBlock::Redacted {
+            data: String::new(),
+        };
+        let mut tool_id = String::new();
+        let mut tool_name = String::new();
+        let mut tool_args = String::new();
+        while let Some(event) = stream.next().await {
+            match event {
+                StreamEvent::ThinkingBlockDone(b) => aggregated = b,
+                StreamEvent::ToolCall {
+                    id,
+                    name,
+                    arguments,
+                    ..
+                } => {
+                    tool_id = id;
+                    tool_name = name;
+                    tool_args = arguments;
+                }
+                _ => {}
+            }
+        }
+        let (text, signature) = match aggregated {
+            ThinkingBlock::Thinking { text, signature } => (text, signature),
+            _ => panic!("first turn must aggregate a Thinking variant"),
+        };
+        assert_eq!(signature, "e2e-sig");
+
+        // Build next-turn history: user + assistant(thinking + tool_use) + tool_result.
+        let assistant = ChatMessage {
+            role: ChatRole::Assistant,
+            content: String::new(),
+            name: Some("claude".to_string()),
+            tool_calls: Some(vec![ToolCallInfo {
+                id: tool_id.clone(),
+                name: tool_name,
+                arguments: tool_args,
+                thought_signature: None,
+            }]),
+            tool_call_id: None,
+            server_tool_uses: Vec::new(),
+            addressee: None,
+            whisper_targets: None,
+            created_at: chrono::Utc::now(),
+            usage: None,
+            images: Vec::new(),
+            thinking_blocks: vec![ThinkingBlock::Thinking { text, signature }],
+        };
+        let tool_result = ChatMessage {
+            role: ChatRole::Tool,
+            content: "fn main() {}".to_string(),
+            name: Some("read_file".to_string()),
+            tool_calls: None,
+            tool_call_id: Some(tool_id),
+            server_tool_uses: Vec::new(),
+            addressee: None,
+            whisper_targets: None,
+            created_at: chrono::Utc::now(),
+            usage: None,
+            images: Vec::new(),
+            thinking_blocks: Vec::new(),
+        };
+
+        let _second_stream = client
+            .chat_stream(
+                &[user, assistant, tool_result],
+                &[],
+                &SamplingConfig::default(),
+                None,
+            )
+            .await
+            .unwrap();
+        let captured = handle.await.unwrap();
+
+        let messages = captured.body["messages"].as_array().unwrap();
+        let assistant_msg = &messages[1];
+        let content = assistant_msg["content"].as_array().unwrap();
+        assert_eq!(content[0]["type"], "thinking");
+        assert_eq!(content[0]["signature"], "e2e-sig");
+        assert_eq!(content[0]["thinking"], "I will read the file");
     }
 }

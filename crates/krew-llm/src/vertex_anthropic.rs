@@ -188,7 +188,7 @@ impl LlmClient for VertexAnthropicClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ChatRole, ToolDefinition};
+    use crate::{ChatRole, ThinkingBlock, ToolCallInfo, ToolDefinition};
     use futures::StreamExt;
     use krew_config::RetryConfig;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -434,5 +434,87 @@ mod tests {
             .unwrap();
         let captured = handle.await.unwrap();
         assert!(captured.body.get("tools").is_none());
+    }
+
+    #[tokio::test]
+    async fn replays_thinking_blocks_at_head_of_assistant_content() {
+        let sse = "event: message_stop\ndata: {}\n\n";
+        let (base_url, handle) = run_capture_server(sse).await;
+        let client = VertexAnthropicClient::new(test_config(base_url, false), "proj", "global");
+
+        let assistant = ChatMessage {
+            role: ChatRole::Assistant,
+            content: "calling tool".to_string(),
+            name: Some("claude".to_string()),
+            tool_calls: Some(vec![ToolCallInfo {
+                id: "tool_1".to_string(),
+                name: "read_file".to_string(),
+                arguments: r#"{"path":"a"}"#.to_string(),
+                thought_signature: None,
+            }]),
+            tool_call_id: None,
+            server_tool_uses: Vec::new(),
+            addressee: None,
+            whisper_targets: None,
+            created_at: chrono::Utc::now(),
+            usage: None,
+            images: Vec::new(),
+            thinking_blocks: vec![ThinkingBlock::Thinking {
+                text: "let me reason".to_string(),
+                signature: "sig-vertex".to_string(),
+            }],
+        };
+
+        let _stream = client
+            .chat_stream(&[assistant], &[], &SamplingConfig::default(), None)
+            .await
+            .unwrap();
+        let captured = handle.await.unwrap();
+
+        let blocks = captured.body["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(blocks[0]["type"], "thinking");
+        assert_eq!(blocks[0]["thinking"], "let me reason");
+        assert_eq!(blocks[0]["signature"], "sig-vertex");
+        assert!(
+            blocks
+                .iter()
+                .any(|b| b.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
+        );
+    }
+
+    #[tokio::test]
+    async fn parses_thinking_block_done_from_sse() {
+        let sse = "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n\
+                   event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"hi\"}}\n\n\
+                   event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"vsig\"}}\n\n\
+                   event: content_block_stop\ndata: {\"index\":0}\n\n\
+                   event: message_stop\ndata: {}\n\n";
+        let (base_url, handle) = run_capture_server(sse).await;
+        let client = VertexAnthropicClient::new(test_config(base_url, false), "proj", "global");
+
+        let mut stream = client
+            .chat_stream(&[], &[], &SamplingConfig::default(), None)
+            .await
+            .unwrap();
+        let mut events = Vec::new();
+        while let Some(event) = stream.next().await {
+            events.push(event);
+        }
+        let _ = handle.await.unwrap();
+
+        let block = events
+            .iter()
+            .find_map(|e| match e {
+                StreamEvent::ThinkingBlockDone(b) => Some(b.clone()),
+                _ => None,
+            })
+            .expect("Vertex SSE must emit ThinkingBlockDone");
+        assert_eq!(
+            block,
+            ThinkingBlock::Thinking {
+                text: "hi".to_string(),
+                signature: "vsig".to_string(),
+            }
+        );
     }
 }

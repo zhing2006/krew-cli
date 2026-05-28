@@ -1,3 +1,4 @@
+use crate::ThinkingBlock;
 use serde::{Deserialize, Serialize};
 
 /// Events emitted during LLM streaming responses.
@@ -15,6 +16,10 @@ pub enum StreamEvent {
     },
     /// Incremental thinking/reasoning content (if supported).
     ThinkingDelta(String),
+    /// A complete thinking block was finalized by the provider. Emitted once
+    /// per block (after all `ThinkingDelta`s for that block), carrying the
+    /// signature needed to replay the block on the next request.
+    ThinkingBlockDone(ThinkingBlock),
     /// A server-side tool (e.g. web_search) has started executing.
     ServerToolStart { name: String },
     /// A server-side tool has completed, with optional query/context for display.

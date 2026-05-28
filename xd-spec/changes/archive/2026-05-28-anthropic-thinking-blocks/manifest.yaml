@@ -1,0 +1,23 @@
+change: anthropic-thinking-blocks
+artifact_paths:
+  - crates/krew-cli/src/app/state.rs
+  - crates/krew-cli/src/prompt_mode/mod.rs
+  - crates/krew-cli/src/prompt_mode/tests.rs
+  - crates/krew-core/src/agent/agent_loop.rs
+  - crates/krew-core/src/agent/prepare.rs
+  - crates/krew-core/src/agent/prune.rs
+  - crates/krew-core/src/compact.rs
+  - crates/krew-core/src/event.rs
+  - crates/krew-core/src/persistence.rs
+  - crates/krew-core/src/task/mod.rs
+  - crates/krew-core/tests/persistence_test.rs
+  - crates/krew-llm/src/anthropic.rs
+  - crates/krew-llm/src/google.rs
+  - crates/krew-llm/src/lib.rs
+  - crates/krew-llm/src/openai_chat.rs
+  - crates/krew-llm/src/openai_responses.rs
+  - crates/krew-llm/src/types.rs
+  - crates/krew-llm/src/vertex_anthropic.rs
+  - crates/krew-storage/src/session_file.rs
+  - crates/krew-storage/tests/session_file_test.rs
+  - xd-spec/changes/anthropic-thinking-blocks/tasks.md

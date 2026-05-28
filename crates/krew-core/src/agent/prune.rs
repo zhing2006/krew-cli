@@ -195,12 +195,14 @@ pub(super) fn prune_stale_tool_calls(messages: Vec<ChatMessage>) -> Vec<ChatMess
                     // No text content — drop the message entirely.
                     continue;
                 }
-                // Has text content — convert to plain text message.
-                result.push(ChatMessage::text(
-                    ChatRole::Assistant,
-                    msg.content,
-                    msg.name,
-                ));
+                // Has text content — clear the stale tool calls but keep the
+                // rest of the message intact. Going through `ChatMessage::text`
+                // here would drop `thinking_blocks`, breaking replay for a
+                // terminal assistant turn that carries thinking blocks plus a
+                // single now-stale tool call.
+                let mut cleared = msg;
+                cleared.tool_calls = None;
+                result.push(cleared);
                 continue;
             }
             // Partial prune: keep only non-stale tool calls.
@@ -222,6 +224,7 @@ pub(super) fn prune_stale_tool_calls(messages: Vec<ChatMessage>) -> Vec<ChatMess
                 created_at: msg.created_at,
                 usage: msg.usage,
                 images: Vec::new(),
+                thinking_blocks: msg.thinking_blocks,
             });
             continue;
         }
@@ -284,6 +287,7 @@ mod tests {
             created_at: chrono::Utc::now(),
             usage: None,
             images: Vec::new(),
+            thinking_blocks: Vec::new(),
         }
     }
 
@@ -300,6 +304,7 @@ mod tests {
             created_at: chrono::Utc::now(),
             usage: None,
             images: Vec::new(),
+            thinking_blocks: Vec::new(),
         }
     }
 
@@ -618,5 +623,51 @@ mod tests {
         for (orig, pruned) in messages.iter().zip(result.iter()) {
             assert_eq!(orig.content, pruned.content);
         }
+    }
+
+    #[test]
+    fn prune_all_stale_with_text_preserves_thinking_blocks() {
+        // When every tool call on an assistant message becomes stale but the
+        // assistant still has text, the message must be replayed with its
+        // original thinking_blocks intact so Anthropic accepts the signature
+        // on the follow-up request.
+        let mut first = assistant_with_tools(
+            "a",
+            "I will read the file.",
+            vec![tc("1", "read_file", r#"{"file_path":"src/main.rs"}"#)],
+        );
+        first.thinking_blocks = vec![krew_llm::ThinkingBlock::Thinking {
+            text: "reasoning before tool".to_string(),
+            signature: "sig-keep".to_string(),
+        }];
+        let messages = vec![
+            first,
+            tool_result("read_file", "old content", "1"),
+            assistant_with_tools(
+                "a",
+                "",
+                vec![tc("2", "read_file", r#"{"file_path":"src/main.rs"}"#)],
+            ),
+            tool_result("read_file", "new content", "2"),
+        ];
+        let result = prune_stale_tool_calls(messages);
+        // First tool call + its result are pruned, but the first assistant
+        // message survives (it had text) and retains its thinking_blocks.
+        let surviving_first = result
+            .iter()
+            .find(|m| m.content == "I will read the file.")
+            .expect("first assistant text must survive");
+        assert!(
+            surviving_first.tool_calls.is_none(),
+            "stale tool calls must be cleared"
+        );
+        assert_eq!(
+            surviving_first.thinking_blocks,
+            vec![krew_llm::ThinkingBlock::Thinking {
+                text: "reasoning before tool".to_string(),
+                signature: "sig-keep".to_string(),
+            }],
+            "thinking_blocks must survive all-stale-with-text pruning"
+        );
     }
 }

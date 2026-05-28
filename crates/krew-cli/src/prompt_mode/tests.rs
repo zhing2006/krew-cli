@@ -1,11 +1,13 @@
 use krew_core::event::{AgentEvent, ReviewDecision};
 use krew_core::router::{self, Addressee};
-use krew_llm::Usage;
+use krew_llm::{ThinkingBlock, Usage};
 use tokio::sync::{mpsc, oneshot};
 
 use super::{
-    OutputFormat, combine_stdin_and_prompt, consume_agent_events, format_tool_args_preview,
+    AgentResult, OutputFormat, build_final_assistant_msg, combine_stdin_and_prompt,
+    consume_agent_events, format_tool_args_preview,
 };
+use krew_llm::{ChatRole, ServerToolUseInfo};
 
 // --- 7.1: stdin content combination ---
 
@@ -103,6 +105,7 @@ fn make_done_event(text: &str) -> AgentEvent {
         intermediate_messages: vec![],
         final_text: text.to_string(),
         server_tool_uses: vec![],
+        final_thinking_blocks: vec![],
     }
 }
 
@@ -167,6 +170,95 @@ async fn thinking_delta_is_silently_discarded() {
     assert_eq!(result.final_text, "output");
     // ThinkingDelta should not appear in the text buffer.
     assert!(!result.final_text.contains("thinking"));
+}
+
+#[test]
+fn build_final_assistant_msg_attaches_thinking_blocks_and_metadata() {
+    let blocks = vec![
+        ThinkingBlock::Thinking {
+            text: "weighed both options".to_string(),
+            signature: "sig-final".to_string(),
+        },
+        ThinkingBlock::Redacted {
+            data: "opaque-final".to_string(),
+        },
+    ];
+    let server_tools = vec![ServerToolUseInfo {
+        name: "web_search".to_string(),
+        query: Some("rust thinking blocks".to_string()),
+    }];
+    let usage = Usage {
+        prompt_tokens: 13,
+        completion_tokens: 7,
+        total_tokens: 20,
+    };
+    let mut result = AgentResult {
+        final_text: "the answer".to_string(),
+        intermediate_messages: vec![],
+        server_tool_uses: server_tools.clone(),
+        usage: Some(usage.clone()),
+        has_error: false,
+        final_thinking_blocks: blocks.clone(),
+    };
+    let whisper = Some(vec!["claude".to_string()]);
+
+    let msg = build_final_assistant_msg(&mut result, "claude", whisper.clone());
+
+    assert_eq!(msg.role, ChatRole::Assistant);
+    assert_eq!(msg.content, "the answer");
+    assert_eq!(msg.name.as_deref(), Some("claude"));
+    assert_eq!(msg.thinking_blocks, blocks);
+    assert_eq!(msg.server_tool_uses.len(), server_tools.len());
+    assert_eq!(msg.server_tool_uses[0].name, "web_search");
+    assert_eq!(msg.whisper_targets, whisper);
+    let restored_usage = msg.usage.expect("usage must be set");
+    assert_eq!(restored_usage.total_tokens, 20);
+
+    // Helper must have taken (moved) the heavy fields out of the result so
+    // subsequent A2A routing code does not double-spend them.
+    assert!(result.final_thinking_blocks.is_empty());
+    assert!(result.server_tool_uses.is_empty());
+    assert!(result.usage.is_none());
+}
+
+#[tokio::test]
+async fn final_thinking_blocks_propagate_from_done_to_agent_result() {
+    let (tx, mut rx) = mpsc::unbounded_channel();
+
+    tx.send(AgentEvent::ResponseStart {
+        agent_name: "claude".to_string(),
+        display_name: "Claude".to_string(),
+        color: "blue".to_string(),
+    })
+    .unwrap();
+    tx.send(AgentEvent::TextDelta("answer".to_string()))
+        .unwrap();
+    let blocks = vec![
+        ThinkingBlock::Thinking {
+            text: "reasoning".to_string(),
+            signature: "sig-1".to_string(),
+        },
+        ThinkingBlock::Redacted {
+            data: "opaque".to_string(),
+        },
+    ];
+    tx.send(AgentEvent::Done {
+        usage: Usage {
+            prompt_tokens: 1,
+            completion_tokens: 1,
+            total_tokens: 2,
+        },
+        intermediate_messages: vec![],
+        final_text: "answer".to_string(),
+        server_tool_uses: vec![],
+        final_thinking_blocks: blocks.clone(),
+    })
+    .unwrap();
+    drop(tx);
+
+    let result = consume_agent_events(&mut rx, "claude", OutputFormat::Text, false, None).await;
+    assert_eq!(result.final_text, "answer");
+    assert_eq!(result.final_thinking_blocks, blocks);
 }
 
 #[tokio::test]
@@ -268,6 +360,7 @@ async fn server_tool_events_processed() {
             name: "web_search".to_string(),
             query: Some("rust async".to_string()),
         }],
+        final_thinking_blocks: vec![],
     })
     .unwrap();
     drop(tx);
@@ -314,6 +407,7 @@ async fn thinking_between_server_tool_does_not_trigger_gemini_style() {
             name: "web_search".to_string(),
             query: Some("rust".to_string()),
         }],
+        final_thinking_blocks: vec![],
     })
     .unwrap();
     drop(tx);
@@ -439,6 +533,7 @@ async fn server_tool_uses_only_from_done_event() {
             name: "web_search".to_string(),
             query: Some("rust".to_string()),
         }],
+        final_thinking_blocks: vec![],
     })
     .unwrap();
     drop(tx);

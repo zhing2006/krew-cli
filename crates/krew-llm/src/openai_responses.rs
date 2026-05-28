@@ -1160,6 +1160,7 @@ mod tests {
                 media_type: "image/png".to_string(),
                 filename: Some("test.png".to_string()),
             }],
+            thinking_blocks: Vec::new(),
         };
         let converted = convert_messages(&[msg], "agent", &OtherAgentRole::User);
         let obj = &converted[0];
@@ -1188,6 +1189,7 @@ mod tests {
             created_at: chrono::Utc::now(),
             usage: None,
             images: vec![],
+            thinking_blocks: Vec::new(),
         };
         let converted = convert_messages(&[msg], "agent", &OtherAgentRole::User);
         let obj = &converted[0];
@@ -1195,5 +1197,40 @@ mod tests {
         // output should be a plain string
         assert!(obj["output"].is_string());
         assert_eq!(obj["output"], "file content");
+    }
+
+    #[test]
+    fn convert_assistant_with_thinking_blocks_is_ignored() {
+        use crate::ThinkingBlock;
+        let mut without = ChatMessage::text(
+            ChatRole::Assistant,
+            "answer".to_string(),
+            Some("gpt".to_string()),
+        );
+        without.tool_calls = Some(vec![crate::ToolCallInfo {
+            id: "tc_1".to_string(),
+            name: "read_file".to_string(),
+            arguments: r#"{"path":"a"}"#.to_string(),
+            thought_signature: None,
+        }]);
+        let mut with = without.clone();
+        with.thinking_blocks = vec![
+            ThinkingBlock::Thinking {
+                text: "reasoning".to_string(),
+                signature: "sig".to_string(),
+            },
+            ThinkingBlock::Redacted {
+                data: "opaque".to_string(),
+            },
+        ];
+
+        let body_without = convert_messages(&[without], "gpt", &OtherAgentRole::User);
+        let body_with = convert_messages(&[with], "gpt", &OtherAgentRole::User);
+        assert_eq!(body_without, body_with);
+
+        let serialized = serde_json::to_string(&body_with).unwrap();
+        assert!(!serialized.contains("thinking"));
+        assert!(!serialized.contains("redacted_thinking"));
+        assert!(!serialized.contains("signature"));
     }
 }

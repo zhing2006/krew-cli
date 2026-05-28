@@ -95,6 +95,19 @@ pub struct ImageContent {
     pub filename: Option<String>,
 }
 
+/// A single extended-thinking block produced by a provider that supports
+/// reasoning with signed payloads (currently Anthropic Messages API).
+///
+/// `Thinking` carries the visible reasoning text plus the opaque `signature`
+/// the server needs to verify the block on the next request. `Redacted`
+/// represents a block whose plaintext was withheld for safety reasons; only
+/// the opaque `data` blob must be echoed back unchanged.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ThinkingBlock {
+    Thinking { text: String, signature: String },
+    Redacted { data: String },
+}
+
 /// Unified message format used when communicating with LLM providers.
 #[derive(Debug, Clone)]
 pub struct ChatMessage {
@@ -121,6 +134,12 @@ pub struct ChatMessage {
     pub usage: Option<Usage>,
     /// Image data attached to this message (not persisted to session files).
     pub images: Vec<ImageContent>,
+    /// Extended-thinking blocks emitted by the assistant on this turn.
+    ///
+    /// Always empty for non-assistant messages. Currently only Anthropic /
+    /// Vertex Anthropic populate this; other providers ignore the field both
+    /// when receiving streams and when serializing assistant history.
+    pub thinking_blocks: Vec<ThinkingBlock>,
 }
 
 /// Information about a server-side tool use (e.g. web_search, google_search).
@@ -160,6 +179,7 @@ impl ChatMessage {
             created_at: Utc::now(),
             usage: None,
             images: Vec::new(),
+            thinking_blocks: Vec::new(),
         }
     }
 
@@ -177,6 +197,7 @@ impl ChatMessage {
             created_at: Utc::now(),
             usage: None,
             images: Vec::new(),
+            thinking_blocks: Vec::new(),
         }
     }
 
@@ -194,4 +215,45 @@ pub enum ChatRole {
     User,
     Assistant,
     Tool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thinking_block_variants_are_distinguishable() {
+        let signed = ThinkingBlock::Thinking {
+            text: "let me think".to_string(),
+            signature: "sig".to_string(),
+        };
+        let redacted = ThinkingBlock::Redacted {
+            data: "opaque".to_string(),
+        };
+
+        match signed {
+            ThinkingBlock::Thinking { text, signature } => {
+                assert_eq!(text, "let me think");
+                assert_eq!(signature, "sig");
+            }
+            ThinkingBlock::Redacted { .. } => panic!("expected Thinking variant"),
+        }
+
+        match redacted {
+            ThinkingBlock::Redacted { data } => assert_eq!(data, "opaque"),
+            ThinkingBlock::Thinking { .. } => panic!("expected Redacted variant"),
+        }
+    }
+
+    #[test]
+    fn chat_message_text_defaults_thinking_blocks_empty() {
+        let msg = ChatMessage::text(ChatRole::User, "hello", None);
+        assert!(msg.thinking_blocks.is_empty());
+    }
+
+    #[test]
+    fn chat_message_user_with_addressee_defaults_thinking_blocks_empty() {
+        let msg = ChatMessage::user_with_addressee("hi", Some("agent1".into()));
+        assert!(msg.thinking_blocks.is_empty());
+    }
 }
