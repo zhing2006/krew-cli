@@ -28,6 +28,7 @@ fn make_test_session() -> SessionFile {
                 tool_call_id: None,
                 server_tool_uses: vec![],
                 whisper_targets: None,
+                thinking_blocks: None,
                 created_at: now,
             },
             MessageEntry {
@@ -44,6 +45,7 @@ fn make_test_session() -> SessionFile {
                 tool_call_id: None,
                 server_tool_uses: vec![],
                 whisper_targets: None,
+                thinking_blocks: None,
                 created_at: now,
             },
         ],
@@ -139,6 +141,7 @@ fn test_list_sessions() {
             tool_call_id: None,
             server_tool_uses: vec![],
             whisper_targets: None,
+            thinking_blocks: None,
             created_at: older,
         }],
     };
@@ -162,6 +165,7 @@ fn test_list_sessions() {
             tool_call_id: None,
             server_tool_uses: vec![],
             whisper_targets: None,
+            thinking_blocks: None,
             created_at: now,
         }],
     };
@@ -222,6 +226,7 @@ fn test_whisper_targets_roundtrip() {
                 tool_call_id: None,
                 server_tool_uses: vec![],
                 whisper_targets: Some(vec!["opus".to_string()]),
+                thinking_blocks: None,
                 created_at: now,
             },
             MessageEntry {
@@ -234,6 +239,7 @@ fn test_whisper_targets_roundtrip() {
                 tool_call_id: None,
                 server_tool_uses: vec![],
                 whisper_targets: Some(vec!["opus".to_string()]),
+                thinking_blocks: None,
                 created_at: now,
             },
             MessageEntry {
@@ -246,6 +252,7 @@ fn test_whisper_targets_roundtrip() {
                 tool_call_id: None,
                 server_tool_uses: vec![],
                 whisper_targets: None,
+                thinking_blocks: None,
                 created_at: now,
             },
         ],
@@ -278,4 +285,164 @@ fn test_atomic_write_creates_no_tmp_file() {
     let tmp_path = path.with_extension("toml.tmp");
     assert!(!tmp_path.exists());
     assert!(path.exists());
+}
+
+#[test]
+fn test_thinking_blocks_roundtrip_with_both_variants() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("thinking.toml");
+
+    let now = Utc::now();
+    let session = SessionFile {
+        session: SessionMeta {
+            id: "think123".to_string(),
+            cwd: "/tmp".to_string(),
+            agents: vec!["claude".to_string()],
+            total_tokens_used: 0,
+            created_at: now,
+            updated_at: now,
+        },
+        messages: vec![MessageEntry {
+            role: "assistant".to_string(),
+            agent_name: Some("claude".to_string()),
+            addressee: None,
+            content: "answer".to_string(),
+            usage: None,
+            tool_calls: None,
+            tool_call_id: None,
+            server_tool_uses: vec![],
+            whisper_targets: None,
+            thinking_blocks: Some(vec![
+                ThinkingBlockEntry::Thinking {
+                    text: "step one".to_string(),
+                    signature: "sig-1".to_string(),
+                },
+                ThinkingBlockEntry::RedactedThinking {
+                    data: "opaque".to_string(),
+                },
+            ]),
+            created_at: now,
+        }],
+    };
+
+    save_session(&path, &session).unwrap();
+    let loaded = load_session(&path).unwrap();
+    let blocks = loaded.messages[0].thinking_blocks.as_ref().unwrap();
+    assert_eq!(blocks.len(), 2);
+    assert_eq!(
+        blocks[0],
+        ThinkingBlockEntry::Thinking {
+            text: "step one".to_string(),
+            signature: "sig-1".to_string(),
+        }
+    );
+    assert_eq!(
+        blocks[1],
+        ThinkingBlockEntry::RedactedThinking {
+            data: "opaque".to_string(),
+        }
+    );
+
+    // Spot-check the on-disk TOML shape: redacted blocks must serialise with
+    // the discriminator tag and `data` only — no `text` / `signature` keys
+    // leaking from the Thinking variant.
+    let raw = fs::read_to_string(&path).unwrap();
+    let redacted_section = raw
+        .split("[[messages.thinking_blocks]]")
+        .find(|chunk| chunk.contains("block_type = \"redacted_thinking\""))
+        .expect("redacted thinking_blocks section must be present in TOML");
+    let redacted_section = redacted_section
+        .split("[[messages.thinking_blocks]]")
+        .next()
+        .unwrap();
+    assert!(
+        redacted_section.contains("data = \"opaque\""),
+        "redacted block must carry its opaque `data`, got:\n{redacted_section}"
+    );
+    assert!(
+        !redacted_section.contains("text ="),
+        "redacted block must not serialise a `text` key, got:\n{redacted_section}"
+    );
+    assert!(
+        !redacted_section.contains("signature ="),
+        "redacted block must not serialise a `signature` key, got:\n{redacted_section}"
+    );
+}
+
+#[test]
+fn test_legacy_session_without_thinking_blocks_loads() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("legacy.toml");
+
+    // Hand-written legacy TOML with no `thinking_blocks` key.
+    let toml = r#"
+[session]
+id = "legacy1"
+cwd = "/tmp"
+agents = ["gpt"]
+total_tokens_used = 0
+created_at = "2025-01-01T00:00:00Z"
+updated_at = "2025-01-01T00:00:00Z"
+
+[[messages]]
+role = "assistant"
+agent_name = "gpt"
+content = "old reply"
+created_at = "2025-01-01T00:00:00Z"
+"#;
+    fs::write(&path, toml).unwrap();
+
+    let loaded = load_session(&path).unwrap();
+    assert_eq!(loaded.messages.len(), 1);
+    assert!(loaded.messages[0].thinking_blocks.is_none());
+    assert_eq!(loaded.messages[0].content, "old reply");
+}
+
+#[test]
+fn test_empty_thinking_blocks_omits_key_when_none() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("empty_thinking.toml");
+    let session = make_test_session();
+    save_session(&path, &session).unwrap();
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(!text.contains("thinking_blocks"));
+}
+
+#[test]
+fn test_empty_thinking_blocks_omits_key_when_some_empty_vec() {
+    // The persistence layer may map an empty ChatMessage.thinking_blocks to
+    // `Some(vec![])` rather than `None`; the on-disk form must still drop the
+    // key so resumed sessions and externally written sessions stay byte-equal.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("empty_thinking_some.toml");
+    let now = Utc::now();
+    let session = SessionFile {
+        session: SessionMeta {
+            id: "empty_some".to_string(),
+            cwd: "/tmp/project".to_string(),
+            agents: vec!["claude".to_string()],
+            total_tokens_used: 0,
+            created_at: now,
+            updated_at: now,
+        },
+        messages: vec![MessageEntry {
+            role: "assistant".to_string(),
+            agent_name: Some("claude".to_string()),
+            addressee: None,
+            content: "plain reply".to_string(),
+            usage: None,
+            tool_calls: None,
+            tool_call_id: None,
+            server_tool_uses: vec![],
+            whisper_targets: None,
+            thinking_blocks: Some(vec![]),
+            created_at: now,
+        }],
+    };
+    save_session(&path, &session).unwrap();
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(
+        !text.contains("thinking_blocks"),
+        "Some(vec![]) must serialise as if absent, got: {text}"
+    );
 }

@@ -297,8 +297,8 @@ fn build_reasoning_effort(
 ///
 /// DeepSeek V4 and Kimi K2.6 are served via two incompatible OpenAI-compatible
 /// APIs that disagree on the field name:
-/// - DeepSeek 官方 / Moonshot 官方: `thinking: {"type": "enabled"|"disabled"}`.
-/// - Aliyun DashScope / 百炼: top-level `enable_thinking: <bool>` (passed via
+/// - DeepSeek official / Moonshot official: `thinking: {"type": "enabled"|"disabled"}`.
+/// - Aliyun DashScope / Bailian: top-level `enable_thinking: <bool>` (passed via
 ///   OpenAI SDK's `extra_body`).
 ///
 /// We send both so the same config works across LiteLLM routes — backends that
@@ -1145,6 +1145,7 @@ mod tests {
                 media_type: "image/png".to_string(),
                 filename: Some("test.png".to_string()),
             }],
+            thinking_blocks: Vec::new(),
         };
         let converted = convert_messages(&[msg], "agent", &OtherAgentRole::User);
         let obj = &converted[0];
@@ -1152,5 +1153,40 @@ mod tests {
         // Should degrade to text only, ignoring images
         assert_eq!(obj["content"], "[Image: test.png]");
         assert_eq!(obj["tool_call_id"], "call_1");
+    }
+
+    #[test]
+    fn convert_assistant_with_thinking_blocks_is_ignored() {
+        use crate::ThinkingBlock;
+        let mut without = ChatMessage::text(
+            ChatRole::Assistant,
+            "answer".to_string(),
+            Some("gpt".to_string()),
+        );
+        without.tool_calls = Some(vec![crate::ToolCallInfo {
+            id: "tc_1".to_string(),
+            name: "read_file".to_string(),
+            arguments: r#"{"path":"a"}"#.to_string(),
+            thought_signature: None,
+        }]);
+        let mut with = without.clone();
+        with.thinking_blocks = vec![
+            ThinkingBlock::Thinking {
+                text: "reasoning".to_string(),
+                signature: "sig".to_string(),
+            },
+            ThinkingBlock::Redacted {
+                data: "opaque".to_string(),
+            },
+        ];
+
+        let body_without = convert_messages(&[without], "gpt", &OtherAgentRole::User);
+        let body_with = convert_messages(&[with], "gpt", &OtherAgentRole::User);
+        assert_eq!(body_without, body_with);
+
+        let serialized = serde_json::to_string(&body_with).unwrap();
+        assert!(!serialized.contains("thinking"));
+        assert!(!serialized.contains("redacted_thinking"));
+        assert!(!serialized.contains("signature"));
     }
 }

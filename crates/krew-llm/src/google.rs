@@ -1338,6 +1338,7 @@ mod tests {
                 created_at: chrono::Utc::now(),
                 usage: None,
                 images: vec![],
+                thinking_blocks: Vec::new(),
             },
             ChatMessage {
                 role: ChatRole::Tool,
@@ -1351,6 +1352,7 @@ mod tests {
                 created_at: chrono::Utc::now(),
                 usage: None,
                 images: vec![],
+                thinking_blocks: Vec::new(),
             },
         ];
         let converted = convert_messages(&messages, "agent", &OtherAgentRole::User, true);
@@ -1378,6 +1380,7 @@ mod tests {
                 created_at: chrono::Utc::now(),
                 usage: None,
                 images: vec![],
+                thinking_blocks: Vec::new(),
             },
             ChatMessage::text(
                 ChatRole::Assistant,
@@ -1396,6 +1399,7 @@ mod tests {
                 created_at: chrono::Utc::now(),
                 usage: None,
                 images: vec![],
+                thinking_blocks: Vec::new(),
             },
         ];
         let converted = convert_messages(&messages, "agent", &OtherAgentRole::User, true);
@@ -1436,6 +1440,7 @@ mod tests {
                 media_type: "image/png".to_string(),
                 filename: Some("test.png".to_string()),
             }],
+            thinking_blocks: Vec::new(),
         };
         let converted = convert_messages(&[msg], "agent", &OtherAgentRole::User, true);
         let part = &converted.contents[0]["parts"][0];
@@ -1464,6 +1469,7 @@ mod tests {
             created_at: chrono::Utc::now(),
             usage: None,
             images: vec![],
+            thinking_blocks: Vec::new(),
         };
         let converted = convert_messages(&[msg], "agent", &OtherAgentRole::User, true);
         let fr = &converted.contents[0]["parts"][0]["functionResponse"];
@@ -1492,6 +1498,7 @@ mod tests {
                 media_type: "image/png".to_string(),
                 filename: Some("test.png".to_string()),
             }],
+            thinking_blocks: Vec::new(),
         };
         // v1 mode: inlineData as sibling, no id
         let converted = convert_messages(&[msg], "agent", &OtherAgentRole::User, false);
@@ -1518,11 +1525,51 @@ mod tests {
             created_at: chrono::Utc::now(),
             usage: None,
             images: vec![],
+            thinking_blocks: Vec::new(),
         };
         // v1 mode: no id field
         let converted = convert_messages(&[msg], "agent", &OtherAgentRole::User, false);
         let fr = &converted.contents[0]["parts"][0]["functionResponse"];
         assert_eq!(fr["name"], "read_file");
         assert!(fr.get("id").is_none());
+    }
+
+    #[test]
+    fn convert_assistant_with_thinking_blocks_is_ignored() {
+        use crate::ThinkingBlock;
+        let mut without = ChatMessage::text(
+            ChatRole::Assistant,
+            "answer".to_string(),
+            Some("gemini".to_string()),
+        );
+        without.tool_calls = Some(vec![crate::ToolCallInfo {
+            id: "tc_1".to_string(),
+            name: "read_file".to_string(),
+            arguments: r#"{"path":"a"}"#.to_string(),
+            thought_signature: None,
+        }]);
+        let mut with = without.clone();
+        with.thinking_blocks = vec![
+            ThinkingBlock::Thinking {
+                text: "reasoning".to_string(),
+                signature: "sig".to_string(),
+            },
+            ThinkingBlock::Redacted {
+                data: "opaque".to_string(),
+            },
+        ];
+
+        let body_without = convert_messages(&[without], "gemini", &OtherAgentRole::User, true);
+        let body_with = convert_messages(&[with], "gemini", &OtherAgentRole::User, true);
+        assert_eq!(body_without.contents, body_with.contents);
+        assert_eq!(
+            body_without.system_instruction,
+            body_with.system_instruction
+        );
+
+        let serialized = serde_json::to_string(&body_with.contents).unwrap();
+        assert!(!serialized.contains("thinking"));
+        assert!(!serialized.contains("redacted_thinking"));
+        assert!(!serialized.contains("signature"));
     }
 }

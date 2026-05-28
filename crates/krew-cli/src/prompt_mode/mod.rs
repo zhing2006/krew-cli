@@ -208,7 +208,7 @@ pub async fn run_prompt_mode(
         is_first_agent = false;
 
         // Consume events from this agent.
-        let result = consume_agent_events(
+        let mut result = consume_agent_events(
             &mut rx,
             &agent_name,
             format,
@@ -229,7 +229,7 @@ pub async fn run_prompt_mode(
         }
 
         // Persist messages.
-        messages.extend(result.intermediate_messages);
+        messages.extend(std::mem::take(&mut result.intermediate_messages));
 
         // Persist the final assistant message:
         // - On success: always persist (even if text is empty).
@@ -237,16 +237,11 @@ pub async fn run_prompt_mode(
         //   (already done by consume_agent_events, matching TUI behavior).
         // - On error with no text: skip (nothing useful to persist).
         if !result.has_error || !result.final_text.is_empty() {
-            let mut final_msg = ChatMessage::text(
-                ChatRole::Assistant,
-                result.final_text.clone(),
-                Some(agent_name.clone()),
+            let final_msg = build_final_assistant_msg(
+                &mut result,
+                &agent_name,
+                current_whisper_targets.clone(),
             );
-            final_msg.server_tool_uses = result.server_tool_uses;
-            final_msg.whisper_targets = current_whisper_targets.clone();
-            if let Some(usage) = result.usage {
-                final_msg.usage = Some(usage);
-            }
             messages.push(final_msg);
         }
 
@@ -331,6 +326,27 @@ struct AgentResult {
     server_tool_uses: Vec<krew_llm::ServerToolUseInfo>,
     usage: Option<Usage>,
     has_error: bool,
+    final_thinking_blocks: Vec<krew_llm::ThinkingBlock>,
+}
+
+/// Materialise the final assistant ChatMessage that `run_prompt_mode` persists
+/// after each agent turn. Extracted so the production path (including
+/// `thinking_blocks` plumbing) can be unit-tested in isolation.
+fn build_final_assistant_msg(
+    result: &mut AgentResult,
+    agent_name: &str,
+    whisper_targets: Option<Vec<String>>,
+) -> ChatMessage {
+    let mut final_msg = ChatMessage::text(
+        ChatRole::Assistant,
+        result.final_text.clone(),
+        Some(agent_name.to_string()),
+    );
+    final_msg.server_tool_uses = std::mem::take(&mut result.server_tool_uses);
+    final_msg.whisper_targets = whisper_targets;
+    final_msg.thinking_blocks = std::mem::take(&mut result.final_thinking_blocks);
+    final_msg.usage = result.usage.take();
+    final_msg
 }
 
 /// Consume all events from a single agent's event channel.
@@ -347,6 +363,7 @@ async fn consume_agent_events(
     let mut usage = None;
     let mut has_error = false;
     let mut error_message = None;
+    let mut final_thinking_blocks: Vec<krew_llm::ThinkingBlock> = Vec::new();
     let mut stdout = std::io::stdout();
     // Track whether we are mid-line in text streaming mode (after print!
     // without a trailing newline). Non-text events must flush a newline first.
@@ -525,12 +542,14 @@ async fn consume_agent_events(
                 intermediate_messages: msgs,
                 final_text,
                 server_tool_uses: stus,
+                final_thinking_blocks: blocks,
             } => {
                 usage = Some(u);
                 intermediate_messages = msgs;
                 // Use only the authoritative list from Done (not local collection).
                 server_tool_uses = stus;
                 text_buffer = final_text;
+                final_thinking_blocks = blocks;
 
                 match format {
                     OutputFormat::Text => {
@@ -654,6 +673,7 @@ async fn consume_agent_events(
         server_tool_uses,
         usage,
         has_error,
+        final_thinking_blocks,
     }
 }
 

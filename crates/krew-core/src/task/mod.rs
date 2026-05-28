@@ -118,6 +118,7 @@ async fn run_task_inner(
         final_text: "task consumer panicked".to_string(),
         intermediate_messages: Vec::new(),
         server_tool_uses: Vec::new(),
+        final_thinking_blocks: Vec::new(),
         usage: Usage {
             prompt_tokens: 0,
             completion_tokens: 0,
@@ -143,6 +144,7 @@ async fn run_task_inner(
             created_at: chrono::Utc::now(),
             usage: Some(consumed.usage.clone()),
             images: Vec::new(),
+            thinking_blocks: consumed.final_thinking_blocks,
         });
     }
 
@@ -159,6 +161,7 @@ struct ConsumedResult {
     final_text: String,
     intermediate_messages: Vec<ChatMessage>,
     server_tool_uses: Vec<ServerToolUseInfo>,
+    final_thinking_blocks: Vec<krew_llm::ThinkingBlock>,
     usage: Usage,
     is_error: bool,
 }
@@ -177,6 +180,7 @@ async fn consume_events(
         final_text: String::new(),
         intermediate_messages: Vec::new(),
         server_tool_uses: Vec::new(),
+        final_thinking_blocks: Vec::new(),
         usage: Usage {
             prompt_tokens: 0,
             completion_tokens: 0,
@@ -192,10 +196,12 @@ async fn consume_events(
                 intermediate_messages,
                 final_text,
                 server_tool_uses,
+                final_thinking_blocks,
             } => {
                 result.final_text = final_text.clone();
                 result.intermediate_messages = intermediate_messages.clone();
                 result.server_tool_uses = server_tool_uses.clone();
+                result.final_thinking_blocks = final_thinking_blocks.clone();
                 result.usage = usage.clone();
                 if let Some(ref etx) = event_tx {
                     let _ = etx.send(AgentEvent::Done {
@@ -203,6 +209,7 @@ async fn consume_events(
                         intermediate_messages,
                         final_text,
                         server_tool_uses,
+                        final_thinking_blocks,
                     });
                 }
                 break;

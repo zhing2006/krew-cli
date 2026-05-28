@@ -381,6 +381,7 @@ mod tests {
             created_at: chrono::Utc::now(),
             usage: None,
             images: Vec::new(),
+            thinking_blocks: Vec::new(),
         }
     }
 
@@ -460,6 +461,7 @@ mod tests {
             created_at: chrono::Utc::now(),
             usage: None,
             images: Vec::new(),
+            thinking_blocks: Vec::new(),
         }
     }
 
@@ -478,6 +480,7 @@ mod tests {
             created_at: chrono::Utc::now(),
             usage: None,
             images: Vec::new(),
+            thinking_blocks: Vec::new(),
         }
     }
 
@@ -593,6 +596,7 @@ mod tests {
             created_at: chrono::Utc::now(),
             usage: None,
             images: Vec::new(),
+            thinking_blocks: Vec::new(),
         }
     }
 

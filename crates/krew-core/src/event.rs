@@ -92,6 +92,9 @@ pub enum AgentEvent {
         final_text: String,
         /// Server-side tool uses collected across all rounds (for persistence).
         server_tool_uses: Vec<krew_llm::ServerToolUseInfo>,
+        /// Thinking blocks aggregated from the final LLM turn, to be attached
+        /// to the terminal assistant message for protocol-compliant replay.
+        final_thinking_blocks: Vec<krew_llm::ThinkingBlock>,
     },
     /// An error occurred during the agent turn.
     Error {

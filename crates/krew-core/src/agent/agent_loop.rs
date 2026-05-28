@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use krew_config::ApprovalMode;
-use krew_llm::{ChatMessage, ChatRole, StreamEvent, ToolCallInfo, ToolDefinition, Usage};
+use krew_llm::{
+    ChatMessage, ChatRole, StreamEvent, ThinkingBlock, ToolCallInfo, ToolDefinition, Usage,
+};
 use krew_tools::ToolRegistry;
 use tokio::sync::mpsc;
 
@@ -94,6 +96,7 @@ pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
                 intermediate_messages: tool_round_messages,
                 final_text: result.text,
                 server_tool_uses: all_server_tool_uses,
+                final_thinking_blocks: result.thinking_blocks,
             });
             return;
         }
@@ -134,6 +137,7 @@ pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
             created_at: chrono::Utc::now(),
             usage: None,
             images: Vec::new(),
+            thinking_blocks: result.thinking_blocks.clone(),
         };
         tool_round_messages.push(assistant_msg.clone());
         messages.push(assistant_msg);
@@ -206,6 +210,7 @@ pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
                 created_at: chrono::Utc::now(),
                 usage: None,
                 server_tool_uses: Vec::new(),
+                thinking_blocks: Vec::new(),
             };
             tool_round_messages.push(tool_msg.clone());
             messages.push(tool_msg);
@@ -398,6 +403,7 @@ pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
                 created_at: chrono::Utc::now(),
                 usage: None,
                 images,
+                thinking_blocks: Vec::new(),
             };
             tool_round_messages.push(tool_msg.clone());
             messages.push(tool_msg);
@@ -413,6 +419,10 @@ struct StreamResult {
     tool_calls: Vec<StreamToolCall>,
     /// Server-side tool uses (e.g. web_search) for persistence.
     server_tool_uses: Vec<krew_llm::ServerToolUseInfo>,
+    /// Thinking blocks aggregated from `StreamEvent::ThinkingBlockDone` in
+    /// the order received. Replayed on the next turn so providers like
+    /// Anthropic can validate the signatures.
+    thinking_blocks: Vec<ThinkingBlock>,
     /// Token usage from the stream (if received).
     usage: Option<Usage>,
     /// Error message if the stream reported an error.
@@ -438,6 +448,7 @@ async fn consume_stream(
         text: String::new(),
         tool_calls: Vec::new(),
         server_tool_uses: Vec::new(),
+        thinking_blocks: Vec::new(),
         usage: None,
         error: None,
     };
@@ -454,6 +465,9 @@ async fn consume_stream(
                 if tx.send(AgentEvent::ThinkingDelta(text)).is_err() {
                     return result;
                 }
+            }
+            StreamEvent::ThinkingBlockDone(block) => {
+                result.thinking_blocks.push(block);
             }
             StreamEvent::ServerToolStart { name } => {
                 if tx.send(AgentEvent::ServerToolStart { name }).is_err() {
@@ -586,5 +600,188 @@ pub(crate) fn generate_tool_summary(tool_name: &str, result: &krew_tools::ToolRe
         "glob" => "done".to_string(),
         "grep" => "done".to_string(),
         _ => "done".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::ApprovalCache;
+    use futures::stream;
+    use krew_config::{ApprovalMode, RetryConfig, SamplingConfig};
+    use krew_llm::{LlmClient, LlmError, common::RetryInfo};
+    use std::pin::Pin;
+    use std::sync::Mutex;
+
+    fn drain_events(rx: &mut mpsc::UnboundedReceiver<AgentEvent>) {
+        while rx.try_recv().is_ok() {}
+    }
+
+    #[tokio::test]
+    async fn consume_stream_collects_thinking_blocks_in_order() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();
+        let block_a = ThinkingBlock::Thinking {
+            text: "first".to_string(),
+            signature: "sig-a".to_string(),
+        };
+        let block_b = ThinkingBlock::Redacted {
+            data: "opaque".to_string(),
+        };
+        let events = vec![
+            StreamEvent::ThinkingBlockDone(block_a.clone()),
+            StreamEvent::ThinkingBlockDone(block_b.clone()),
+            StreamEvent::TextDelta("hello".to_string()),
+            StreamEvent::ToolCall {
+                id: "tc_1".to_string(),
+                name: "read_file".to_string(),
+                arguments: r#"{"path":"a"}"#.to_string(),
+                thought_signature: None,
+            },
+            StreamEvent::Done(Usage {
+                prompt_tokens: 1,
+                completion_tokens: 2,
+                total_tokens: 3,
+            }),
+        ];
+        let stream: Pin<Box<dyn futures::Stream<Item = StreamEvent> + Send>> =
+            Box::pin(stream::iter(events));
+        let result = consume_stream(stream, &tx, "agent1").await;
+        drain_events(&mut rx);
+
+        assert_eq!(result.thinking_blocks, vec![block_a, block_b]);
+        assert_eq!(result.text, "hello");
+        assert_eq!(result.tool_calls.len(), 1);
+    }
+
+    /// LlmClient that returns canned event sequences per round and records
+    /// the `messages` slice it was called with on each round so tests can
+    /// inspect what the agent loop sent on follow-up rounds.
+    struct CannedClient {
+        rounds: Mutex<Vec<Vec<StreamEvent>>>,
+        calls: Mutex<Vec<Vec<ChatMessage>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmClient for CannedClient {
+        async fn chat_stream(
+            &self,
+            messages: &[ChatMessage],
+            _tools: &[krew_llm::ToolDefinition],
+            _sampling: &SamplingConfig,
+            _on_retry: Option<&(dyn Fn(RetryInfo) + Send + Sync)>,
+        ) -> Result<Pin<Box<dyn futures::Stream<Item = StreamEvent> + Send>>, LlmError> {
+            self.calls.lock().unwrap().push(messages.to_vec());
+            let events = self.rounds.lock().unwrap().remove(0);
+            Ok(Box::pin(stream::iter(events)))
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_loop_attaches_thinking_blocks_to_each_round() {
+        let block_round1 = ThinkingBlock::Thinking {
+            text: "round1 reasoning".to_string(),
+            signature: "sig-r1".to_string(),
+        };
+        let block_round2 = ThinkingBlock::Thinking {
+            text: "round2 reasoning".to_string(),
+            signature: "sig-r2".to_string(),
+        };
+
+        // Round 1: thinking + text + tool_call → agent loop iterates.
+        // Round 2: thinking + text + Done (no tool_call) → loop exits.
+        let round1 = vec![
+            StreamEvent::ThinkingBlockDone(block_round1.clone()),
+            StreamEvent::TextDelta("calling tool".to_string()),
+            StreamEvent::ToolCall {
+                id: "call_1".to_string(),
+                name: "read_file".to_string(),
+                arguments: r#"{"path":"a"}"#.to_string(),
+                thought_signature: None,
+            },
+            StreamEvent::Done(Usage::default()),
+        ];
+        let round2 = vec![
+            StreamEvent::ThinkingBlockDone(block_round2.clone()),
+            StreamEvent::TextDelta("final answer".to_string()),
+            StreamEvent::Done(Usage::default()),
+        ];
+        let canned = Arc::new(CannedClient {
+            rounds: Mutex::new(vec![round1, round2]),
+            calls: Mutex::new(Vec::new()),
+        });
+        let client: Arc<dyn LlmClient> = canned.clone();
+
+        let tools = Arc::new(krew_tools::ToolRegistry::empty());
+        let tool_defs: Vec<krew_llm::ToolDefinition> = Vec::new();
+        let sampling = SamplingConfig::default();
+        let on_retry = |_: RetryInfo| {};
+        let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();
+        let approval_cache = ApprovalCache::new();
+        let _ = RetryConfig::default();
+
+        let ctx = AgentLoopContext {
+            client: &client,
+            tools: &tools,
+            tool_defs: &tool_defs,
+            sampling: &sampling,
+            on_retry: &on_retry,
+            tx: &tx,
+            agent_name: "claude",
+            max_rounds: 4,
+            approval_mode: ApprovalMode::FullAuto,
+            approval_cache: &approval_cache,
+            allow_rules: &[],
+            deny_rules: &[],
+            ask_rules: &[],
+            cwd: ".",
+            whisper_targets: None,
+        };
+        let mut messages = vec![ChatMessage::text(krew_llm::ChatRole::User, "do it", None)];
+        run_agent_loop(&ctx, &mut messages).await;
+        drop(tx);
+
+        let mut intermediate_round1 = None;
+        let mut final_blocks = None;
+        while let Some(event) = rx.recv().await {
+            if let AgentEvent::Done {
+                intermediate_messages,
+                final_thinking_blocks,
+                ..
+            } = event
+            {
+                intermediate_round1 = intermediate_messages
+                    .iter()
+                    .find(|m| m.role == krew_llm::ChatRole::Assistant && m.tool_calls.is_some())
+                    .map(|m| m.thinking_blocks.clone());
+                final_blocks = Some(final_thinking_blocks);
+                break;
+            }
+        }
+
+        assert_eq!(intermediate_round1.unwrap(), vec![block_round1.clone()]);
+        assert_eq!(final_blocks.unwrap(), vec![block_round2]);
+
+        let history_round1 = messages
+            .iter()
+            .find(|m| m.role == krew_llm::ChatRole::Assistant && m.tool_calls.is_some())
+            .expect("round1 assistant in messages history");
+        assert_eq!(history_round1.thinking_blocks, vec![block_round1.clone()]);
+
+        // Verify the agent loop replayed the round-1 thinking blocks on the
+        // second LLM call. Without this, a regression where round 2 drops the
+        // assistant's prior thinking_blocks would not be caught by the
+        // final-history assertion alone.
+        let calls = canned.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2, "expected exactly two LLM calls");
+        let round2_messages = &calls[1];
+        let round2_assistant = round2_messages
+            .iter()
+            .find(|m| m.role == krew_llm::ChatRole::Assistant && m.tool_calls.is_some())
+            .expect("round2 input must contain the round1 assistant message");
+        assert_eq!(
+            round2_assistant.thinking_blocks,
+            vec![block_round1],
+            "round 2 must replay round 1's thinking_blocks back to the provider"
+        );
     }
 }

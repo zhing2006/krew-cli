@@ -4,10 +4,53 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
-use krew_llm::{ChatMessage, ChatRole, ToolCallInfo};
+use krew_llm::{ChatMessage, ChatRole, ThinkingBlock, ToolCallInfo};
 use krew_storage::session_file::{
-    MessageEntry, SessionFile, SessionMeta, ToolCallEntry, UsageEntry,
+    MessageEntry, SessionFile, SessionMeta, ThinkingBlockEntry, ToolCallEntry, UsageEntry,
 };
+
+/// Map runtime `ThinkingBlock`s into their persisted form.
+///
+/// Returns `None` for empty input so the TOML serializer omits the key,
+/// keeping pre-thinking session files visually unchanged.
+fn thinking_blocks_to_entries(blocks: &[ThinkingBlock]) -> Option<Vec<ThinkingBlockEntry>> {
+    if blocks.is_empty() {
+        return None;
+    }
+    Some(
+        blocks
+            .iter()
+            .map(|b| match b {
+                ThinkingBlock::Thinking { text, signature } => ThinkingBlockEntry::Thinking {
+                    text: text.clone(),
+                    signature: signature.clone(),
+                },
+                ThinkingBlock::Redacted { data } => {
+                    ThinkingBlockEntry::RedactedThinking { data: data.clone() }
+                }
+            })
+            .collect(),
+    )
+}
+
+/// Reverse of `thinking_blocks_to_entries`.
+fn thinking_blocks_from_entries(entries: Option<&Vec<ThinkingBlockEntry>>) -> Vec<ThinkingBlock> {
+    entries
+        .map(|list| {
+            list.iter()
+                .map(|e| match e {
+                    ThinkingBlockEntry::Thinking { text, signature } => ThinkingBlock::Thinking {
+                        text: text.clone(),
+                        signature: signature.clone(),
+                    },
+                    ThinkingBlockEntry::RedactedThinking { data } => {
+                        ThinkingBlock::Redacted { data: data.clone() }
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 /// Runtime session state needed for serialization.
 ///
@@ -95,6 +138,7 @@ pub fn build_session_file(snapshot: &SessionSnapshot) -> SessionFile {
                     })
                     .collect(),
                 whisper_targets: msg.whisper_targets.clone(),
+                thinking_blocks: thinking_blocks_to_entries(&msg.thinking_blocks),
                 created_at: msg.created_at,
             }
         })
@@ -187,6 +231,7 @@ pub fn load_session_from_disk(session_path: &Path) -> anyhow::Result<RestoredSes
                 total_tokens: u.total_tokens,
             }),
             images: Vec::new(),
+            thinking_blocks: thinking_blocks_from_entries(msg.thinking_blocks.as_ref()),
         });
     }
 
