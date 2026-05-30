@@ -66,6 +66,7 @@ pub async fn list_models(config: &ListModelsConfig) -> Result<Vec<ModelInfo>, Ll
 pub fn fallback_models(provider_type: ProviderType) -> Vec<ModelInfo> {
     let ids = match provider_type {
         ProviderType::Anthropic => vec![
+            "claude-opus-4-8",
             "claude-opus-4-7",
             "claude-opus-4-6",
             "claude-sonnet-4-6",
@@ -74,6 +75,7 @@ pub fn fallback_models(provider_type: ProviderType) -> Vec<ModelInfo> {
         ProviderType::OpenAI => vec!["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"],
         ProviderType::Google => vec!["gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview"],
         ProviderType::VertexAnthropic => vec![
+            "claude-opus-4-8",
             "claude-opus-4-7",
             "claude-opus-4-6",
             "claude-sonnet-4-6",
@@ -427,7 +429,8 @@ mod tests {
     #[test]
     fn fallback_anthropic() {
         let models = fallback_models(ProviderType::Anthropic);
-        assert_eq!(models.len(), 4);
+        assert_eq!(models.len(), 5);
+        assert!(models.iter().any(|m| m.id == "claude-opus-4-8"));
         assert!(models.iter().any(|m| m.id == "claude-opus-4-7"));
         assert!(models.iter().any(|m| m.id == "claude-opus-4-6"));
         assert!(models.iter().any(|m| m.id == "claude-sonnet-4-6"));
@@ -459,7 +462,8 @@ mod tests {
     #[test]
     fn fallback_vertex_anthropic() {
         let models = fallback_models(ProviderType::VertexAnthropic);
-        assert_eq!(models.len(), 4);
+        assert_eq!(models.len(), 5);
+        assert!(models.iter().any(|m| m.id == "claude-opus-4-8"));
         assert!(models.iter().any(|m| m.id == "claude-opus-4-7"));
         assert!(models.iter().any(|m| m.id == "claude-opus-4-6"));
         assert!(models.iter().any(|m| m.id == "claude-sonnet-4-6"));

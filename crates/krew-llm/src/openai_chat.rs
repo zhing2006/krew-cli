@@ -1146,6 +1146,7 @@ mod tests {
                 filename: Some("test.png".to_string()),
             }],
             thinking_blocks: Vec::new(),
+            raw_content_blocks: Vec::new(),
         };
         let converted = convert_messages(&[msg], "agent", &OtherAgentRole::User);
         let obj = &converted[0];

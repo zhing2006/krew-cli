@@ -95,6 +95,10 @@ pub enum AgentEvent {
         /// Thinking blocks aggregated from the final LLM turn, to be attached
         /// to the terminal assistant message for protocol-compliant replay.
         final_thinking_blocks: Vec<krew_llm::ThinkingBlock>,
+        /// Raw, ordered content blocks from the final LLM turn, attached to the
+        /// terminal assistant message so the next request can replay the exact
+        /// thinking ↔ server_tool_use ↔ web_search_tool_result ↔ text order.
+        final_raw_content_blocks: Vec<serde_json::Value>,
     },
     /// An error occurred during the agent turn.
     Error {

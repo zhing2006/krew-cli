@@ -749,6 +749,32 @@ impl App {
                         }
                     }
 
+                    // Render thinking blocks (gray, indented) before the response,
+                    // mirroring the live streaming display so resumed sessions show
+                    // the agent's prior reasoning. Redacted blocks have no readable
+                    // text and are skipped, matching live streaming.
+                    let thinking_text = msg
+                        .thinking_blocks
+                        .as_ref()
+                        .map(|blocks| {
+                            blocks
+                                .iter()
+                                .filter_map(|b| match b {
+                                    krew_storage::session_file::ThinkingBlockEntry::Thinking {
+                                        text,
+                                        ..
+                                    } if !text.is_empty() => Some(text.as_str()),
+                                    _ => None,
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n\n")
+                        })
+                        .unwrap_or_default();
+                    if !thinking_text.is_empty() {
+                        let md_lines = render::markdown::render_markdown(&thinking_text);
+                        self.insert_thinking_lines(terminal, md_lines)?;
+                    }
+
                     if let Some(ref tool_calls) = msg.tool_calls {
                         if !msg.content.is_empty() {
                             let md_lines = render::markdown::render_markdown(&msg.content);

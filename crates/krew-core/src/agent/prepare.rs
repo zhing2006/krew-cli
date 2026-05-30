@@ -113,6 +113,7 @@ fn apply_whisper_filter(messages: Vec<ChatMessage>, self_name: &str) -> Vec<Chat
                     usage: None,
                     images: Vec::new(),
                     thinking_blocks: Vec::new(),
+                    raw_content_blocks: Vec::new(),
                 });
             }
             ChatRole::Assistant => {
@@ -133,6 +134,7 @@ fn apply_whisper_filter(messages: Vec<ChatMessage>, self_name: &str) -> Vec<Chat
                     usage: None,
                     images: Vec::new(),
                     thinking_blocks: Vec::new(),
+                    raw_content_blocks: Vec::new(),
                 });
             }
             ChatRole::Tool => {
@@ -198,6 +200,7 @@ mod tests {
             usage: None,
             images: Vec::new(),
             thinking_blocks: Vec::new(),
+            raw_content_blocks: Vec::new(),
         }
     }
 
@@ -215,6 +218,7 @@ mod tests {
             usage: None,
             images: Vec::new(),
             thinking_blocks: Vec::new(),
+            raw_content_blocks: Vec::new(),
         }
     }
 
@@ -359,6 +363,7 @@ mod tests {
             usage: None,
             images: Vec::new(),
             thinking_blocks: Vec::new(),
+            raw_content_blocks: Vec::new(),
         }
     }
 
@@ -381,6 +386,7 @@ mod tests {
             usage: None,
             images: Vec::new(),
             thinking_blocks: Vec::new(),
+            raw_content_blocks: Vec::new(),
         }
     }
 
