@@ -382,6 +382,7 @@ mod tests {
             usage: None,
             images: Vec::new(),
             thinking_blocks: Vec::new(),
+            raw_content_blocks: Vec::new(),
         }
     }
 
@@ -462,6 +463,7 @@ mod tests {
             usage: None,
             images: Vec::new(),
             thinking_blocks: Vec::new(),
+            raw_content_blocks: Vec::new(),
         }
     }
 
@@ -481,6 +483,7 @@ mod tests {
             usage: None,
             images: Vec::new(),
             thinking_blocks: Vec::new(),
+            raw_content_blocks: Vec::new(),
         }
     }
 
@@ -597,6 +600,7 @@ mod tests {
             usage: None,
             images: Vec::new(),
             thinking_blocks: Vec::new(),
+            raw_content_blocks: Vec::new(),
         }
     }
 

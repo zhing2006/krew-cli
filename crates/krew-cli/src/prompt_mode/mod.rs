@@ -327,6 +327,7 @@ struct AgentResult {
     usage: Option<Usage>,
     has_error: bool,
     final_thinking_blocks: Vec<krew_llm::ThinkingBlock>,
+    raw_content_blocks: Vec<serde_json::Value>,
 }
 
 /// Materialise the final assistant ChatMessage that `run_prompt_mode` persists
@@ -345,6 +346,7 @@ fn build_final_assistant_msg(
     final_msg.server_tool_uses = std::mem::take(&mut result.server_tool_uses);
     final_msg.whisper_targets = whisper_targets;
     final_msg.thinking_blocks = std::mem::take(&mut result.final_thinking_blocks);
+    final_msg.raw_content_blocks = std::mem::take(&mut result.raw_content_blocks);
     final_msg.usage = result.usage.take();
     final_msg
 }
@@ -364,6 +366,7 @@ async fn consume_agent_events(
     let mut has_error = false;
     let mut error_message = None;
     let mut final_thinking_blocks: Vec<krew_llm::ThinkingBlock> = Vec::new();
+    let mut raw_content_blocks: Vec<serde_json::Value> = Vec::new();
     let mut stdout = std::io::stdout();
     // Track whether we are mid-line in text streaming mode (after print!
     // without a trailing newline). Non-text events must flush a newline first.
@@ -543,6 +546,7 @@ async fn consume_agent_events(
                 final_text,
                 server_tool_uses: stus,
                 final_thinking_blocks: blocks,
+                final_raw_content_blocks: raw_blocks,
             } => {
                 usage = Some(u);
                 intermediate_messages = msgs;
@@ -550,6 +554,7 @@ async fn consume_agent_events(
                 server_tool_uses = stus;
                 text_buffer = final_text;
                 final_thinking_blocks = blocks;
+                raw_content_blocks = raw_blocks;
 
                 match format {
                     OutputFormat::Text => {
@@ -674,6 +679,7 @@ async fn consume_agent_events(
         usage,
         has_error,
         final_thinking_blocks,
+        raw_content_blocks,
     }
 }
 

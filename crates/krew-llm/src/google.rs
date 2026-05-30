@@ -1339,6 +1339,7 @@ mod tests {
                 usage: None,
                 images: vec![],
                 thinking_blocks: Vec::new(),
+                raw_content_blocks: Vec::new(),
             },
             ChatMessage {
                 role: ChatRole::Tool,
@@ -1353,6 +1354,7 @@ mod tests {
                 usage: None,
                 images: vec![],
                 thinking_blocks: Vec::new(),
+                raw_content_blocks: Vec::new(),
             },
         ];
         let converted = convert_messages(&messages, "agent", &OtherAgentRole::User, true);
@@ -1381,6 +1383,7 @@ mod tests {
                 usage: None,
                 images: vec![],
                 thinking_blocks: Vec::new(),
+                raw_content_blocks: Vec::new(),
             },
             ChatMessage::text(
                 ChatRole::Assistant,
@@ -1400,6 +1403,7 @@ mod tests {
                 usage: None,
                 images: vec![],
                 thinking_blocks: Vec::new(),
+                raw_content_blocks: Vec::new(),
             },
         ];
         let converted = convert_messages(&messages, "agent", &OtherAgentRole::User, true);
@@ -1441,6 +1445,7 @@ mod tests {
                 filename: Some("test.png".to_string()),
             }],
             thinking_blocks: Vec::new(),
+            raw_content_blocks: Vec::new(),
         };
         let converted = convert_messages(&[msg], "agent", &OtherAgentRole::User, true);
         let part = &converted.contents[0]["parts"][0];
@@ -1470,6 +1475,7 @@ mod tests {
             usage: None,
             images: vec![],
             thinking_blocks: Vec::new(),
+            raw_content_blocks: Vec::new(),
         };
         let converted = convert_messages(&[msg], "agent", &OtherAgentRole::User, true);
         let fr = &converted.contents[0]["parts"][0]["functionResponse"];
@@ -1499,6 +1505,7 @@ mod tests {
                 filename: Some("test.png".to_string()),
             }],
             thinking_blocks: Vec::new(),
+            raw_content_blocks: Vec::new(),
         };
         // v1 mode: inlineData as sibling, no id
         let converted = convert_messages(&[msg], "agent", &OtherAgentRole::User, false);
@@ -1526,6 +1533,7 @@ mod tests {
             usage: None,
             images: vec![],
             thinking_blocks: Vec::new(),
+            raw_content_blocks: Vec::new(),
         };
         // v1 mode: no id field
         let converted = convert_messages(&[msg], "agent", &OtherAgentRole::User, false);

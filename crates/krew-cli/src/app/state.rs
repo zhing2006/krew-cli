@@ -811,6 +811,7 @@ impl App {
                 final_text,
                 server_tool_uses,
                 final_thinking_blocks,
+                final_raw_content_blocks,
             } => {
                 // Finalize thinking if still active.
                 if self.is_thinking {
@@ -875,6 +876,7 @@ impl App {
                     });
                     final_msg.whisper_targets = self.current_whisper_targets.clone();
                     final_msg.thinking_blocks = final_thinking_blocks;
+                    final_msg.raw_content_blocks = final_raw_content_blocks;
                     self.messages.push(final_msg);
 
                     // Persist session after agent response.

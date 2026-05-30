@@ -140,6 +140,19 @@ pub struct ChatMessage {
     /// Vertex Anthropic populate this; other providers ignore the field both
     /// when receiving streams and when serializing assistant history.
     pub thinking_blocks: Vec<ThinkingBlock>,
+    /// Raw, ordered content blocks captured verbatim from the assistant's
+    /// response, preserving the exact interleaving of thinking /
+    /// server_tool_use / web_search_tool_result / text blocks.
+    ///
+    /// When non-empty (current Anthropic agent only), these are replayed
+    /// as-is on the next request, so the protocol rule "the latest assistant
+    /// turn's thinking blocks must be complete and unmodified" holds even
+    /// across server-side web_search turns — which the flattened fields
+    /// (`content`/`thinking_blocks`/`server_tool_uses`) cannot reconstruct in
+    /// the original order. Empty for all other providers/agents. Persisted to
+    /// session files (as a JSON string) so the interleaving survives across
+    /// process restarts and the verbatim replay holds on resume.
+    pub raw_content_blocks: Vec<serde_json::Value>,
 }
 
 /// Information about a server-side tool use (e.g. web_search, google_search).
@@ -180,6 +193,7 @@ impl ChatMessage {
             usage: None,
             images: Vec::new(),
             thinking_blocks: Vec::new(),
+            raw_content_blocks: Vec::new(),
         }
     }
 
@@ -198,6 +212,7 @@ impl ChatMessage {
             usage: None,
             images: Vec::new(),
             thinking_blocks: Vec::new(),
+            raw_content_blocks: Vec::new(),
         }
     }
 

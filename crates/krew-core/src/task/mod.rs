@@ -119,6 +119,7 @@ async fn run_task_inner(
         intermediate_messages: Vec::new(),
         server_tool_uses: Vec::new(),
         final_thinking_blocks: Vec::new(),
+        raw_content_blocks: Vec::new(),
         usage: Usage {
             prompt_tokens: 0,
             completion_tokens: 0,
@@ -145,6 +146,7 @@ async fn run_task_inner(
             usage: Some(consumed.usage.clone()),
             images: Vec::new(),
             thinking_blocks: consumed.final_thinking_blocks,
+            raw_content_blocks: consumed.raw_content_blocks,
         });
     }
 
@@ -162,6 +164,7 @@ struct ConsumedResult {
     intermediate_messages: Vec<ChatMessage>,
     server_tool_uses: Vec<ServerToolUseInfo>,
     final_thinking_blocks: Vec<krew_llm::ThinkingBlock>,
+    raw_content_blocks: Vec<serde_json::Value>,
     usage: Usage,
     is_error: bool,
 }
@@ -181,6 +184,7 @@ async fn consume_events(
         intermediate_messages: Vec::new(),
         server_tool_uses: Vec::new(),
         final_thinking_blocks: Vec::new(),
+        raw_content_blocks: Vec::new(),
         usage: Usage {
             prompt_tokens: 0,
             completion_tokens: 0,
@@ -197,11 +201,13 @@ async fn consume_events(
                 final_text,
                 server_tool_uses,
                 final_thinking_blocks,
+                final_raw_content_blocks,
             } => {
                 result.final_text = final_text.clone();
                 result.intermediate_messages = intermediate_messages.clone();
                 result.server_tool_uses = server_tool_uses.clone();
                 result.final_thinking_blocks = final_thinking_blocks.clone();
+                result.raw_content_blocks = final_raw_content_blocks.clone();
                 result.usage = usage.clone();
                 if let Some(ref etx) = event_tx {
                     let _ = etx.send(AgentEvent::Done {
@@ -210,6 +216,7 @@ async fn consume_events(
                         final_text,
                         server_tool_uses,
                         final_thinking_blocks,
+                        final_raw_content_blocks,
                     });
                 }
                 break;

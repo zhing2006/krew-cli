@@ -24,6 +24,13 @@ pub enum StreamEvent {
     ServerToolStart { name: String },
     /// A server-side tool has completed, with optional query/context for display.
     ServerToolDone { name: String, query: Option<String> },
+    /// A complete raw content block, emitted in stream order once the block is
+    /// finalized. Consumers accumulate these into a `Vec` to replay the
+    /// assistant's exact content sequence (thinking ↔ server_tool_use ↔
+    /// web_search_tool_result ↔ text) on the next request, preserving the
+    /// interleaving that the flattened message fields lose. Only Anthropic /
+    /// Vertex Anthropic emit this.
+    RawContentBlock(serde_json::Value),
     /// Stream completed, carrying final token usage.
     Done(Usage),
     /// An error occurred during streaming.

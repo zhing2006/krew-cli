@@ -29,6 +29,7 @@ fn make_test_session() -> SessionFile {
                 server_tool_uses: vec![],
                 whisper_targets: None,
                 thinking_blocks: None,
+                raw_content_blocks_json: None,
                 created_at: now,
             },
             MessageEntry {
@@ -46,6 +47,7 @@ fn make_test_session() -> SessionFile {
                 server_tool_uses: vec![],
                 whisper_targets: None,
                 thinking_blocks: None,
+                raw_content_blocks_json: None,
                 created_at: now,
             },
         ],
@@ -142,6 +144,7 @@ fn test_list_sessions() {
             server_tool_uses: vec![],
             whisper_targets: None,
             thinking_blocks: None,
+            raw_content_blocks_json: None,
             created_at: older,
         }],
     };
@@ -166,6 +169,7 @@ fn test_list_sessions() {
             server_tool_uses: vec![],
             whisper_targets: None,
             thinking_blocks: None,
+            raw_content_blocks_json: None,
             created_at: now,
         }],
     };
@@ -227,6 +231,7 @@ fn test_whisper_targets_roundtrip() {
                 server_tool_uses: vec![],
                 whisper_targets: Some(vec!["opus".to_string()]),
                 thinking_blocks: None,
+                raw_content_blocks_json: None,
                 created_at: now,
             },
             MessageEntry {
@@ -240,6 +245,7 @@ fn test_whisper_targets_roundtrip() {
                 server_tool_uses: vec![],
                 whisper_targets: Some(vec!["opus".to_string()]),
                 thinking_blocks: None,
+                raw_content_blocks_json: None,
                 created_at: now,
             },
             MessageEntry {
@@ -253,6 +259,7 @@ fn test_whisper_targets_roundtrip() {
                 server_tool_uses: vec![],
                 whisper_targets: None,
                 thinking_blocks: None,
+                raw_content_blocks_json: None,
                 created_at: now,
             },
         ],
@@ -321,6 +328,7 @@ fn test_thinking_blocks_roundtrip_with_both_variants() {
                     data: "opaque".to_string(),
                 },
             ]),
+            raw_content_blocks_json: None,
             created_at: now,
         }],
     };
@@ -436,6 +444,7 @@ fn test_empty_thinking_blocks_omits_key_when_some_empty_vec() {
             server_tool_uses: vec![],
             whisper_targets: None,
             thinking_blocks: Some(vec![]),
+            raw_content_blocks_json: None,
             created_at: now,
         }],
     };

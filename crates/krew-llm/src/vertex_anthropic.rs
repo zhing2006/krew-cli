@@ -463,6 +463,7 @@ mod tests {
                 text: "let me reason".to_string(),
                 signature: "sig-vertex".to_string(),
             }],
+            raw_content_blocks: Vec::new(),
         };
 
         let _stream = client

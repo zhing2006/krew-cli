@@ -97,6 +97,7 @@ pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
                 final_text: result.text,
                 server_tool_uses: all_server_tool_uses,
                 final_thinking_blocks: result.thinking_blocks,
+                final_raw_content_blocks: result.raw_content_blocks,
             });
             return;
         }
@@ -138,6 +139,7 @@ pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
             usage: None,
             images: Vec::new(),
             thinking_blocks: result.thinking_blocks.clone(),
+            raw_content_blocks: result.raw_content_blocks.clone(),
         };
         tool_round_messages.push(assistant_msg.clone());
         messages.push(assistant_msg);
@@ -211,6 +213,7 @@ pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
                 usage: None,
                 server_tool_uses: Vec::new(),
                 thinking_blocks: Vec::new(),
+                raw_content_blocks: Vec::new(),
             };
             tool_round_messages.push(tool_msg.clone());
             messages.push(tool_msg);
@@ -404,6 +407,7 @@ pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
                 usage: None,
                 images,
                 thinking_blocks: Vec::new(),
+                raw_content_blocks: Vec::new(),
             };
             tool_round_messages.push(tool_msg.clone());
             messages.push(tool_msg);
@@ -423,6 +427,10 @@ struct StreamResult {
     /// the order received. Replayed on the next turn so providers like
     /// Anthropic can validate the signatures.
     thinking_blocks: Vec<ThinkingBlock>,
+    /// Raw, ordered content blocks aggregated from `StreamEvent::RawContentBlock`
+    /// in stream order. Replayed verbatim on the next turn to preserve the
+    /// thinking ↔ server_tool_use ↔ web_search_tool_result ↔ text interleaving.
+    raw_content_blocks: Vec<serde_json::Value>,
     /// Token usage from the stream (if received).
     usage: Option<Usage>,
     /// Error message if the stream reported an error.
@@ -449,6 +457,7 @@ async fn consume_stream(
         tool_calls: Vec::new(),
         server_tool_uses: Vec::new(),
         thinking_blocks: Vec::new(),
+        raw_content_blocks: Vec::new(),
         usage: None,
         error: None,
     };
@@ -468,6 +477,9 @@ async fn consume_stream(
             }
             StreamEvent::ThinkingBlockDone(block) => {
                 result.thinking_blocks.push(block);
+            }
+            StreamEvent::RawContentBlock(block) => {
+                result.raw_content_blocks.push(block);
             }
             StreamEvent::ServerToolStart { name } => {
                 if tx.send(AgentEvent::ServerToolStart { name }).is_err() {
@@ -651,6 +663,35 @@ mod tests {
         assert_eq!(result.thinking_blocks, vec![block_a, block_b]);
         assert_eq!(result.text, "hello");
         assert_eq!(result.tool_calls.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn consume_stream_collects_raw_content_blocks_in_order() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();
+        let events = vec![
+            StreamEvent::RawContentBlock(
+                serde_json::json!({"type":"thinking","thinking":"t1","signature":"s1"}),
+            ),
+            StreamEvent::ThinkingBlockDone(ThinkingBlock::Thinking {
+                text: "t1".to_string(),
+                signature: "s1".to_string(),
+            }),
+            StreamEvent::RawContentBlock(serde_json::json!({"type":"text","text":"hi"})),
+            StreamEvent::TextDelta("hi".to_string()),
+            StreamEvent::Done(Usage::default()),
+        ];
+        let stream: Pin<Box<dyn futures::Stream<Item = StreamEvent> + Send>> =
+            Box::pin(stream::iter(events));
+        let result = consume_stream(stream, &tx, "agent1").await;
+        drain_events(&mut rx);
+
+        let types: Vec<&str> = result
+            .raw_content_blocks
+            .iter()
+            .map(|v| v["type"].as_str().unwrap())
+            .collect();
+        assert_eq!(types, vec!["thinking", "text"]);
+        assert_eq!(result.raw_content_blocks[0]["signature"], "s1");
     }
 
     /// LlmClient that returns canned event sequences per round and records

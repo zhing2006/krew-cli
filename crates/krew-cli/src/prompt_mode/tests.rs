@@ -106,6 +106,7 @@ fn make_done_event(text: &str) -> AgentEvent {
         final_text: text.to_string(),
         server_tool_uses: vec![],
         final_thinking_blocks: vec![],
+        final_raw_content_blocks: vec![],
     }
 }
 
@@ -199,6 +200,7 @@ fn build_final_assistant_msg_attaches_thinking_blocks_and_metadata() {
         usage: Some(usage.clone()),
         has_error: false,
         final_thinking_blocks: blocks.clone(),
+        raw_content_blocks: vec![],
     };
     let whisper = Some(vec!["claude".to_string()]);
 
@@ -252,6 +254,7 @@ async fn final_thinking_blocks_propagate_from_done_to_agent_result() {
         final_text: "answer".to_string(),
         server_tool_uses: vec![],
         final_thinking_blocks: blocks.clone(),
+        final_raw_content_blocks: vec![],
     })
     .unwrap();
     drop(tx);
@@ -361,6 +364,7 @@ async fn server_tool_events_processed() {
             query: Some("rust async".to_string()),
         }],
         final_thinking_blocks: vec![],
+        final_raw_content_blocks: vec![],
     })
     .unwrap();
     drop(tx);
@@ -408,6 +412,7 @@ async fn thinking_between_server_tool_does_not_trigger_gemini_style() {
             query: Some("rust".to_string()),
         }],
         final_thinking_blocks: vec![],
+        final_raw_content_blocks: vec![],
     })
     .unwrap();
     drop(tx);
@@ -534,6 +539,7 @@ async fn server_tool_uses_only_from_done_event() {
             query: Some("rust".to_string()),
         }],
         final_thinking_blocks: vec![],
+        final_raw_content_blocks: vec![],
     })
     .unwrap();
     drop(tx);

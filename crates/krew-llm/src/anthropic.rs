@@ -66,18 +66,44 @@ impl AnthropicClient {
 }
 
 // ---------------------------------------------------------------------------
+// Model version parsing
+// ---------------------------------------------------------------------------
+
+/// Parse the `(major, minor)` version from a Claude model name such as
+/// `claude-opus-4-8`, `claude-opus-4-8-20260301`, or the Vertex form
+/// `claude-opus-4-8@20260301`. Returns `None` for names without a
+/// `<family>-<major>-<minor>` segment (e.g. legacy `claude-3-5-sonnet-...`).
+fn claude_version(model: &str) -> Option<(u32, u32)> {
+    for family in ["opus", "sonnet", "haiku"] {
+        if let Some(idx) = model.find(family) {
+            let rest = model[idx + family.len()..].trim_start_matches('-');
+            let mut parts = rest.split(['-', '@']);
+            let major = parts.next()?.parse::<u32>().ok()?;
+            let minor = parts.next()?.parse::<u32>().ok()?;
+            return Some((major, minor));
+        }
+    }
+    None
+}
+
+/// Whether `model`'s parsed version is at least `major.minor`. Returns `false`
+/// when the version cannot be parsed (e.g. legacy or non-Claude names).
+fn version_at_least(model: &str, major: u32, minor: u32) -> bool {
+    claude_version(model).is_some_and(|(maj, min)| maj > major || (maj == major && min >= minor))
+}
+
+// ---------------------------------------------------------------------------
 // max_tokens defaults by model
 // ---------------------------------------------------------------------------
 
 /// Get the default max_tokens for a given model name.
 fn default_max_tokens(model: &str) -> u32 {
     let has = |s: &str| model.contains(s);
-    if has("opus") && (has("4-6") || has("4-7")) {
+    if has("opus") && version_at_least(model, 4, 6) {
         128_000
-    } else if (has("sonnet") && (has("4-6") || has("4-7")))
-        || (has("haiku") && has("4-5"))
-        || (has("opus") && has("4-5"))
-        || (has("sonnet") && has("4-5"))
+    } else if (has("opus") && version_at_least(model, 4, 5))
+        || (has("sonnet") && version_at_least(model, 4, 5))
+        || (has("haiku") && version_at_least(model, 4, 5))
     {
         64_000
     } else {
@@ -177,6 +203,24 @@ pub(crate) fn convert_messages(
                 .as_ref()
                 .is_some_and(|name| name != self_agent_name);
 
+        // Raw content-block replay (current agent only): when we captured the
+        // assistant's original ordered blocks, replay them verbatim. This
+        // preserves the exact thinking ↔ server_tool_use ↔
+        // web_search_tool_result ↔ text interleaving, which the flattened
+        // fields cannot reconstruct, so the Anthropic protocol's "latest
+        // assistant turn thinking must be complete and unmodified" rule holds.
+        // The raw blocks already contain any tool_use, so this supersedes the
+        // tool_calls branch below. Other agents fall through to summary/drop.
+        if msg.role == ChatRole::Assistant && !is_other_agent && !msg.raw_content_blocks.is_empty()
+        {
+            flush_pending_anthropic(&mut pending, &mut result);
+            result.push(serde_json::json!({
+                "role": "assistant",
+                "content": serde_json::Value::Array(msg.raw_content_blocks.clone()),
+            }));
+            continue;
+        }
+
         // Assistant messages with tool_calls: Anthropic uses tool_use content blocks.
         if let (ChatRole::Assistant, Some(tcs)) = (&msg.role, &msg.tool_calls) {
             flush_pending_anthropic(&mut pending, &mut result);
@@ -208,28 +252,16 @@ pub(crate) fn convert_messages(
             continue;
         }
 
-        // Current-agent assistant with thinking blocks but no tool_calls:
-        // emit as a discrete assistant message preserving block order so the
-        // signature accompanies the terminal turn.
-        if matches!(msg.role, ChatRole::Assistant)
-            && !is_other_agent
-            && !msg.thinking_blocks.is_empty()
-        {
-            flush_pending_anthropic(&mut pending, &mut result);
-
-            let mut content_blocks = thinking_blocks_to_json(&msg.thinking_blocks);
-            if !msg.content.is_empty() {
-                content_blocks.push(serde_json::json!({
-                    "type": "text",
-                    "text": msg.content,
-                }));
-            }
-            result.push(serde_json::json!({
-                "role": "assistant",
-                "content": content_blocks,
-            }));
-            continue;
-        }
+        // Completed assistant turns (no pending tool_calls) intentionally do
+        // NOT replay thinking blocks. Per the Anthropic protocol, thinking
+        // blocks are only required while a tool-use loop is still open (handled
+        // above, where `tool_calls` is set). For a finished turn they are
+        // optional, and replaying them here would be unsafe: the original turn
+        // may have interleaved `server_tool_use`/`web_search_tool_result` blocks
+        // between thinking blocks (e.g. web search), which we do not persist.
+        // Emitting the thinking blocks back-to-back would reorder the sequence
+        // and the API rejects it ("thinking blocks ... cannot be modified").
+        // So such messages fall through to the regular-text handling below.
 
         // Regular messages.
         let role = match &msg.role {
@@ -358,18 +390,17 @@ pub(crate) fn build_sampling_params(
 // Thinking parameter injection
 // ---------------------------------------------------------------------------
 
-/// Check if a model supports adaptive thinking (Opus 4.6+ / Sonnet 4.6+).
+/// Check if a model supports adaptive thinking (Opus/Sonnet 4.6 and later).
 fn supports_adaptive(model: &str) -> bool {
-    (model.contains("opus") || model.contains("sonnet"))
-        && (model.contains("4-6") || model.contains("4-7"))
+    (model.contains("opus") || model.contains("sonnet")) && version_at_least(model, 4, 6)
 }
 
-/// Check if a model supports the effort parameter (Opus 4.6, Sonnet 4.6, Opus 4.5).
+/// Check if a model supports the effort parameter (adaptive models plus Opus 4.5).
 fn supports_effort(model: &str) -> bool {
-    supports_adaptive(model) || (model.contains("opus") && model.contains("4-5"))
+    supports_adaptive(model) || (model.contains("opus") && version_at_least(model, 4, 5))
 }
 
-/// Check if a model supports effort = "max" (Opus 4.6 / Sonnet 4.6).
+/// Check if a model supports effort = "max" (any adaptive-capable model).
 fn supports_max_effort(model: &str) -> bool {
     supports_adaptive(model)
 }
@@ -483,6 +514,19 @@ struct SseState {
     thinking_signature: String,
     /// Opaque `data` field captured from a `redacted_thinking` content block.
     redacted_data: Option<String>,
+    /// Current `server_tool_use` ID, captured so the raw block can be replayed.
+    server_tool_id: String,
+    /// Accumulated text for the current `text` content block. The streamed
+    /// `TextDelta`s are not otherwise retained, so this rebuilds the raw block.
+    text_buf: String,
+    /// Citation objects accumulated from `citations_delta` events for the
+    /// current `text` block (e.g. web_search source citations).
+    text_citations: Vec<serde_json::Value>,
+    /// A finalized raw content block awaiting emission. Set just before a
+    /// semantic event (ToolCall / ServerToolDone / ThinkingBlockDone) returns,
+    /// then drained as a `RawContentBlock` on the next poll so raw blocks
+    /// preserve the provider's original stream order.
+    pending_raw: Option<serde_json::Value>,
 }
 
 /// Parse Anthropic SSE events into StreamEvents.
@@ -502,6 +546,13 @@ pub(crate) fn build_event_stream(
         |(mut sse_stream, mut state, mut done)| async move {
             if done {
                 return None;
+            }
+
+            // Drain a raw content block queued by the previous poll, before
+            // consuming more SSE events, so RawContentBlock events keep the
+            // provider's original block order.
+            if let Some(raw) = state.pending_raw.take() {
+                return Some((StreamEvent::RawContentBlock(raw), (sse_stream, state, done)));
             }
 
             loop {
@@ -569,6 +620,11 @@ pub(crate) fn build_event_stream(
                                     // Server-side tool (e.g. web_search): emit start,
                                     // accumulate input JSON, emit done at content_block_stop.
                                     if block_type == "server_tool_use" {
+                                        state.server_tool_id = block
+                                            .get("id")
+                                            .and_then(|i| i.as_str())
+                                            .unwrap_or("")
+                                            .to_string();
                                         state.tool_name = block
                                             .get("name")
                                             .and_then(|n| n.as_str())
@@ -582,6 +638,27 @@ pub(crate) fn build_event_stream(
                                             },
                                             (sse_stream, state, done),
                                         ));
+                                    }
+
+                                    // Server tool result (e.g. web_search_tool_result)
+                                    // arrives complete at block_start with no deltas.
+                                    // Capture the whole block verbatim (it carries the
+                                    // encrypted_content the protocol requires echoed back)
+                                    // and emit it as a raw block now; its
+                                    // content_block_stop becomes a no-op.
+                                    if block_type == "web_search_tool_result" {
+                                        state.current_block_type = Some(block_type);
+                                        return Some((
+                                            StreamEvent::RawContentBlock(block.clone()),
+                                            (sse_stream, state, done),
+                                        ));
+                                    }
+
+                                    // Text block: reset the per-block accumulators used
+                                    // to rebuild the raw block at content_block_stop.
+                                    if block_type == "text" {
+                                        state.text_buf.clear();
+                                        state.text_citations.clear();
                                     }
 
                                     state.current_block_type = Some(block_type);
@@ -602,6 +679,7 @@ pub(crate) fn build_event_stream(
                                                 delta.get("text").and_then(|t| t.as_str())
                                                 && !text.is_empty()
                                             {
+                                                state.text_buf.push_str(text);
                                                 return Some((
                                                     StreamEvent::TextDelta(text.to_string()),
                                                     (sse_stream, state, done),
@@ -637,6 +715,15 @@ pub(crate) fn build_event_stream(
                                                 state.thinking_signature.push_str(sig);
                                             }
                                         }
+                                        "citations_delta" => {
+                                            // Accumulate citation objects for the current
+                                            // text block (e.g. web_search source refs).
+                                            // Each delta carries one citation under
+                                            // `citation`.
+                                            if let Some(citation) = delta.get("citation") {
+                                                state.text_citations.push(citation.clone());
+                                            }
+                                        }
                                         _ => {}
                                     }
                                 }
@@ -646,12 +733,21 @@ pub(crate) fn build_event_stream(
                             "content_block_stop" => {
                                 // Emit tool call if this was a tool_use block.
                                 if state.current_block_type.as_deref() == Some("tool_use") {
+                                    let input: serde_json::Value =
+                                        serde_json::from_str(&state.tool_args)
+                                            .unwrap_or_else(|_| serde_json::json!({}));
                                     let event = StreamEvent::ToolCall {
                                         id: state.tool_id.clone(),
                                         name: state.tool_name.clone(),
                                         arguments: state.tool_args.clone(),
                                         thought_signature: None,
                                     };
+                                    state.pending_raw = Some(serde_json::json!({
+                                        "type": "tool_use",
+                                        "id": state.tool_id,
+                                        "name": state.tool_name,
+                                        "input": input,
+                                    }));
                                     state.current_block_type = None;
                                     state.tool_id.clear();
                                     state.tool_name.clear();
@@ -660,19 +756,25 @@ pub(crate) fn build_event_stream(
                                 }
                                 // Emit server tool done with accumulated query.
                                 if state.current_block_type.as_deref() == Some("server_tool_use") {
-                                    let query =
-                                        serde_json::from_str::<serde_json::Value>(&state.tool_args)
-                                            .ok()
-                                            .and_then(|v| {
-                                                v.get("query")
-                                                    .and_then(|q| q.as_str())
-                                                    .map(|s| s.to_string())
-                                            });
+                                    let input: serde_json::Value =
+                                        serde_json::from_str(&state.tool_args)
+                                            .unwrap_or_else(|_| serde_json::json!({}));
+                                    let query = input
+                                        .get("query")
+                                        .and_then(|q| q.as_str())
+                                        .map(|s| s.to_string());
                                     let event = StreamEvent::ServerToolDone {
                                         name: state.tool_name.clone(),
                                         query,
                                     };
+                                    state.pending_raw = Some(serde_json::json!({
+                                        "type": "server_tool_use",
+                                        "id": state.server_tool_id,
+                                        "name": state.tool_name,
+                                        "input": input,
+                                    }));
                                     state.current_block_type = None;
+                                    state.server_tool_id.clear();
                                     state.tool_name.clear();
                                     state.tool_args.clear();
                                     return Some((event, (sse_stream, state, done)));
@@ -697,6 +799,11 @@ pub(crate) fn build_event_stream(
                                             (sse_stream, state, done),
                                         ));
                                     }
+                                    state.pending_raw = Some(serde_json::json!({
+                                        "type": BLOCK_TYPE_THINKING,
+                                        "thinking": text.clone(),
+                                        "signature": signature.clone(),
+                                    }));
                                     return Some((
                                         StreamEvent::ThinkingBlockDone(ThinkingBlock::Thinking {
                                             text,
@@ -726,10 +833,36 @@ pub(crate) fn build_event_stream(
                                             (sse_stream, state, done),
                                         ));
                                     };
+                                    state.pending_raw = Some(serde_json::json!({
+                                        "type": BLOCK_TYPE_REDACTED_THINKING,
+                                        "data": data.clone(),
+                                    }));
                                     return Some((
                                         StreamEvent::ThinkingBlockDone(ThinkingBlock::Redacted {
                                             data,
                                         }),
+                                        (sse_stream, state, done),
+                                    ));
+                                }
+                                // Text block finalized: rebuild the raw block from the
+                                // accumulated text/citations and emit it directly (no
+                                // preceding semantic event, so no pending_raw needed).
+                                if state.current_block_type.as_deref() == Some("text") {
+                                    let text = std::mem::take(&mut state.text_buf);
+                                    let citations = std::mem::take(&mut state.text_citations);
+                                    state.current_block_type = None;
+                                    if text.is_empty() && citations.is_empty() {
+                                        continue;
+                                    }
+                                    let mut raw = serde_json::json!({
+                                        "type": "text",
+                                        "text": text,
+                                    });
+                                    if !citations.is_empty() {
+                                        raw["citations"] = serde_json::Value::Array(citations);
+                                    }
+                                    return Some((
+                                        StreamEvent::RawContentBlock(raw),
                                         (sse_stream, state, done),
                                     ));
                                 }
@@ -1173,6 +1306,7 @@ mod tests {
             usage: None,
             images: Vec::new(),
             thinking_blocks: blocks,
+            raw_content_blocks: Vec::new(),
         }
     }
 
@@ -1194,6 +1328,7 @@ mod tests {
             usage: None,
             images: Vec::new(),
             thinking_blocks: blocks,
+            raw_content_blocks: Vec::new(),
         }
     }
 
@@ -1251,6 +1386,11 @@ mod tests {
 
     #[test]
     fn convert_assistant_thinking_only_no_tool_use() {
+        // A completed (end_turn) assistant turn has no pending tool_calls, so its
+        // thinking blocks are optional and MUST be dropped on replay: we cannot
+        // reproduce the exact original block sequence (e.g. interleaved
+        // server_tool_use/web_search_tool_result), and any mismatch is rejected
+        // by the API ("thinking blocks ... cannot be modified").
         let msg = assistant_thinking_only(
             "agent1",
             "final answer",
@@ -1261,11 +1401,223 @@ mod tests {
         );
         let result = convert_messages(&[msg], "agent1", &OtherAgentRole::User);
         assert_eq!(result.messages.len(), 1);
+        assert_eq!(result.messages[0]["role"], "assistant");
+        // Only the final text remains; no thinking block is replayed.
+        assert_eq!(result.messages[0]["content"], "final answer");
+    }
+
+    // ---- Raw content block capture / replay tests ----
+
+    fn raw_blocks(events: &[StreamEvent]) -> Vec<serde_json::Value> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::RawContentBlock(v) => Some(v.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn sse_thinking_block_emits_raw_content_block() {
+        let sse = "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n\
+                   event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"reason\"}}\n\n\
+                   event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"sig-1\"}}\n\n\
+                   event: content_block_stop\ndata: {\"index\":0}\n\n\
+                   event: message_stop\ndata: {}\n\n";
+        let events = collect_sse_events(sse).await;
+        let raws = raw_blocks(&events);
+        assert_eq!(raws.len(), 1);
+        assert_eq!(raws[0]["type"], "thinking");
+        assert_eq!(raws[0]["thinking"], "reason");
+        assert_eq!(raws[0]["signature"], "sig-1");
+    }
+
+    #[tokio::test]
+    async fn sse_server_tool_use_emits_raw_with_id() {
+        let sse = "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"server_tool_use\",\"id\":\"srvtoolu_1\",\"name\":\"web_search\"}}\n\n\
+                   event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"query\\\":\\\"rust\\\"}\"}}\n\n\
+                   event: content_block_stop\ndata: {\"index\":0}\n\n\
+                   event: message_stop\ndata: {}\n\n";
+        let events = collect_sse_events(sse).await;
+        let raw = raw_blocks(&events)
+            .into_iter()
+            .find(|v| v["type"] == "server_tool_use")
+            .expect("must emit server_tool_use raw block");
+        assert_eq!(raw["id"], "srvtoolu_1");
+        assert_eq!(raw["name"], "web_search");
+        assert_eq!(raw["input"]["query"], "rust");
+    }
+
+    #[tokio::test]
+    async fn sse_web_search_tool_result_emits_raw_verbatim() {
+        let sse = "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"web_search_tool_result\",\"tool_use_id\":\"srvtoolu_1\",\"content\":[{\"type\":\"web_search_result\",\"url\":\"https://e.com\",\"title\":\"E\",\"encrypted_content\":\"ENC123\"}]}}\n\n\
+                   event: content_block_stop\ndata: {\"index\":0}\n\n\
+                   event: message_stop\ndata: {}\n\n";
+        let events = collect_sse_events(sse).await;
+        let raw = raw_blocks(&events)
+            .into_iter()
+            .find(|v| v["type"] == "web_search_tool_result")
+            .expect("must emit web_search_tool_result raw block");
+        assert_eq!(raw["tool_use_id"], "srvtoolu_1");
+        assert_eq!(raw["content"][0]["url"], "https://e.com");
+        // encrypted_content must survive verbatim for protocol-compliant replay.
+        assert_eq!(raw["content"][0]["encrypted_content"], "ENC123");
+    }
+
+    #[tokio::test]
+    async fn sse_text_block_emits_raw_with_citations() {
+        let sse = "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n\
+                   event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Answer\"}}\n\n\
+                   event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"citations_delta\",\"citation\":{\"type\":\"web_search_result_location\",\"url\":\"https://e.com\",\"title\":\"E\"}}}\n\n\
+                   event: content_block_stop\ndata: {\"index\":0}\n\n\
+                   event: message_stop\ndata: {}\n\n";
+        let events = collect_sse_events(sse).await;
+        let raw = raw_blocks(&events)
+            .into_iter()
+            .find(|v| v["type"] == "text")
+            .expect("must emit text raw block");
+        assert_eq!(raw["text"], "Answer");
+        assert_eq!(raw["citations"][0]["url"], "https://e.com");
+    }
+
+    #[tokio::test]
+    async fn sse_interleaved_blocks_preserve_raw_order() {
+        let sse = "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n\
+                   event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"t1\"}}\n\n\
+                   event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"s1\"}}\n\n\
+                   event: content_block_stop\ndata: {\"index\":0}\n\n\
+                   event: content_block_start\ndata: {\"index\":1,\"content_block\":{\"type\":\"server_tool_use\",\"id\":\"srv1\",\"name\":\"web_search\"}}\n\n\
+                   event: content_block_delta\ndata: {\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"query\\\":\\\"q\\\"}\"}}\n\n\
+                   event: content_block_stop\ndata: {\"index\":1}\n\n\
+                   event: content_block_start\ndata: {\"index\":2,\"content_block\":{\"type\":\"web_search_tool_result\",\"tool_use_id\":\"srv1\",\"content\":[{\"type\":\"web_search_result\",\"encrypted_content\":\"E\"}]}}\n\n\
+                   event: content_block_stop\ndata: {\"index\":2}\n\n\
+                   event: content_block_start\ndata: {\"index\":3,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n\
+                   event: content_block_delta\ndata: {\"index\":3,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"t2\"}}\n\n\
+                   event: content_block_delta\ndata: {\"index\":3,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"s2\"}}\n\n\
+                   event: content_block_stop\ndata: {\"index\":3}\n\n\
+                   event: content_block_start\ndata: {\"index\":4,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n\
+                   event: content_block_delta\ndata: {\"index\":4,\"delta\":{\"type\":\"text_delta\",\"text\":\"done\"}}\n\n\
+                   event: content_block_stop\ndata: {\"index\":4}\n\n\
+                   event: message_stop\ndata: {}\n\n";
+        let events = collect_sse_events(sse).await;
+        let raws = raw_blocks(&events);
+        let types: Vec<&str> = raws.iter().map(|v| v["type"].as_str().unwrap()).collect();
+        assert_eq!(
+            types,
+            vec![
+                "thinking",
+                "server_tool_use",
+                "web_search_tool_result",
+                "thinking",
+                "text",
+            ]
+        );
+        // The two thinking blocks keep their original order and content.
+        assert_eq!(raws[0]["thinking"], "t1");
+        assert_eq!(raws[3]["thinking"], "t2");
+    }
+
+    #[tokio::test]
+    async fn sse_thinking_without_signature_emits_no_raw_block() {
+        let sse = "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n\
+                   event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"x\"}}\n\n\
+                   event: content_block_stop\ndata: {\"index\":0}\n\n\
+                   event: message_stop\ndata: {}\n\n";
+        let events = collect_sse_events(sse).await;
+        // An unsigned thinking block is fatal and must not leak a raw block.
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::RawContentBlock(v) if v["type"] == "thinking"))
+        );
+        assert!(events.iter().any(|e| matches!(e, StreamEvent::Error(_))));
+        assert!(!events.iter().any(|e| matches!(e, StreamEvent::Done(_))));
+    }
+
+    #[test]
+    fn convert_replays_raw_content_blocks_verbatim() {
+        let mut msg = assistant_thinking_only("agent1", "done", vec![]);
+        msg.raw_content_blocks = vec![
+            serde_json::json!({"type":"thinking","thinking":"t1","signature":"s1"}),
+            serde_json::json!({"type":"server_tool_use","id":"srv1","name":"web_search","input":{"query":"q"}}),
+            serde_json::json!({"type":"web_search_tool_result","tool_use_id":"srv1","content":[{"encrypted_content":"E"}]}),
+            serde_json::json!({"type":"thinking","thinking":"t2","signature":"s2"}),
+            serde_json::json!({"type":"text","text":"done"}),
+        ];
+        let result = convert_messages(&[msg], "agent1", &OtherAgentRole::User);
+        assert_eq!(result.messages.len(), 1);
+        assert_eq!(result.messages[0]["role"], "assistant");
+        let content = result.messages[0]["content"].as_array().unwrap();
+        let types: Vec<&str> = content
+            .iter()
+            .map(|b| b["type"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            types,
+            vec![
+                "thinking",
+                "server_tool_use",
+                "web_search_tool_result",
+                "thinking",
+                "text",
+            ]
+        );
+        // encrypted_content is replayed unchanged.
+        assert_eq!(content[2]["content"][0]["encrypted_content"], "E");
+    }
+
+    #[test]
+    fn convert_raw_blocks_supersede_tool_calls() {
+        // A message carrying BOTH tool_calls and captured raw blocks must replay
+        // only the raw blocks (which already embed the tool_use), never both.
+        let mut msg = assistant_with_thinking_and_tool_call("agent1", vec![]);
+        msg.raw_content_blocks = vec![
+            serde_json::json!({"type":"text","text":"hi"}),
+            serde_json::json!({"type":"tool_use","id":"tool_1","name":"read_file","input":{"path":"a.rs"}}),
+        ];
+        let result = convert_messages(&[msg], "agent1", &OtherAgentRole::User);
+        let content = result.messages[0]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+        let tool_uses = content.iter().filter(|b| b["type"] == "tool_use").count();
+        assert_eq!(tool_uses, 1);
+    }
+
+    #[test]
+    fn convert_other_agent_raw_blocks_not_replayed() {
+        let mut msg = assistant_thinking_only("other-agent", "hello", vec![]);
+        msg.raw_content_blocks = vec![
+            serde_json::json!({"type":"thinking","thinking":"secret","signature":"s"}),
+            serde_json::json!({"type":"text","text":"hello"}),
+        ];
+        let result = convert_messages(&[msg], "agent1", &OtherAgentRole::Assistant);
+        // Another agent's raw blocks are never replayed; it falls back to the
+        // prefixed-text summary, so no thinking leaks across agents.
+        let content = &result.messages[0]["content"];
+        assert!(
+            content.is_string(),
+            "expected string content, got {content:?}"
+        );
+        let text = content.as_str().unwrap();
+        assert!(text.contains("hello"));
+        assert!(!text.contains("secret"));
+    }
+
+    #[test]
+    fn convert_empty_raw_blocks_uses_field_reconstruction() {
+        // No raw blocks captured → fall back to thinking_blocks + tool_calls.
+        let msg = assistant_with_thinking_and_tool_call(
+            "agent1",
+            vec![ThinkingBlock::Thinking {
+                text: "t".to_string(),
+                signature: "s".to_string(),
+            }],
+        );
+        assert!(msg.raw_content_blocks.is_empty());
+        let result = convert_messages(&[msg], "agent1", &OtherAgentRole::User);
         let blocks = result.messages[0]["content"].as_array().unwrap();
         assert_eq!(blocks[0]["type"], "thinking");
-        assert_eq!(blocks[0]["signature"], "sig-end");
-        assert_eq!(blocks[1]["type"], "text");
-        assert_eq!(blocks[1]["text"], "final answer");
+        assert_eq!(blocks.last().unwrap()["type"], "tool_use");
     }
 
     #[test]
@@ -1720,6 +2072,66 @@ mod tests {
     }
 
     #[test]
+    fn thinking_opus_4_8_adaptive() {
+        let result = build_thinking_params(true, None, "claude-opus-4-8");
+        let val = result.unwrap();
+        assert_eq!(val["type"], "adaptive");
+        assert_eq!(val["display"], "summarized");
+        assert!(val.get("budget_tokens").is_none());
+    }
+
+    #[test]
+    fn thinking_opus_4_8_with_effort() {
+        let thinking = build_thinking_params(true, Some(ThinkingEffort::High), "claude-opus-4-8");
+        assert_eq!(thinking.unwrap()["type"], "adaptive");
+
+        let output = build_output_config(true, Some(ThinkingEffort::High), "claude-opus-4-8");
+        assert_eq!(output.unwrap()["effort"], "high");
+    }
+
+    #[test]
+    fn thinking_opus_4_8_max_effort() {
+        let output = build_output_config(true, Some(ThinkingEffort::Max), "claude-opus-4-8");
+        assert_eq!(output.unwrap()["effort"], "max");
+    }
+
+    #[test]
+    fn max_tokens_opus_4_8() {
+        assert_eq!(default_max_tokens("claude-opus-4-8"), 128_000);
+    }
+
+    #[test]
+    fn thinking_future_versions_use_adaptive() {
+        // Versions beyond 4.8 (e.g. 4.9, 4.10, 5.0) must auto-resolve to
+        // adaptive without further code changes.
+        for model in [
+            "claude-opus-4-9",
+            "claude-opus-4-10",
+            "claude-sonnet-4-9",
+            "claude-opus-5-0",
+        ] {
+            let val = build_thinking_params(true, None, model).unwrap();
+            assert_eq!(val["type"], "adaptive", "{model} should use adaptive");
+        }
+        // Future Opus keeps the 128k default; future Sonnet stays at 64k.
+        assert_eq!(default_max_tokens("claude-opus-4-9"), 128_000);
+        assert_eq!(default_max_tokens("claude-opus-5-0"), 128_000);
+        assert_eq!(default_max_tokens("claude-sonnet-4-9"), 64_000);
+    }
+
+    #[test]
+    fn version_parsing_handles_suffixes_and_legacy() {
+        assert_eq!(claude_version("claude-opus-4-8"), Some((4, 8)));
+        assert_eq!(claude_version("claude-opus-4-8-20260301"), Some((4, 8)));
+        // Vertex form with an `@date` suffix.
+        assert_eq!(claude_version("claude-opus-4-8@20260301"), Some((4, 8)));
+        assert_eq!(claude_version("claude-opus-4-10"), Some((4, 10)));
+        assert_eq!(claude_version("claude-opus-5-0"), Some((5, 0)));
+        // Legacy ordering (family after the version) is not parsed → None.
+        assert_eq!(claude_version("claude-3-5-sonnet-20241022"), None);
+    }
+
+    #[test]
     fn thinking_opus_4_5_effort_supported() {
         let output = build_output_config(
             true,
@@ -1891,6 +2303,7 @@ mod tests {
                 filename: Some("test.png".to_string()),
             }],
             thinking_blocks: Vec::new(),
+            raw_content_blocks: Vec::new(),
         };
         let converted = convert_messages(&[msg], "agent", &OtherAgentRole::User);
         let tool_result = &converted.messages[0]["content"][0];
@@ -1922,6 +2335,7 @@ mod tests {
             usage: None,
             images: vec![],
             thinking_blocks: Vec::new(),
+            raw_content_blocks: Vec::new(),
         };
         let converted = convert_messages(&[msg], "agent", &OtherAgentRole::User);
         let tool_result = &converted.messages[0]["content"][0];
@@ -2092,6 +2506,7 @@ mod tests {
             usage: None,
             images: Vec::new(),
             thinking_blocks: vec![ThinkingBlock::Thinking { text, signature }],
+            raw_content_blocks: Vec::new(),
         };
         let tool_result = ChatMessage {
             role: ChatRole::Tool,
@@ -2106,6 +2521,7 @@ mod tests {
             usage: None,
             images: Vec::new(),
             thinking_blocks: Vec::new(),
+            raw_content_blocks: Vec::new(),
         };
 
         let _second_stream = client

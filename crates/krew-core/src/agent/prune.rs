@@ -202,6 +202,11 @@ pub(super) fn prune_stale_tool_calls(messages: Vec<ChatMessage>) -> Vec<ChatMess
                 // single now-stale tool call.
                 let mut cleared = msg;
                 cleared.tool_calls = None;
+                // The captured raw content blocks embed the now-removed
+                // tool_use block; replaying them would reference a tool_result
+                // that prune also dropped. Clear them so convert_messages falls
+                // back to field-based reconstruction (text + thinking_blocks).
+                cleared.raw_content_blocks = Vec::new();
                 result.push(cleared);
                 continue;
             }
@@ -225,6 +230,10 @@ pub(super) fn prune_stale_tool_calls(messages: Vec<ChatMessage>) -> Vec<ChatMess
                 usage: msg.usage,
                 images: Vec::new(),
                 thinking_blocks: msg.thinking_blocks,
+                // Raw blocks embed the original full tool_use set, which no
+                // longer matches the filtered tool_calls; drop them so convert
+                // rebuilds from the filtered fields instead.
+                raw_content_blocks: Vec::new(),
             });
             continue;
         }
@@ -288,6 +297,7 @@ mod tests {
             usage: None,
             images: Vec::new(),
             thinking_blocks: Vec::new(),
+            raw_content_blocks: Vec::new(),
         }
     }
 
@@ -305,6 +315,7 @@ mod tests {
             usage: None,
             images: Vec::new(),
             thinking_blocks: Vec::new(),
+            raw_content_blocks: Vec::new(),
         }
     }
 
@@ -363,6 +374,71 @@ mod tests {
         // read_file + result pruned; edit_file + result kept.
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].tool_calls.as_ref().unwrap()[0].name, "edit_file");
+    }
+
+    #[test]
+    fn prune_partial_clears_raw_content_blocks() {
+        let mut a1 = assistant_with_tools(
+            "a",
+            "",
+            vec![
+                tc("1", "read_file", r#"{"file_path":"a.rs"}"#),
+                tc("2", "read_file", r#"{"file_path":"b.rs"}"#),
+            ],
+        );
+        a1.raw_content_blocks = vec![
+            serde_json::json!({"type":"tool_use","id":"1","name":"read_file","input":{"file_path":"a.rs"}}),
+            serde_json::json!({"type":"tool_use","id":"2","name":"read_file","input":{"file_path":"b.rs"}}),
+        ];
+        let messages = vec![
+            a1,
+            tool_result("read_file", "a old", "1"),
+            tool_result("read_file", "b", "2"),
+            assistant_with_tools(
+                "a",
+                "",
+                vec![tc("3", "read_file", r#"{"file_path":"a.rs"}"#)],
+            ),
+            tool_result("read_file", "a new", "3"),
+        ];
+        let result = prune_stale_tool_calls(messages);
+        // a1 keeps only the b.rs read; its raw blocks (embedding the now-stale
+        // a.rs tool_use) must be cleared so convert rebuilds from the filtered
+        // tool_calls instead of replaying a mismatched block set.
+        let a1_out = &result[0];
+        assert_eq!(a1_out.tool_calls.as_ref().unwrap().len(), 1);
+        assert_eq!(a1_out.tool_calls.as_ref().unwrap()[0].id, "2");
+        assert!(a1_out.raw_content_blocks.is_empty());
+    }
+
+    #[test]
+    fn prune_all_stale_with_text_clears_raw_content_blocks() {
+        let mut a1 = assistant_with_tools(
+            "a",
+            "let me check",
+            vec![tc("1", "read_file", r#"{"file_path":"a.rs"}"#)],
+        );
+        a1.raw_content_blocks = vec![
+            serde_json::json!({"type":"text","text":"let me check"}),
+            serde_json::json!({"type":"tool_use","id":"1","name":"read_file","input":{"file_path":"a.rs"}}),
+        ];
+        let messages = vec![
+            a1,
+            tool_result("read_file", "old", "1"),
+            assistant_with_tools(
+                "a",
+                "",
+                vec![tc("2", "read_file", r#"{"file_path":"a.rs"}"#)],
+            ),
+            tool_result("read_file", "new", "2"),
+        ];
+        let result = prune_stale_tool_calls(messages);
+        // a1's only tool call is stale; the text survives but tool_calls is
+        // cleared and the raw blocks (embedding the removed tool_use) dropped.
+        let a1_out = &result[0];
+        assert!(a1_out.tool_calls.is_none());
+        assert_eq!(a1_out.content, "let me check");
+        assert!(a1_out.raw_content_blocks.is_empty());
     }
 
     #[test]
