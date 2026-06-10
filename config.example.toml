@@ -67,10 +67,18 @@ name = "opus"
 display_name = "Claude Opus"
 provider = "anthropic"
 model = "claude-opus-4-6"
+# model = "claude-fable-5"               # Claude Fable 5: thinking is always on,
+                                         # sampling.temperature/top_p/top_k are ignored
+                                         # (the API rejects them), supports thinking_effort
+                                         # up to "xhigh" and "max"
 color = "magenta"
 system_prompt = ""
 tools = true
 enable_web_search = false
+# enable_thinking = true
+# thinking_effort = "xhigh"              # low | medium | high | xhigh | max
+                                         # (xhigh: Fable family and Opus 4.7+ only;
+                                         # other models downgrade it to high)
 
 [[agents]]
 name = "sonnet"

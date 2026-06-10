@@ -92,6 +92,22 @@ fn version_at_least(model: &str, major: u32, minor: u32) -> bool {
     claude_version(model).is_some_and(|(maj, min)| maj > major || (maj == major && min >= minor))
 }
 
+/// Whether the model belongs to the Fable family (Claude Fable 5 /
+/// Claude Mythos 5). These models use a new naming scheme without a minor
+/// version segment (e.g. `claude-fable-5`), so they are detected by family
+/// name instead of via `claude_version`. Both share the same API behavior:
+/// thinking is always on (adaptive only), sampling parameters are removed,
+/// and effort supports the full low..=max range including xhigh.
+fn is_fable_family(model: &str) -> bool {
+    model.contains("fable") || model.contains("mythos")
+}
+
+/// Whether the model rejects sampling parameters (`temperature`, `top_p`,
+/// `top_k`) with a 400 error. True for the Fable family and Opus 4.7+.
+fn sampling_params_removed(model: &str) -> bool {
+    is_fable_family(model) || (model.contains("opus") && version_at_least(model, 4, 7))
+}
+
 // ---------------------------------------------------------------------------
 // max_tokens defaults by model
 // ---------------------------------------------------------------------------
@@ -99,7 +115,7 @@ fn version_at_least(model: &str, major: u32, minor: u32) -> bool {
 /// Get the default max_tokens for a given model name.
 fn default_max_tokens(model: &str) -> u32 {
     let has = |s: &str| model.contains(s);
-    if has("opus") && version_at_least(model, 4, 6) {
+    if is_fable_family(model) || (has("opus") && version_at_least(model, 4, 6)) {
         128_000
     } else if (has("opus") && version_at_least(model, 4, 5))
         || (has("sonnet") && version_at_least(model, 4, 5))
@@ -355,28 +371,41 @@ pub(crate) fn build_sampling_params(
         .unwrap_or_else(|| default_max_tokens(model));
     params.insert("max_tokens".into(), serde_json::json!(max_tokens));
 
-    // Temperature: clamp to 0-1 for Anthropic.
-    if let Some(t) = sampling.temperature {
-        let clamped = if enable_thinking {
-            // When thinking is enabled, temperature must be 1.0.
-            if (t - 1.0).abs() > f64::EPSILON {
-                tracing::warn!("Anthropic: thinking enabled, overriding temperature {t} to 1.0");
-            }
-            1.0
-        } else {
-            t.clamp(0.0, 1.0)
-        };
-        params.insert("temperature".into(), serde_json::json!(clamped));
-    } else if enable_thinking {
-        // When thinking is enabled and no temperature set, don't set it
-        // (API default is 1.0 which is what we want).
-    }
+    // Fable family and Opus 4.7+ reject temperature/top_p/top_k with a 400,
+    // so never send them for those models.
+    if sampling_params_removed(model) {
+        if sampling.temperature.is_some() || sampling.top_p.is_some() || sampling.top_k.is_some() {
+            tracing::warn!(
+                "Anthropic: model {model} does not accept temperature/top_p/top_k; \
+                 ignoring configured sampling parameters"
+            );
+        }
+    } else {
+        // Temperature: clamp to 0-1 for Anthropic.
+        if let Some(t) = sampling.temperature {
+            let clamped = if enable_thinking {
+                // When thinking is enabled, temperature must be 1.0.
+                if (t - 1.0).abs() > f64::EPSILON {
+                    tracing::warn!(
+                        "Anthropic: thinking enabled, overriding temperature {t} to 1.0"
+                    );
+                }
+                1.0
+            } else {
+                t.clamp(0.0, 1.0)
+            };
+            params.insert("temperature".into(), serde_json::json!(clamped));
+        } else if enable_thinking {
+            // When thinking is enabled and no temperature set, don't set it
+            // (API default is 1.0 which is what we want).
+        }
 
-    if let Some(p) = sampling.top_p {
-        params.insert("top_p".into(), serde_json::json!(p));
-    }
-    if let Some(k) = sampling.top_k {
-        params.insert("top_k".into(), serde_json::json!(k));
+        if let Some(p) = sampling.top_p {
+            params.insert("top_p".into(), serde_json::json!(p));
+        }
+        if let Some(k) = sampling.top_k {
+            params.insert("top_k".into(), serde_json::json!(k));
+        }
     }
     if let Some(ref stops) = sampling.stop_sequences {
         params.insert("stop_sequences".into(), serde_json::json!(stops));
@@ -390,9 +419,11 @@ pub(crate) fn build_sampling_params(
 // Thinking parameter injection
 // ---------------------------------------------------------------------------
 
-/// Check if a model supports adaptive thinking (Opus/Sonnet 4.6 and later).
+/// Check if a model supports adaptive thinking (Fable family, Opus/Sonnet 4.6
+/// and later).
 fn supports_adaptive(model: &str) -> bool {
-    (model.contains("opus") || model.contains("sonnet")) && version_at_least(model, 4, 6)
+    is_fable_family(model)
+        || ((model.contains("opus") || model.contains("sonnet")) && version_at_least(model, 4, 6))
 }
 
 /// Check if a model supports the effort parameter (adaptive models plus Opus 4.5).
@@ -403,6 +434,11 @@ fn supports_effort(model: &str) -> bool {
 /// Check if a model supports effort = "max" (any adaptive-capable model).
 fn supports_max_effort(model: &str) -> bool {
     supports_adaptive(model)
+}
+
+/// Check if a model supports effort = "xhigh" (Fable family and Opus 4.7+).
+fn supports_xhigh_effort(model: &str) -> bool {
+    is_fable_family(model) || (model.contains("opus") && version_at_least(model, 4, 7))
 }
 
 /// Build the thinking parameter for the request body.
@@ -416,18 +452,23 @@ pub(crate) fn build_thinking_params(
     }
 
     if supports_adaptive(model) {
-        // Opus 4.6+ / Sonnet 4.6+: use adaptive thinking with summarized display
-        // so the model emits thinking summary blocks the TUI can render.
+        // Fable family / Opus 4.6+ / Sonnet 4.6+: use adaptive thinking with
+        // summarized display so the model emits thinking summary blocks the
+        // TUI can render. Note: the Fable family rejects any non-adaptive
+        // thinking config (`disabled` and `budget_tokens` both return 400);
+        // adaptive is valid there, and when thinking is not enabled we omit
+        // the `thinking` key entirely (see early return above), which Fable
+        // treats as always-on adaptive thinking.
         Some(serde_json::json!({
             "type": "adaptive",
             "display": "summarized",
         }))
     } else {
         // Older models: use enabled + budget_tokens.
-        // Max maps to same budget as High (32768).
+        // Xhigh/Max map to same budget as High (32768).
         let budget = match thinking_effort {
             Some(ThinkingEffort::Low) => 1024,
-            Some(ThinkingEffort::High | ThinkingEffort::Max) => 32768,
+            Some(ThinkingEffort::High | ThinkingEffort::Xhigh | ThinkingEffort::Max) => 32768,
             Some(ThinkingEffort::Medium) | None => 8192,
         };
         Some(serde_json::json!({
@@ -448,19 +489,25 @@ pub(crate) fn build_output_config(
     }
 
     thinking_effort.map(|effort| {
-        let effort_str = if effort == ThinkingEffort::Max {
-            if supports_max_effort(model) {
-                "max"
-            } else {
-                // Downgrade to high on models that don't support max.
-                "high"
+        let effort_str = match effort {
+            ThinkingEffort::Low => "low",
+            ThinkingEffort::Medium => "medium",
+            ThinkingEffort::High => "high",
+            ThinkingEffort::Xhigh => {
+                if supports_xhigh_effort(model) {
+                    "xhigh"
+                } else {
+                    // Downgrade to high on models that don't support xhigh.
+                    "high"
+                }
             }
-        } else {
-            match effort {
-                ThinkingEffort::Low => "low",
-                ThinkingEffort::Medium => "medium",
-                ThinkingEffort::High => "high",
-                ThinkingEffort::Max => unreachable!(),
+            ThinkingEffort::Max => {
+                if supports_max_effort(model) {
+                    "max"
+                } else {
+                    // Downgrade to high on models that don't support max.
+                    "high"
+                }
             }
         };
         serde_json::json!({"effort": effort_str})
@@ -871,15 +918,45 @@ pub(crate) fn build_event_stream(
                             }
 
                             "message_delta" => {
+                                let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) else {
+                                    continue;
+                                };
                                 // Extract cumulative usage (output_tokens).
-                                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data)
-                                    && let Some(usage) = v.get("usage")
-                                {
+                                if let Some(usage) = v.get("usage") {
                                     state.output_tokens = usage
                                         .get("output_tokens")
                                         .and_then(|t| t.as_u64())
                                         .unwrap_or(0)
                                         as u32;
+                                }
+                                // Safety refusal (Fable family): HTTP 200 with
+                                // stop_reason "refusal". Emit a Refusal event but do
+                                // not terminate the stream — the subsequent
+                                // message_stop still carries Done with billed usage.
+                                // Branch only on stop_reason; stop_details may be null.
+                                let stop_reason = v
+                                    .get("delta")
+                                    .and_then(|d| d.get("stop_reason"))
+                                    .and_then(|s| s.as_str());
+                                if stop_reason == Some("refusal") {
+                                    let details = v.get("delta").and_then(|d| {
+                                        d.get("stop_details").filter(|s| !s.is_null())
+                                    });
+                                    let category = details
+                                        .and_then(|s| s.get("category"))
+                                        .and_then(|c| c.as_str())
+                                        .map(str::to_string);
+                                    let explanation = details
+                                        .and_then(|s| s.get("explanation"))
+                                        .and_then(|e| e.as_str())
+                                        .map(str::to_string);
+                                    return Some((
+                                        StreamEvent::Refusal {
+                                            category,
+                                            explanation,
+                                        },
+                                        (sse_stream, state, done),
+                                    ));
                                 }
                                 continue;
                             }
@@ -2541,5 +2618,333 @@ mod tests {
         assert_eq!(content[0]["type"], "thinking");
         assert_eq!(content[0]["signature"], "e2e-sig");
         assert_eq!(content[0]["thinking"], "I will read the file");
+    }
+
+    // ---- Fable family detection & capability tests ----
+
+    #[test]
+    fn fable_family_detection() {
+        assert!(is_fable_family("claude-fable-5"));
+        assert!(is_fable_family("claude-mythos-5"));
+        assert!(is_fable_family("claude-fable-5-20260601"));
+        assert!(is_fable_family("claude-fable-5@20260601"));
+        assert!(!is_fable_family("claude-opus-4-8"));
+        assert!(!is_fable_family("claude-sonnet-4-6"));
+    }
+
+    #[test]
+    fn fable_capabilities() {
+        for model in ["claude-fable-5", "claude-mythos-5"] {
+            assert!(supports_adaptive(model));
+            assert!(supports_effort(model));
+            assert!(supports_max_effort(model));
+            assert!(supports_xhigh_effort(model));
+            assert!(sampling_params_removed(model));
+            assert_eq!(default_max_tokens(model), 128_000);
+        }
+    }
+
+    #[test]
+    fn xhigh_support_by_model() {
+        assert!(supports_xhigh_effort("claude-opus-4-7"));
+        assert!(supports_xhigh_effort("claude-opus-4-8"));
+        assert!(!supports_xhigh_effort("claude-opus-4-6"));
+        assert!(!supports_xhigh_effort("claude-sonnet-4-6"));
+    }
+
+    #[test]
+    fn sampling_params_removed_by_model() {
+        assert!(sampling_params_removed("claude-opus-4-7"));
+        assert!(sampling_params_removed("claude-opus-4-8"));
+        assert!(!sampling_params_removed("claude-opus-4-6"));
+        assert!(!sampling_params_removed("claude-sonnet-4-6"));
+    }
+
+    #[test]
+    fn sampling_fable_omits_sampling_params() {
+        let sampling = SamplingConfig {
+            temperature: Some(0.5),
+            top_p: Some(0.9),
+            top_k: Some(40),
+            stop_sequences: Some(vec!["STOP".into()]),
+            ..Default::default()
+        };
+        for model in ["claude-fable-5", "claude-opus-4-7", "claude-opus-4-8"] {
+            for enable_thinking in [false, true] {
+                let params = build_sampling_params(&sampling, model, enable_thinking);
+                assert!(!params.contains_key("temperature"), "{model}");
+                assert!(!params.contains_key("top_p"), "{model}");
+                assert!(!params.contains_key("top_k"), "{model}");
+                // max_tokens and stop_sequences still allowed.
+                assert!(params.contains_key("max_tokens"), "{model}");
+                assert_eq!(params["stop_sequences"], serde_json::json!(["STOP"]));
+            }
+        }
+    }
+
+    #[test]
+    fn thinking_fable_adaptive() {
+        let result = build_thinking_params(true, None, "claude-fable-5");
+        let val = result.unwrap();
+        assert_eq!(val["type"], "adaptive");
+        assert_eq!(val["display"], "summarized");
+        assert!(val.get("budget_tokens").is_none());
+    }
+
+    #[test]
+    fn thinking_fable_disabled_omits_param() {
+        // Fable rejects an explicit `disabled` config; the thinking key must
+        // be omitted entirely when thinking is not enabled.
+        let result = build_thinking_params(false, Some(ThinkingEffort::High), "claude-fable-5");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn output_config_fable_xhigh() {
+        let output = build_output_config(true, Some(ThinkingEffort::Xhigh), "claude-fable-5");
+        assert_eq!(output.unwrap()["effort"], "xhigh");
+    }
+
+    #[test]
+    fn output_config_fable_max() {
+        let output = build_output_config(true, Some(ThinkingEffort::Max), "claude-fable-5");
+        assert_eq!(output.unwrap()["effort"], "max");
+    }
+
+    #[test]
+    fn output_config_opus_4_7_xhigh() {
+        let output = build_output_config(true, Some(ThinkingEffort::Xhigh), "claude-opus-4-7");
+        assert_eq!(output.unwrap()["effort"], "xhigh");
+    }
+
+    #[test]
+    fn output_config_opus_4_6_xhigh_downgraded() {
+        let output = build_output_config(true, Some(ThinkingEffort::Xhigh), "claude-opus-4-6");
+        assert_eq!(output.unwrap()["effort"], "high");
+    }
+
+    // ---- Refusal stop_reason tests ----
+
+    #[tokio::test]
+    async fn sse_refusal_mid_stream_emits_refusal_then_done() {
+        let sse = "event: message_start\ndata: {\"message\":{\"usage\":{\"input_tokens\":10}}}\n\n\
+                   event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n\
+                   event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n\
+                   event: content_block_stop\ndata: {\"index\":0}\n\n\
+                   event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"refusal\",\"stop_details\":{\"category\":\"cyber\",\"explanation\":\"declined\"}},\"usage\":{\"output_tokens\":7}}\n\n\
+                   event: message_stop\ndata: {}\n\n";
+        let events = collect_sse_events(sse).await;
+
+        let refusal_idx = events
+            .iter()
+            .position(|e| {
+                matches!(
+                    e,
+                    StreamEvent::Refusal {
+                        category: Some(c),
+                        explanation: Some(x),
+                    } if c == "cyber" && x == "declined"
+                )
+            })
+            .expect("must emit Refusal with category and explanation");
+        // Done must still follow, carrying billed usage.
+        let done = events[refusal_idx + 1..]
+            .iter()
+            .find_map(|e| match e {
+                StreamEvent::Done(usage) => Some(usage.clone()),
+                _ => None,
+            })
+            .expect("Done must follow Refusal");
+        assert_eq!(done.completion_tokens, 7);
+    }
+
+    #[tokio::test]
+    async fn sse_refusal_pre_output_empty_content() {
+        // Pre-output refusal: no content blocks at all.
+        let sse = "event: message_start\ndata: {\"message\":{\"usage\":{\"input_tokens\":10}}}\n\n\
+                   event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"refusal\",\"stop_details\":{\"category\":\"bio\"}},\"usage\":{\"output_tokens\":0}}\n\n\
+                   event: message_stop\ndata: {}\n\n";
+        let events = collect_sse_events(sse).await;
+
+        assert!(events.iter().any(|e| matches!(
+            e,
+            StreamEvent::Refusal {
+                category: Some(c),
+                explanation: None,
+            } if c == "bio"
+        )));
+        assert!(events.iter().any(|e| matches!(e, StreamEvent::Done(_))));
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::TextDelta(_))),
+            "pre-output refusal must not emit any text"
+        );
+    }
+
+    #[tokio::test]
+    async fn sse_refusal_null_stop_details() {
+        // stop_details may be null; branch only on stop_reason.
+        let sse = "event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"refusal\",\"stop_details\":null},\"usage\":{\"output_tokens\":0}}\n\n\
+                   event: message_stop\ndata: {}\n\n";
+        let events = collect_sse_events(sse).await;
+
+        assert!(events.iter().any(|e| matches!(
+            e,
+            StreamEvent::Refusal {
+                category: None,
+                explanation: None,
+            }
+        )));
+    }
+
+    #[tokio::test]
+    async fn sse_non_refusal_stop_reason_no_refusal_event() {
+        let sse = "event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\n\
+                   event: message_stop\ndata: {}\n\n";
+        let events = collect_sse_events(sse).await;
+
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::Refusal { .. }))
+        );
+        assert!(events.iter().any(|e| matches!(e, StreamEvent::Done(_))));
+    }
+
+    // ---- Fable display:"omitted" empty thinking block ----
+
+    #[tokio::test]
+    async fn sse_empty_thinking_block_with_signature_ok() {
+        // Fable with display:"omitted" emits thinking blocks whose text is an
+        // empty string but which still carry a signature. They must round-trip
+        // (ThinkingBlockDone + RawContentBlock) without an Error.
+        let sse = "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n\
+                   event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"omitted-sig\"}}\n\n\
+                   event: content_block_stop\ndata: {\"index\":0}\n\n\
+                   event: message_stop\ndata: {}\n\n";
+        let events = collect_sse_events(sse).await;
+
+        assert!(
+            !events.iter().any(|e| matches!(e, StreamEvent::Error(_))),
+            "empty-text thinking block with signature must not error"
+        );
+        let (text, signature) = events
+            .iter()
+            .find_map(|e| match e {
+                StreamEvent::ThinkingBlockDone(ThinkingBlock::Thinking { text, signature }) => {
+                    Some((text.clone(), signature.clone()))
+                }
+                _ => None,
+            })
+            .expect("must emit ThinkingBlockDone");
+        assert_eq!(text, "");
+        assert_eq!(signature, "omitted-sig");
+        let raw = raw_blocks(&events);
+        assert_eq!(raw[0]["type"], "thinking");
+        assert_eq!(raw[0]["thinking"], "");
+        assert_eq!(raw[0]["signature"], "omitted-sig");
+    }
+
+    // ---- End-to-end Fable request body ----
+
+    /// One-shot server that captures the request body and replies with `sse`.
+    async fn run_capture_server(
+        sse: &'static str,
+    ) -> (String, tokio::task::JoinHandle<CapturedRequest>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let body = consume_http_request(&mut socket).await;
+            write_http_response(&mut socket, sse).await;
+            CapturedRequest {
+                body: serde_json::from_slice(&body).unwrap(),
+            }
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    #[tokio::test]
+    async fn end_to_end_fable_request_body() {
+        let sse = "event: message_stop\ndata: {}\n\n";
+        let (base_url, handle) = run_capture_server(sse).await;
+
+        let config = LlmClientConfig {
+            agent_name: "claude".to_string(),
+            model: "claude-fable-5".to_string(),
+            api_key: "test-key".to_string(),
+            base_url: Some(base_url),
+            other_agent_role: OtherAgentRole::User,
+            retry_config: krew_config::RetryConfig::default(),
+            enable_thinking: true,
+            thinking_effort: Some(ThinkingEffort::Xhigh),
+            enable_web_search: false,
+            extra_headers: Vec::new(),
+        };
+        let client = AnthropicClient::new(config);
+
+        let sampling = SamplingConfig {
+            temperature: Some(0.7),
+            top_p: Some(0.9),
+            top_k: Some(40),
+            ..Default::default()
+        };
+        let user = ChatMessage::text(ChatRole::User, "hi", None);
+        let mut stream = client
+            .chat_stream(std::slice::from_ref(&user), &[], &sampling, None)
+            .await
+            .unwrap();
+        while stream.next().await.is_some() {}
+        let captured = handle.await.unwrap();
+        let body = &captured.body;
+
+        assert_eq!(body["model"], "claude-fable-5");
+        // Sampling params must never be sent to Fable.
+        assert!(body.get("temperature").is_none());
+        assert!(body.get("top_p").is_none());
+        assert!(body.get("top_k").is_none());
+        assert_eq!(body["max_tokens"], 128_000);
+        // Thinking must be adaptive without budget_tokens.
+        assert_eq!(body["thinking"]["type"], "adaptive");
+        assert!(body["thinking"].get("budget_tokens").is_none());
+        assert_eq!(body["output_config"]["effort"], "xhigh");
+    }
+
+    #[tokio::test]
+    async fn end_to_end_fable_no_thinking_omits_thinking_key() {
+        let sse = "event: message_stop\ndata: {}\n\n";
+        let (base_url, handle) = run_capture_server(sse).await;
+
+        let config = LlmClientConfig {
+            agent_name: "claude".to_string(),
+            model: "claude-fable-5".to_string(),
+            api_key: "test-key".to_string(),
+            base_url: Some(base_url),
+            other_agent_role: OtherAgentRole::User,
+            retry_config: krew_config::RetryConfig::default(),
+            enable_thinking: false,
+            thinking_effort: None,
+            enable_web_search: false,
+            extra_headers: Vec::new(),
+        };
+        let client = AnthropicClient::new(config);
+
+        let user = ChatMessage::text(ChatRole::User, "hi", None);
+        let mut stream = client
+            .chat_stream(
+                std::slice::from_ref(&user),
+                &[],
+                &SamplingConfig::default(),
+                None,
+            )
+            .await
+            .unwrap();
+        while stream.next().await.is_some() {}
+        let captured = handle.await.unwrap();
+
+        // Fable rejects `thinking: {type: "disabled"}`; the key must be absent.
+        assert!(captured.body.get("thinking").is_none());
+        assert!(captured.body.get("output_config").is_none());
     }
 }

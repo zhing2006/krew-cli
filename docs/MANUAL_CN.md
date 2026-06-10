@@ -532,7 +532,9 @@ system_prompt = ""               # 自定义系统提示词（可选）
 tools = true                     # 启用工具（默认 false）
 enable_web_search = false        # 启用原生 Web 搜索（默认 false）
 enable_thinking = false          # 显示思考过程（默认 false）
-# thinking_effort = "medium"     # 思考力度: low | medium | high | max
+# thinking_effort = "medium"     # 思考力度: low | medium | high | xhigh | max
+                                 # （xhigh 仅 Anthropic Fable 家族和 Opus 4.7+ 支持，
+                                 # 其它模型/Provider 自动降级为 high）
 
 # OpenAI 专用
 # api_type = "responses"         # "responses"（Responses API）或 "chat"（Chat Completions）
@@ -546,6 +548,16 @@ enable_thinking = false          # 显示思考过程（默认 false）
 # sampling.presence_penalty = 0
 # sampling.stop_sequences = ["END"]
 ```
+
+**Claude Fable 5 / Mythos 5 注意事项**（`claude-fable-5`、`claude-mythos-5`）：
+
+- 思考永远开启。`enable_thinking = false` 时 krew 省略 thinking 参数（合法）；`enable_thinking = true` 时使用 adaptive thinking 并以摘要形式在 TUI 中渲染思考内容。
+- 这两个模型不支持 `sampling.temperature` / `top_p` / `top_k`（API 直接返回 400）。krew 会自动忽略这些配置并打印警告日志。Opus 4.7+ 同样如此。
+- `thinking_effort` 支持完整档位，包括 `xhigh` 和 `max`。
+- 安全分类器可能拒绝请求（`stop_reason: "refusal"`）。krew 会将其作为 agent 错误展示（含拒绝类别），被拒轮次的部分输出会被丢弃。
+- 新 tokenizer：相同内容的 token 用量比 Opus 系模型多约 30%，请留意 `auto_compact_threshold` 设置。
+- 要求 Anthropic 组织开启 30 天数据保留；零数据保留（ZDR）组织的所有请求都会返回 400。定价：输入 $10 / 输出 $50 每百万 token。
+- `claude-mythos-5` 仅 Project Glasswing 组织可用。
 
 ### 5.4 Provider 配置
 

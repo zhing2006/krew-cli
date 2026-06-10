@@ -179,6 +179,14 @@ async fn consume_stream_to_text(
                 usage = u;
                 break;
             }
+            StreamEvent::Refusal { category, .. } => {
+                return Err(anyhow::anyhow!(
+                    "LLM refused the compaction request (safety refusal{})",
+                    category
+                        .map(|c| format!(", category: {c}"))
+                        .unwrap_or_default()
+                ));
+            }
             StreamEvent::Error(msg) => return Err(anyhow::anyhow!("LLM stream error: {msg}")),
             _ => {} // Ignore thinking, tool calls, etc.
         }

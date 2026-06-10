@@ -348,6 +348,12 @@ fn thinking_effort_deserialize_high() {
 }
 
 #[test]
+fn thinking_effort_deserialize_xhigh() {
+    let w: ThinkingEffortWrapper = toml::from_str("val = \"xhigh\"").unwrap();
+    assert_eq!(w.val, ThinkingEffort::Xhigh);
+}
+
+#[test]
 fn thinking_effort_deserialize_max() {
     let w: ThinkingEffortWrapper = toml::from_str("val = \"max\"").unwrap();
     assert_eq!(w.val, ThinkingEffort::Max);

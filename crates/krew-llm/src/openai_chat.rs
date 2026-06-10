@@ -276,13 +276,14 @@ fn build_reasoning_effort(
             Some(ThinkingEffort::Low)
             | Some(ThinkingEffort::Medium)
             | Some(ThinkingEffort::High)
+            | Some(ThinkingEffort::Xhigh)
             | None => "high",
         });
     }
     Some(match thinking_effort {
         Some(ThinkingEffort::Low) => "low",
         Some(ThinkingEffort::High) => "high",
-        Some(ThinkingEffort::Max) => {
+        Some(ThinkingEffort::Xhigh | ThinkingEffort::Max) => {
             if supports_xhigh(model) {
                 "xhigh"
             } else {

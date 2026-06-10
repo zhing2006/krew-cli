@@ -531,7 +531,9 @@ system_prompt = ""               # Custom system prompt (optional)
 tools = true                     # Enable tool use (default: false)
 enable_web_search = false        # Enable provider-native web search (default: false)
 enable_thinking = false          # Show model thinking/reasoning (default: false)
-# thinking_effort = "medium"     # Thinking effort: low | medium | high | max
+# thinking_effort = "medium"     # Thinking effort: low | medium | high | xhigh | max
+                                 # (xhigh: Anthropic Fable family and Opus 4.7+ only;
+                                 # other models/providers downgrade it to high)
 
 # OpenAI-specific
 # api_type = "responses"         # "responses" (Responses API) or "chat" (Chat Completions)
@@ -547,6 +549,16 @@ enable_thinking = false          # Show model thinking/reasoning (default: false
 ```
 
 **Reserved name:** `"all"` cannot be used as an agent name.
+
+**Claude Fable 5 / Mythos 5 notes** (`claude-fable-5`, `claude-mythos-5`):
+
+- Thinking is always on. With `enable_thinking = false` krew omits the thinking parameter (valid); with `enable_thinking = true` it uses adaptive thinking with summarized display so thinking summaries render in the TUI.
+- `sampling.temperature` / `top_p` / `top_k` are not supported by these models (the API rejects them with 400). krew silently omits them and logs a warning if configured. Same applies to Opus 4.7+.
+- `thinking_effort` supports the full range including `xhigh` and `max`.
+- Safety classifiers may refuse a request (`stop_reason: "refusal"`). krew surfaces this as an agent error with the refusal category; any partial output of the refused turn is discarded.
+- New tokenizer: the same content uses roughly 30% more tokens than Opus-tier models — watch your `auto_compact_threshold`.
+- Requires 30-day data retention on your Anthropic organization; zero-data-retention orgs get 400 on all requests. Pricing: $10/$50 per MTok input/output.
+- `claude-mythos-5` is only available to Project Glasswing organizations.
 
 ### 5.4 Provider configuration
 

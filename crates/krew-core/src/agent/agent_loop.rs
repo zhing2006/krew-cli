@@ -513,6 +513,29 @@ async fn consume_stream(
                     thought_signature,
                 });
             }
+            StreamEvent::Refusal {
+                category,
+                explanation,
+            } => {
+                // Safety refusal (Anthropic Fable family). The API contract
+                // requires discarding any partially streamed output, and a
+                // refused turn must not be replayed on the next request, so
+                // drop everything accumulated so far. Keep consuming: a Done
+                // event with billed usage still follows.
+                result.text.clear();
+                result.tool_calls.clear();
+                result.thinking_blocks.clear();
+                result.raw_content_blocks.clear();
+                let mut msg = String::from("Model refused to respond (safety refusal");
+                if let Some(c) = category {
+                    msg.push_str(&format!(", category: {c}"));
+                }
+                msg.push(')');
+                if let Some(e) = explanation {
+                    msg.push_str(&format!(": {e}"));
+                }
+                result.error = Some(msg);
+            }
             StreamEvent::Done(usage) => {
                 result.usage = Some(usage);
                 return result;

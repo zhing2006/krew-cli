@@ -31,6 +31,16 @@ pub enum StreamEvent {
     /// interleaving that the flattened message fields lose. Only Anthropic /
     /// Vertex Anthropic emit this.
     RawContentBlock(serde_json::Value),
+    /// The provider's safety classifiers declined the request
+    /// (Anthropic `stop_reason: "refusal"`, HTTP 200). Per API contract any
+    /// partially streamed output must be discarded by the consumer. A `Done`
+    /// event still follows, carrying the billed usage.
+    Refusal {
+        /// Refusal category from `stop_details` (e.g. "cyber", "bio"), if any.
+        category: Option<String>,
+        /// Human-readable explanation from `stop_details`, if any.
+        explanation: Option<String>,
+    },
     /// Stream completed, carrying final token usage.
     Done(Usage),
     /// An error occurred during streaming.

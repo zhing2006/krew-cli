@@ -66,6 +66,7 @@ pub async fn list_models(config: &ListModelsConfig) -> Result<Vec<ModelInfo>, Ll
 pub fn fallback_models(provider_type: ProviderType) -> Vec<ModelInfo> {
     let ids = match provider_type {
         ProviderType::Anthropic => vec![
+            "claude-fable-5",
             "claude-opus-4-8",
             "claude-opus-4-7",
             "claude-opus-4-6",
@@ -429,7 +430,8 @@ mod tests {
     #[test]
     fn fallback_anthropic() {
         let models = fallback_models(ProviderType::Anthropic);
-        assert_eq!(models.len(), 5);
+        assert_eq!(models.len(), 6);
+        assert!(models.iter().any(|m| m.id == "claude-fable-5"));
         assert!(models.iter().any(|m| m.id == "claude-opus-4-8"));
         assert!(models.iter().any(|m| m.id == "claude-opus-4-7"));
         assert!(models.iter().any(|m| m.id == "claude-opus-4-6"));

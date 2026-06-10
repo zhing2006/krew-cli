@@ -497,6 +497,9 @@ pub enum ThinkingEffort {
     Low,
     Medium,
     High,
+    /// Between High and Max. Supported by Anthropic Fable family and
+    /// Opus 4.7+; other providers/models downgrade it to High.
+    Xhigh,
     Max,
 }
 

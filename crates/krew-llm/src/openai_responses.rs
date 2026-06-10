@@ -282,7 +282,7 @@ fn build_reasoning_params(
     let effort = match thinking_effort {
         Some(ThinkingEffort::Low) => "low",
         Some(ThinkingEffort::High) => "high",
-        Some(ThinkingEffort::Max) => {
+        Some(ThinkingEffort::Xhigh | ThinkingEffort::Max) => {
             if supports_xhigh(model) {
                 "xhigh"
             } else {
