@@ -533,7 +533,7 @@ tools = true                     # 启用工具（默认 false）
 enable_web_search = false        # 启用原生 Web 搜索（默认 false）
 enable_thinking = false          # 显示思考过程（默认 false）
 # thinking_effort = "medium"     # 思考力度: low | medium | high | xhigh | max
-                                 # （xhigh 仅 Anthropic Fable 家族和 Opus 4.7+ 支持，
+                                 # （xhigh 仅 Anthropic Fable 家族、Opus 4.7+ 和 Sonnet 5 支持，
                                  # 其它模型/Provider 自动降级为 high）
 
 # OpenAI 专用
@@ -558,6 +558,14 @@ enable_thinking = false          # 显示思考过程（默认 false）
 - 新 tokenizer：相同内容的 token 用量比 Opus 系模型多约 30%，请留意 `auto_compact_threshold` 设置。
 - 要求 Anthropic 组织开启 30 天数据保留；零数据保留（ZDR）组织的所有请求都会返回 400。定价：输入 $10 / 输出 $50 每百万 token。
 - `claude-mythos-5` 仅 Project Glasswing 组织可用。
+
+**Claude Sonnet 5 注意事项**（`claude-sonnet-5`）：
+
+- 采用去掉小版本号的新命名，krew 将其识别为 adaptive thinking 模型。
+- 不支持 `sampling.temperature` / `top_p` / `top_k`（非默认值 API 返回 400）；krew 会自动忽略并打印警告日志。
+- adaptive thinking 默认开启；`thinking_effort` 支持完整档位，包括 `xhigh` 和 `max`。
+- 新 tokenizer：相同内容的 token 用量比 Sonnet 4.6 多约 30%，请留意 `auto_compact_threshold` 设置。
+- 默认最大输出保持 64,000（与其它 Sonnet 模型一致），如需更大可通过 `sampling.max_tokens` 覆盖。
 
 ### 5.4 Provider 配置
 

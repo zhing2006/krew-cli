@@ -29,8 +29,8 @@
 ### Requirement: Anthropic thinking 参数映射
 当 `enable_thinking = true` 时，Anthropic Client SHALL 根据能力函数矩阵在请求中添加 thinking 和 effort 参数。
 
-#### Scenario: adaptive 模型（Opus 4.6 / Sonnet 4.6）使用 adaptive thinking
-- **WHEN** 模型名包含 `(opus|sonnet)` 且包含 `4-6`，且 `enable_thinking = true`
+#### Scenario: adaptive 模型（Opus 4.6+ / Sonnet 4.6+，含新命名 `claude-sonnet-5`）使用 adaptive thinking
+- **WHEN** 模型满足 `supports_adaptive`（如 `claude-opus-4-6`、`claude-sonnet-4-6`、`claude-sonnet-5`），且 `enable_thinking = true`
 - **THEN** SHALL 设置 `"thinking": {"type": "adaptive"}`
 
 #### Scenario: adaptive 模型带 max effort

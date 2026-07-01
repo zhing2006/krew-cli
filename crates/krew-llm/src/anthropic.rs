@@ -71,15 +71,31 @@ impl AnthropicClient {
 
 /// Parse the `(major, minor)` version from a Claude model name such as
 /// `claude-opus-4-8`, `claude-opus-4-8-20260301`, or the Vertex form
-/// `claude-opus-4-8@20260301`. Returns `None` for names without a
-/// `<family>-<major>-<minor>` segment (e.g. legacy `claude-3-5-sonnet-...`).
+/// `claude-opus-4-8@20260301`. The newer naming scheme drops the minor
+/// segment (e.g. `claude-sonnet-5`), which is parsed as `(5, 0)`. Returns
+/// `None` for names without a `<family>-<major>[-<minor>]` segment (e.g.
+/// legacy `claude-3-5-sonnet-...`, where the version precedes the family and
+/// only a date suffix follows it).
 fn claude_version(model: &str) -> Option<(u32, u32)> {
     for family in ["opus", "sonnet", "haiku"] {
         if let Some(idx) = model.find(family) {
             let rest = model[idx + family.len()..].trim_start_matches('-');
             let mut parts = rest.split(['-', '@']);
             let major = parts.next()?.parse::<u32>().ok()?;
-            let minor = parts.next()?.parse::<u32>().ok()?;
+            let minor = match parts.next() {
+                Some(m) => m.parse::<u32>().ok()?,
+                // New naming scheme (e.g. `claude-sonnet-5`) has no minor
+                // segment; treat it as `.0`. Legacy names put the version
+                // before the family and leave only an 8-digit date suffix
+                // after it (e.g. `claude-3-5-sonnet-20241022`), so reject
+                // implausibly large majors to keep returning `None` for those.
+                None => {
+                    if major >= 1000 {
+                        return None;
+                    }
+                    0
+                }
+            };
             return Some((major, minor));
         }
     }
@@ -103,9 +119,12 @@ fn is_fable_family(model: &str) -> bool {
 }
 
 /// Whether the model rejects sampling parameters (`temperature`, `top_p`,
-/// `top_k`) with a 400 error. True for the Fable family and Opus 4.7+.
+/// `top_k`) with a 400 error. True for the Fable family, Opus 4.7+, and
+/// Sonnet 5+.
 fn sampling_params_removed(model: &str) -> bool {
-    is_fable_family(model) || (model.contains("opus") && version_at_least(model, 4, 7))
+    is_fable_family(model)
+        || (model.contains("opus") && version_at_least(model, 4, 7))
+        || (model.contains("sonnet") && version_at_least(model, 5, 0))
 }
 
 // ---------------------------------------------------------------------------
@@ -420,7 +439,7 @@ pub(crate) fn build_sampling_params(
 // ---------------------------------------------------------------------------
 
 /// Check if a model supports adaptive thinking (Fable family, Opus/Sonnet 4.6
-/// and later).
+/// and later — including the new-scheme `claude-sonnet-5`).
 fn supports_adaptive(model: &str) -> bool {
     is_fable_family(model)
         || ((model.contains("opus") || model.contains("sonnet")) && version_at_least(model, 4, 6))
@@ -436,9 +455,12 @@ fn supports_max_effort(model: &str) -> bool {
     supports_adaptive(model)
 }
 
-/// Check if a model supports effort = "xhigh" (Fable family and Opus 4.7+).
+/// Check if a model supports effort = "xhigh" (Fable family, Opus 4.7+, and
+/// Sonnet 5+).
 fn supports_xhigh_effort(model: &str) -> bool {
-    is_fable_family(model) || (model.contains("opus") && version_at_least(model, 4, 7))
+    is_fable_family(model)
+        || (model.contains("opus") && version_at_least(model, 4, 7))
+        || (model.contains("sonnet") && version_at_least(model, 5, 0))
 }
 
 /// Build the thinking parameter for the request body.
@@ -2204,6 +2226,16 @@ mod tests {
         assert_eq!(claude_version("claude-opus-4-8@20260301"), Some((4, 8)));
         assert_eq!(claude_version("claude-opus-4-10"), Some((4, 10)));
         assert_eq!(claude_version("claude-opus-5-0"), Some((5, 0)));
+        // New naming scheme without a minor segment → parsed as `.0`.
+        assert_eq!(claude_version("claude-sonnet-5"), Some((5, 0)));
+        assert_eq!(
+            claude_version("claude-sonnet-5-20260630"),
+            Some((5, 20260630))
+        );
+        assert_eq!(
+            claude_version("claude-sonnet-5@20260630"),
+            Some((5, 20260630))
+        );
         // Legacy ordering (family after the version) is not parsed → None.
         assert_eq!(claude_version("claude-3-5-sonnet-20241022"), None);
     }
@@ -2648,6 +2680,7 @@ mod tests {
     fn xhigh_support_by_model() {
         assert!(supports_xhigh_effort("claude-opus-4-7"));
         assert!(supports_xhigh_effort("claude-opus-4-8"));
+        assert!(supports_xhigh_effort("claude-sonnet-5"));
         assert!(!supports_xhigh_effort("claude-opus-4-6"));
         assert!(!supports_xhigh_effort("claude-sonnet-4-6"));
     }
@@ -2656,8 +2689,27 @@ mod tests {
     fn sampling_params_removed_by_model() {
         assert!(sampling_params_removed("claude-opus-4-7"));
         assert!(sampling_params_removed("claude-opus-4-8"));
+        assert!(sampling_params_removed("claude-sonnet-5"));
         assert!(!sampling_params_removed("claude-opus-4-6"));
         assert!(!sampling_params_removed("claude-sonnet-4-6"));
+    }
+
+    #[test]
+    fn sonnet_5_capabilities() {
+        // Claude Sonnet 5 uses the new naming scheme without a minor segment;
+        // it must be recognized as an adaptive, effort/xhigh/max-capable model
+        // that rejects sampling parameters (like Opus 4.7+).
+        let model = "claude-sonnet-5";
+        assert!(supports_adaptive(model));
+        assert!(supports_effort(model));
+        assert!(supports_max_effort(model));
+        assert!(supports_xhigh_effort(model));
+        assert!(sampling_params_removed(model));
+        // Consistent with the other Sonnet models, the default stays at 64k.
+        assert_eq!(default_max_tokens(model), 64_000);
+        // Thinking uses adaptive (never budget_tokens, which would 400).
+        let val = build_thinking_params(true, None, model).unwrap();
+        assert_eq!(val["type"], "adaptive");
     }
 
     #[test]

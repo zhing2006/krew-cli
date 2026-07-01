@@ -80,7 +80,7 @@ cargo install --path crates/krew-cli
 | Provider | 模型（示例） | API |
 | -------- | ------------ | --- |
 | OpenAI | GPT-5.2 | Responses / Chat Completions |
-| Anthropic | Claude Opus 4.6, Sonnet 4.6 | Messages |
+| Anthropic | Claude Opus 4.6, Sonnet 5 / 4.6 | Messages |
 | Google | Gemini 3.1 Pro | generateContent（+ Vertex AI） |
 | Vertex Anthropic | Claude Opus 4.7, Sonnet 4.6 | Vertex AI Claude `streamRawPredict` |
 | OpenAI 兼容 | 豆包、LiteLLM 等 | Responses / Chat Completions |

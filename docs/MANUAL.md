@@ -532,7 +532,7 @@ tools = true                     # Enable tool use (default: false)
 enable_web_search = false        # Enable provider-native web search (default: false)
 enable_thinking = false          # Show model thinking/reasoning (default: false)
 # thinking_effort = "medium"     # Thinking effort: low | medium | high | xhigh | max
-                                 # (xhigh: Anthropic Fable family and Opus 4.7+ only;
+                                 # (xhigh: Anthropic Fable family, Opus 4.7+, and Sonnet 5 only;
                                  # other models/providers downgrade it to high)
 
 # OpenAI-specific
@@ -559,6 +559,14 @@ enable_thinking = false          # Show model thinking/reasoning (default: false
 - New tokenizer: the same content uses roughly 30% more tokens than Opus-tier models — watch your `auto_compact_threshold`.
 - Requires 30-day data retention on your Anthropic organization; zero-data-retention orgs get 400 on all requests. Pricing: $10/$50 per MTok input/output.
 - `claude-mythos-5` is only available to Project Glasswing organizations.
+
+**Claude Sonnet 5 notes** (`claude-sonnet-5`):
+
+- Uses the new naming scheme without a minor version segment. krew recognizes it as an adaptive-thinking model.
+- `sampling.temperature` / `top_p` / `top_k` are not supported (the API rejects non-default values with 400); krew silently omits them and logs a warning if configured.
+- Adaptive thinking is on by default; `thinking_effort` supports the full range including `xhigh` and `max`.
+- New tokenizer: the same content uses roughly 30% more tokens than Sonnet 4.6 — watch your `auto_compact_threshold`.
+- Default max output stays at 64,000 (consistent with other Sonnet models); override via `sampling.max_tokens` if you need more.
 
 ### 5.4 Provider configuration
 

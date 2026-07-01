@@ -13,7 +13,7 @@
 
 #### Scenario: max_tokens 必填
 - **WHEN** `SamplingConfig.max_tokens` 为 None
-- **THEN** SHALL 根据模型名称自动填入最大值（Opus 4.6: 128000, Sonnet 4.6: 64000, Haiku 4.5: 64000, 其他: 32000）
+- **THEN** SHALL 根据模型名称自动填入最大值（Opus 4.6+: 128000, Sonnet 4.5/4.6/5: 64000, Haiku 4.5: 64000, 其他: 32000）
 
 ### Requirement: Anthropic SSE 事件解析
 客户端 SHALL 解析 Anthropic 的 SSE 事件类型，映射为 `StreamEvent`。
