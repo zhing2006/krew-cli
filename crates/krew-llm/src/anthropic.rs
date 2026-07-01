@@ -287,16 +287,22 @@ pub(crate) fn convert_messages(
             continue;
         }
 
-        // Completed assistant turns (no pending tool_calls) intentionally do
-        // NOT replay thinking blocks. Per the Anthropic protocol, thinking
-        // blocks are only required while a tool-use loop is still open (handled
-        // above, where `tool_calls` is set). For a finished turn they are
-        // optional, and replaying them here would be unsafe: the original turn
-        // may have interleaved `server_tool_use`/`web_search_tool_result` blocks
-        // between thinking blocks (e.g. web search), which we do not persist.
-        // Emitting the thinking blocks back-to-back would reorder the sequence
-        // and the API rejects it ("thinking blocks ... cannot be modified").
-        // So such messages fall through to the regular-text handling below.
+        // Fallthrough for assistant turns WITHOUT captured `raw_content_blocks`:
+        // older sessions saved before raw-block capture, or turns whose blocks
+        // `prune` cleared. Turns that DO carry raw blocks were already replayed
+        // verbatim by the branch above (thinking included, in original order),
+        // so this path is only reached when the ordered block sequence is
+        // unavailable.
+        //
+        // For these, intentionally do NOT replay thinking blocks. Per the
+        // Anthropic protocol thinking is only required while a tool-use loop is
+        // still open (handled above, where `tool_calls` is set); for a finished
+        // turn it is optional. Without the raw blocks we cannot reconstruct the
+        // original order — the turn may have interleaved `server_tool_use` /
+        // `web_search_tool_result` blocks between thinking blocks (e.g. web
+        // search) — so emitting the thinking blocks back-to-back would reorder
+        // the sequence and the API rejects it ("thinking blocks ... cannot be
+        // modified"). So such messages fall through to regular-text handling.
 
         // Regular messages.
         let role = match &msg.role {
