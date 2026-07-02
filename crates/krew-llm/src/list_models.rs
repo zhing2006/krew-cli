@@ -70,6 +70,7 @@ pub fn fallback_models(provider_type: ProviderType) -> Vec<ModelInfo> {
             "claude-opus-4-8",
             "claude-opus-4-7",
             "claude-opus-4-6",
+            "claude-sonnet-5",
             "claude-sonnet-4-6",
             "claude-haiku-4-5-20251001",
         ],
@@ -79,6 +80,7 @@ pub fn fallback_models(provider_type: ProviderType) -> Vec<ModelInfo> {
             "claude-opus-4-8",
             "claude-opus-4-7",
             "claude-opus-4-6",
+            "claude-sonnet-5",
             "claude-sonnet-4-6",
             "claude-haiku-4-5@20251001",
         ],
@@ -430,8 +432,9 @@ mod tests {
     #[test]
     fn fallback_anthropic() {
         let models = fallback_models(ProviderType::Anthropic);
-        assert_eq!(models.len(), 6);
+        assert_eq!(models.len(), 7);
         assert!(models.iter().any(|m| m.id == "claude-fable-5"));
+        assert!(models.iter().any(|m| m.id == "claude-sonnet-5"));
         assert!(models.iter().any(|m| m.id == "claude-opus-4-8"));
         assert!(models.iter().any(|m| m.id == "claude-opus-4-7"));
         assert!(models.iter().any(|m| m.id == "claude-opus-4-6"));
@@ -464,8 +467,9 @@ mod tests {
     #[test]
     fn fallback_vertex_anthropic() {
         let models = fallback_models(ProviderType::VertexAnthropic);
-        assert_eq!(models.len(), 5);
+        assert_eq!(models.len(), 6);
         assert!(models.iter().any(|m| m.id == "claude-opus-4-8"));
+        assert!(models.iter().any(|m| m.id == "claude-sonnet-5"));
         assert!(models.iter().any(|m| m.id == "claude-opus-4-7"));
         assert!(models.iter().any(|m| m.id == "claude-opus-4-6"));
         assert!(models.iter().any(|m| m.id == "claude-sonnet-4-6"));

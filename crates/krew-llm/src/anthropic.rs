@@ -134,7 +134,10 @@ fn sampling_params_removed(model: &str) -> bool {
 /// Get the default max_tokens for a given model name.
 fn default_max_tokens(model: &str) -> u32 {
     let has = |s: &str| model.contains(s);
-    if is_fable_family(model) || (has("opus") && version_at_least(model, 4, 6)) {
+    if is_fable_family(model)
+        || (has("opus") && version_at_least(model, 4, 6))
+        || (has("sonnet") && version_at_least(model, 5, 0))
+    {
         128_000
     } else if (has("opus") && version_at_least(model, 4, 5))
         || (has("sonnet") && version_at_least(model, 4, 5))
@@ -476,6 +479,13 @@ pub(crate) fn build_thinking_params(
     model: &str,
 ) -> Option<serde_json::Value> {
     if !enable_thinking {
+        // Sonnet 5+ runs adaptive thinking by default when the `thinking` key
+        // is omitted, so disabling requires an explicit `disabled` config.
+        // The Fable family rejects `disabled` (thinking is always on there)
+        // and older models default to off, so both omit the key entirely.
+        if model.contains("sonnet") && version_at_least(model, 5, 0) {
+            return Some(serde_json::json!({"type": "disabled"}));
+        }
         return None;
     }
 
@@ -512,7 +522,9 @@ pub(crate) fn build_output_config(
     thinking_effort: Option<ThinkingEffort>,
     model: &str,
 ) -> Option<serde_json::Value> {
-    if !enable_thinking || !supports_effort(model) {
+    // The Fable family's thinking is always on regardless of enable_thinking,
+    // so a configured effort must still be honored there.
+    if !supports_effort(model) || (!enable_thinking && !is_fable_family(model)) {
         return None;
     }
 
@@ -2711,11 +2723,43 @@ mod tests {
         assert!(supports_max_effort(model));
         assert!(supports_xhigh_effort(model));
         assert!(sampling_params_removed(model));
-        // Consistent with the other Sonnet models, the default stays at 64k.
-        assert_eq!(default_max_tokens(model), 64_000);
+        // Sonnet 5 raises the output ceiling to 128k (its tokenizer also
+        // produces ~30% more tokens, so the old 64k default truncates sooner).
+        assert_eq!(default_max_tokens(model), 128_000);
         // Thinking uses adaptive (never budget_tokens, which would 400).
         let val = build_thinking_params(true, None, model).unwrap();
         assert_eq!(val["type"], "adaptive");
+    }
+
+    #[test]
+    fn thinking_sonnet_5_disabled_sends_explicit_disabled() {
+        // Omitting the `thinking` key on Sonnet 5 silently runs adaptive
+        // thinking; disabling requires an explicit `disabled` config.
+        for model in [
+            "claude-sonnet-5",
+            "claude-sonnet-5-20260630",
+            "claude-sonnet-5@20260630",
+        ] {
+            let val = build_thinking_params(false, None, model).unwrap();
+            assert_eq!(val["type"], "disabled", "{model}");
+            assert!(val.get("budget_tokens").is_none(), "{model}");
+        }
+        // Fable still omits the key (explicit `disabled` returns 400 there),
+        // and pre-5 models keep omitting it (off is their default).
+        assert!(build_thinking_params(false, None, "claude-fable-5").is_none());
+        assert!(build_thinking_params(false, None, "claude-mythos-5").is_none());
+        assert!(build_thinking_params(false, None, "claude-sonnet-4-6").is_none());
+        assert!(build_thinking_params(false, None, "claude-opus-4-8").is_none());
+    }
+
+    #[test]
+    fn output_config_fable_effort_without_thinking_flag() {
+        // Fable's thinking is always on server-side, so a configured effort
+        // must be sent even when enable_thinking is false.
+        let output = build_output_config(false, Some(ThinkingEffort::Low), "claude-fable-5");
+        assert_eq!(output.unwrap()["effort"], "low");
+        // Non-Fable models keep the old gating.
+        assert!(build_output_config(false, Some(ThinkingEffort::Low), "claude-opus-4-8").is_none());
     }
 
     #[test]
