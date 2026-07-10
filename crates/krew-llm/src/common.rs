@@ -137,6 +137,11 @@ pub async fn send_with_retry(
         let resp = match resp {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => {
+                tracing::error!(
+                    provider = config.provider_name,
+                    url = config.url,
+                    "network error: {e}",
+                );
                 return Err(LlmError::Network(e));
             }
             Err(_) => {
@@ -165,8 +170,20 @@ pub async fn send_with_retry(
                 .await;
                 match retry {
                     Ok(Ok(r)) => r,
-                    Ok(Err(e)) => return Err(LlmError::Network(e)),
+                    Ok(Err(e)) => {
+                        tracing::error!(
+                            provider = config.provider_name,
+                            url = config.url,
+                            "network error on timeout retry: {e}",
+                        );
+                        return Err(LlmError::Network(e));
+                    }
                     Err(_) => {
+                        tracing::error!(
+                            provider = config.provider_name,
+                            url = config.url,
+                            "request timed out after retry (timeout: {timeout:?})",
+                        );
                         return Err(LlmError::Api("request timed out after retry".into()));
                     }
                 }
@@ -223,10 +240,20 @@ pub async fn send_with_retry(
             }
             RetryAction::AuthError => {
                 let msg = extract_error_message(resp).await;
+                tracing::error!(
+                    provider = config.provider_name,
+                    url = config.url,
+                    "authentication error: {msg}",
+                );
                 return Err(LlmError::Auth(msg));
             }
             _ => {
                 let msg = extract_error_message(resp).await;
+                tracing::error!(
+                    provider = config.provider_name,
+                    url = config.url,
+                    "API error (retries exhausted or non-retryable): {msg}",
+                );
                 return Err(LlmError::Api(msg));
             }
         }

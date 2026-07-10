@@ -50,12 +50,9 @@ pub fn extract_command_prefixes(command: &str) -> Option<Vec<String>> {
         if segment.is_empty() {
             continue;
         }
-        if let Some(prefix) = extract_single_prefix(segment) {
-            prefixes.push(prefix);
-        } else {
-            // Could not extract a meaningful prefix from this segment.
-            return None;
-        }
+        // Bail out when no meaningful prefix can be extracted from a segment.
+        let prefix = extract_single_prefix(segment)?;
+        prefixes.push(prefix);
     }
 
     if prefixes.is_empty() {

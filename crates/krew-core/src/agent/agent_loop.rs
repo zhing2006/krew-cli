@@ -59,6 +59,7 @@ pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
         {
             Ok(s) => s,
             Err(e) => {
+                tracing::error!(agent = ctx.agent_name, round, "LLM request failed: {e}",);
                 let _ = ctx.tx.send(AgentEvent::Error {
                     message: e.to_string(),
                     intermediate_messages: std::mem::take(&mut tool_round_messages),
@@ -82,6 +83,11 @@ pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
 
         // If there was a stream error, stop and report with collected messages.
         if let Some(error_msg) = result.error {
+            tracing::error!(
+                agent = ctx.agent_name,
+                round,
+                "LLM stream error: {error_msg}",
+            );
             let _ = ctx.tx.send(AgentEvent::Error {
                 message: error_msg,
                 intermediate_messages: tool_round_messages,
@@ -104,6 +110,11 @@ pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
 
         // Safety check: max rounds exceeded.
         if round >= ctx.max_rounds {
+            tracing::error!(
+                agent = ctx.agent_name,
+                "tool call loop exceeded maximum of {} rounds",
+                ctx.max_rounds,
+            );
             let _ = ctx.tx.send(AgentEvent::Error {
                 message: format!(
                     "Tool call loop exceeded maximum of {} rounds",
@@ -340,6 +351,7 @@ pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
         }
 
         if aborted {
+            tracing::info!(agent = ctx.agent_name, "user aborted the current operation");
             let _ = ctx.tx.send(AgentEvent::Error {
                 message: "User aborted the current operation.".to_string(),
                 intermediate_messages: std::mem::take(&mut tool_round_messages),
@@ -355,6 +367,14 @@ pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
             .collect::<Vec<_>>();
 
         for (id, name, _args_str, result) in all_results {
+            if result.is_error {
+                let first_line = result.content.lines().next().unwrap_or("");
+                tracing::warn!(
+                    agent = ctx.agent_name,
+                    tool = name.as_str(),
+                    "tool returned error: {first_line}",
+                );
+            }
             // Forward MCP / fetch_url result content to TUI (displayed like shell output).
             let show_output = !result.is_error
                 && !result.content.is_empty()

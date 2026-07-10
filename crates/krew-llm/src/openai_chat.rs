@@ -795,7 +795,9 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                 None => {
                     st.done = true;
                     return Some((
-                        StreamEvent::Error("stream interrupted".into()),
+                        StreamEvent::Error(
+                            "stream interrupted: connection closed before [DONE]".into(),
+                        ),
                         (sse_stream, st),
                     ));
                 }

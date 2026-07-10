@@ -763,7 +763,13 @@ fn build_event_stream(
                 }
                 None => {
                     st.done = true;
-                    return Some((StreamEvent::Error("stream interrupted".into()), st));
+                    return Some((
+                        StreamEvent::Error(
+                            "stream interrupted: connection closed before response.completed"
+                                .into(),
+                        ),
+                        st,
+                    ));
                 }
             }
         }

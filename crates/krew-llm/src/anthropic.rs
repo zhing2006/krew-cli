@@ -616,6 +616,9 @@ struct SseState {
     /// then drained as a `RawContentBlock` on the next poll so raw blocks
     /// preserve the provider's original stream order.
     pending_raw: Option<serde_json::Value>,
+    /// Type of the last SSE event received, kept for diagnostics when the
+    /// stream is interrupted before `message_stop`.
+    last_event: String,
 }
 
 /// Parse Anthropic SSE events into StreamEvents.
@@ -650,6 +653,7 @@ pub(crate) fn build_event_stream(
                     Some(Ok(event)) => {
                         let event_type = event.event;
                         let data = event.data.trim().to_string();
+                        state.last_event = event_type.clone();
 
                         match event_type.as_str() {
                             "message_start" => {
@@ -1041,10 +1045,21 @@ pub(crate) fn build_event_stream(
                     }
                     None => {
                         done = true;
-                        return Some((
-                            StreamEvent::Error("stream interrupted".into()),
-                            (sse_stream, state, done),
-                        ));
+                        // Connection closed before message_stop — include
+                        // parser state so the failure point is diagnosable.
+                        let last = if state.last_event.is_empty() {
+                            "none (no SSE events received)".to_string()
+                        } else {
+                            state.last_event.clone()
+                        };
+                        let msg = format!(
+                            "stream interrupted: connection closed before message_stop \
+                             (last SSE event: {last}, output tokens so far: {}, \
+                             open block: {})",
+                            state.output_tokens,
+                            state.current_block_type.as_deref().unwrap_or("none"),
+                        );
+                        return Some((StreamEvent::Error(msg), (sse_stream, state, done)));
                     }
                 }
             }

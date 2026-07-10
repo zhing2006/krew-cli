@@ -732,7 +732,9 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                         tracing::debug!("Gemini SSE stream ended without finishReason");
                         done = true;
                         return Some((
-                            StreamEvent::Error("stream interrupted".into()),
+                            StreamEvent::Error(
+                                "stream interrupted: connection closed before finishReason".into(),
+                            ),
                             (
                                 sse_stream,
                                 usage_state,
