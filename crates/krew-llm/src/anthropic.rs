@@ -478,7 +478,7 @@ pub(crate) fn build_thinking_params(
     thinking_effort: Option<ThinkingEffort>,
     model: &str,
 ) -> Option<serde_json::Value> {
-    if !enable_thinking {
+    if !enable_thinking || thinking_effort == Some(ThinkingEffort::None) {
         // Sonnet 5+ runs adaptive thinking by default when the `thinking` key
         // is omitted, so disabling requires an explicit `disabled` config.
         // The Fable family rejects `disabled` (thinking is always on there)
@@ -505,6 +505,7 @@ pub(crate) fn build_thinking_params(
         // Older models: use enabled + budget_tokens.
         // Xhigh/Max map to same budget as High (32768).
         let budget = match thinking_effort {
+            Some(ThinkingEffort::None) => unreachable!("disabled effort handled above"),
             Some(ThinkingEffort::Low) => 1024,
             Some(ThinkingEffort::High | ThinkingEffort::Xhigh | ThinkingEffort::Max) => 32768,
             Some(ThinkingEffort::Medium) | None => 8192,
@@ -528,8 +529,9 @@ pub(crate) fn build_output_config(
         return None;
     }
 
-    thinking_effort.map(|effort| {
+    thinking_effort.and_then(|effort| {
         let effort_str = match effort {
+            ThinkingEffort::None => return None,
             ThinkingEffort::Low => "low",
             ThinkingEffort::Medium => "medium",
             ThinkingEffort::High => "high",
@@ -550,7 +552,7 @@ pub(crate) fn build_output_config(
                 }
             }
         };
-        serde_json::json!({"effort": effort_str})
+        Some(serde_json::json!({"effort": effort_str}))
     })
 }
 
@@ -2570,6 +2572,8 @@ mod tests {
             retry_config: krew_config::RetryConfig::default(),
             enable_thinking: true,
             thinking_effort: None,
+            reasoning_mode: None,
+            reasoning_context: None,
             enable_web_search: false,
             extra_headers: Vec::new(),
         };
@@ -2981,6 +2985,8 @@ mod tests {
             retry_config: krew_config::RetryConfig::default(),
             enable_thinking: true,
             thinking_effort: Some(ThinkingEffort::Xhigh),
+            reasoning_mode: None,
+            reasoning_context: None,
             enable_web_search: false,
             extra_headers: Vec::new(),
         };
@@ -3027,6 +3033,8 @@ mod tests {
             retry_config: krew_config::RetryConfig::default(),
             enable_thinking: false,
             thinking_effort: None,
+            reasoning_mode: None,
+            reasoning_context: None,
             enable_web_search: false,
             extra_headers: Vec::new(),
         };

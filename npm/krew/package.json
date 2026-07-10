@@ -1,16 +1,16 @@
 {
   "name": "@zhing2026/krew",
-  "version": "0.11.15",
+  "version": "0.12.0",
   "description": "Multi-AI-Agent collaborative CLI tool",
   "bin": {
     "krew": "bin/krew"
   },
   "optionalDependencies": {
-    "@zhing2026/krew-win32-x64": "0.11.15",
-    "@zhing2026/krew-linux-x64": "0.11.15",
-    "@zhing2026/krew-linux-arm64": "0.11.15",
-    "@zhing2026/krew-darwin-x64": "0.11.15",
-    "@zhing2026/krew-darwin-arm64": "0.11.15"
+    "@zhing2026/krew-win32-x64": "0.12.0",
+    "@zhing2026/krew-linux-x64": "0.12.0",
+    "@zhing2026/krew-linux-arm64": "0.12.0",
+    "@zhing2026/krew-darwin-x64": "0.12.0",
+    "@zhing2026/krew-darwin-arm64": "0.12.0"
   },
   "license": "MIT",
   "repository": {

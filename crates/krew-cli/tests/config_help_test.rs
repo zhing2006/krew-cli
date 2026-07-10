@@ -116,6 +116,8 @@ fn help_contains_agents_fields() {
         "system_prompt",
         "enable_thinking",
         "thinking_effort",
+        "reasoning_mode",
+        "reasoning_context",
         "temperature",
         "top_p",
         "top_k",

@@ -231,7 +231,7 @@ Merge rules (project config takes precedence):
                              LLM model identifier (e.g. "claude-sonnet-4-6").
 
   api_type                   "chat" | "responses"
-                             Default: (none, provider decides)
+                             Default: official OpenAI uses responses; custom base_url uses chat.
                              OpenAI only: which API to use.
                                chat      — Chat Completions API
                                responses — Responses API
@@ -256,11 +256,22 @@ Merge rules (project config takes precedence):
 
   enable_thinking            Boolean
                              Default: false
-                             Whether to enable thinking/reasoning mode.
+                             Request a visible reasoning summary. For OpenAI, an explicit
+                             thinking_effort controls compute independently of this flag.
 
-  thinking_effort            "low" | "medium" | "high" | "xhigh" | "max"
+  thinking_effort            "none" | "low" | "medium" | "high" | "xhigh" | "max"
                              Default: (none)
-                             Thinking effort level. Only used when enable_thinking is true.
+                             Reasoning compute level. GPT-5.6 supports all listed values.
+
+  reasoning_mode             "standard" | "pro"
+                             Default: "standard" (omitted)
+                             Official OpenAI GPT-5.6 Responses only. Pro mode increases
+                             capability, latency, and cost.
+
+  reasoning_context          "auto" | "current_turn" | "all_turns"
+                             Default: "auto" (omitted)
+                             Official OpenAI GPT-5.6 Responses only. Controls which prior
+                             reasoning items are available to the model.
 
   [agents.sampling]          (optional sub-table)
 
@@ -372,8 +383,9 @@ Merge rules (project config takes precedence):
   name = "gpt"
   display_name = "GPT"
   provider = "openai"
-  model = "gpt-5.4"
+  model = "gpt-5.6"
   color = "green"
+  thinking_effort = "medium"
 
 ────────────────────────────────────────────────────────────────────────────────
 4. CLI COMMANDS

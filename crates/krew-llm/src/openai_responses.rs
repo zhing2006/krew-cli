@@ -7,7 +7,8 @@ use crate::{
 use futures::Stream;
 use krew_config::OtherAgentRole;
 use krew_config::RetryConfig;
-use krew_config::{SamplingConfig, ThinkingEffort};
+use krew_config::{ReasoningContext, ReasoningMode, SamplingConfig, ThinkingEffort};
+use krew_config::{is_gpt_5_6_model, is_official_openai_base_url};
 use std::pin::Pin;
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com";
@@ -21,6 +22,8 @@ pub struct OpenAiResponsesClient {
     agent_name: String,
     enable_thinking: bool,
     thinking_effort: Option<ThinkingEffort>,
+    reasoning_mode: Option<ReasoningMode>,
+    reasoning_context: Option<ReasoningContext>,
     enable_web_search: bool,
     other_agent_role: OtherAgentRole,
     retry_config: RetryConfig,
@@ -46,6 +49,8 @@ impl OpenAiResponsesClient {
             agent_name: config.agent_name,
             enable_thinking: config.enable_thinking,
             thinking_effort: config.thinking_effort,
+            reasoning_mode: config.reasoning_mode,
+            reasoning_context: config.reasoning_context,
             enable_web_search: config.enable_web_search,
             other_agent_role: config.other_agent_role,
             retry_config: config.retry_config,
@@ -72,10 +77,37 @@ pub fn convert_messages(
     self_agent_name: &str,
     other_agent_role: &OtherAgentRole,
 ) -> Vec<serde_json::Value> {
+    convert_messages_with_raw_replay(messages, self_agent_name, other_agent_role, false)
+}
+
+fn convert_messages_with_raw_replay(
+    messages: &[ChatMessage],
+    self_agent_name: &str,
+    other_agent_role: &OtherAgentRole,
+    replay_raw_output_items: bool,
+) -> Vec<serde_json::Value> {
     let mut result: Vec<serde_json::Value> = Vec::new();
     let mut pending: Vec<RoleContent> = Vec::new();
 
     for msg in messages {
+        let is_other_agent = matches!(&msg.role, ChatRole::Assistant)
+            && msg
+                .name
+                .as_ref()
+                .is_some_and(|name| name != self_agent_name);
+
+        // Replay the current OpenAI agent's output items verbatim. This keeps
+        // encrypted reasoning content and its ordering intact across turns.
+        if replay_raw_output_items
+            && msg.role == ChatRole::Assistant
+            && !is_other_agent
+            && !msg.raw_content_blocks.is_empty()
+        {
+            flush_pending_responses(&mut pending, &mut result);
+            result.extend(msg.raw_content_blocks.iter().cloned());
+            continue;
+        }
+
         // Tool result messages: Responses API uses function_call_output.
         if msg.role == ChatRole::Tool {
             flush_pending_responses(&mut pending, &mut result);
@@ -150,12 +182,6 @@ pub fn convert_messages(
         }
 
         // Regular messages.
-        let is_other_agent = matches!(&msg.role, ChatRole::Assistant)
-            && msg
-                .name
-                .as_ref()
-                .is_some_and(|name| name != self_agent_name);
-
         let role = match &msg.role {
             ChatRole::System => "developer",
             ChatRole::User => "user",
@@ -250,6 +276,10 @@ fn build_sampling_params(sampling: &SamplingConfig) -> serde_json::Map<String, s
 ///
 /// Matches exact model name or model name with date suffix (e.g. "gpt-5.4-20260101").
 fn supports_xhigh(model: &str) -> bool {
+    if is_gpt_5_6_model(model) {
+        return true;
+    }
+
     const XHIGH_MODELS: &[&str] = &[
         "gpt-5.5",
         "gpt-5.5-pro",
@@ -270,32 +300,68 @@ fn supports_xhigh(model: &str) -> bool {
 }
 
 /// Build the reasoning parameter for the request body.
+fn build_reasoning_params_with_options(
+    enable_thinking: bool,
+    thinking_effort: Option<ThinkingEffort>,
+    reasoning_mode: Option<ReasoningMode>,
+    reasoning_context: Option<ReasoningContext>,
+    model: &str,
+) -> Option<serde_json::Value> {
+    let effort = match thinking_effort {
+        Some(ThinkingEffort::None) => Some("none"),
+        Some(ThinkingEffort::Low) => Some("low"),
+        Some(ThinkingEffort::High) => Some("high"),
+        Some(ThinkingEffort::Xhigh) => Some(if supports_xhigh(model) {
+            "xhigh"
+        } else {
+            "high"
+        }),
+        Some(ThinkingEffort::Max) => Some(if is_gpt_5_6_model(model) {
+            "max"
+        } else if supports_xhigh(model) {
+            "xhigh"
+        } else {
+            "high"
+        }),
+        Some(ThinkingEffort::Medium) => Some("medium"),
+        None if enable_thinking => Some("medium"),
+        None => None,
+    };
+
+    let mut reasoning = serde_json::Map::new();
+    if let Some(effort) = effort {
+        reasoning.insert("effort".to_string(), serde_json::json!(effort));
+    }
+    if enable_thinking && thinking_effort != Some(ThinkingEffort::None) {
+        reasoning.insert("summary".to_string(), serde_json::json!("auto"));
+    }
+    if reasoning_mode == Some(ReasoningMode::Pro) {
+        reasoning.insert("mode".to_string(), serde_json::json!("pro"));
+    }
+    match reasoning_context {
+        Some(ReasoningContext::CurrentTurn) => {
+            reasoning.insert("context".to_string(), serde_json::json!("current_turn"));
+        }
+        Some(ReasoningContext::AllTurns) => {
+            reasoning.insert("context".to_string(), serde_json::json!("all_turns"));
+        }
+        Some(ReasoningContext::Auto) | None => {}
+    }
+
+    if reasoning.is_empty() {
+        None
+    } else {
+        Some(serde_json::Value::Object(reasoning))
+    }
+}
+
+#[cfg(test)]
 fn build_reasoning_params(
     enable_thinking: bool,
     thinking_effort: Option<ThinkingEffort>,
     model: &str,
 ) -> Option<serde_json::Value> {
-    if !enable_thinking {
-        return None;
-    }
-
-    let effort = match thinking_effort {
-        Some(ThinkingEffort::Low) => "low",
-        Some(ThinkingEffort::High) => "high",
-        Some(ThinkingEffort::Xhigh | ThinkingEffort::Max) => {
-            if supports_xhigh(model) {
-                "xhigh"
-            } else {
-                "high"
-            }
-        }
-        Some(ThinkingEffort::Medium) | None => "medium",
-    };
-
-    Some(serde_json::json!({
-        "effort": effort,
-        "summary": "auto",
-    }))
+    build_reasoning_params_with_options(enable_thinking, thinking_effort, None, None, model)
 }
 
 // ---------------------------------------------------------------------------
@@ -351,9 +417,113 @@ struct SseStreamState<S> {
     has_streamed_text: bool,
     /// Whether `response.reasoning_summary_text.delta` events were received.
     has_streamed_thinking: bool,
-    /// Whether `response.output_item.done` events were received
-    /// (covers function_call and web_search_call).
-    has_streamed_items: bool,
+    /// Stable keys for output items already emitted as raw replay data.
+    seen_output_items: std::collections::HashSet<String>,
+}
+
+fn output_item_key(item: &serde_json::Value) -> String {
+    if let Some(id) = item.get("id").and_then(|value| value.as_str()) {
+        return format!("id:{id}");
+    }
+    if let Some(call_id) = item.get("call_id").and_then(|value| value.as_str()) {
+        return format!("call_id:{call_id}");
+    }
+    serde_json::to_string(item).unwrap_or_default()
+}
+
+fn enqueue_output_item_events(
+    pending: &mut PendingQueue,
+    seen_output_items: &mut std::collections::HashSet<String>,
+    item: &serde_json::Value,
+    include_fallback_content: bool,
+    capture_raw_output_item: bool,
+) {
+    if !seen_output_items.insert(output_item_key(item)) {
+        return;
+    }
+
+    if capture_raw_output_item {
+        pending.push_back(StreamEvent::RawContentBlock(item.clone()));
+    }
+
+    let item_type = item
+        .get("type")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    match item_type {
+        "reasoning" if include_fallback_content => {
+            if let Some(summary) = item.get("summary").and_then(|value| value.as_array()) {
+                for part in summary {
+                    if let Some(text) = part.get("text").and_then(|value| value.as_str())
+                        && !text.is_empty()
+                    {
+                        pending.push_back(StreamEvent::ThinkingDelta(text.to_string()));
+                    }
+                }
+            }
+        }
+        "message" if include_fallback_content => {
+            if let Some(content) = item.get("content").and_then(|value| value.as_array()) {
+                for part in content {
+                    if part.get("type").and_then(|value| value.as_str()) == Some("output_text")
+                        && let Some(text) = part.get("text").and_then(|value| value.as_str())
+                        && !text.is_empty()
+                    {
+                        pending.push_back(StreamEvent::TextDelta(text.to_string()));
+                    }
+                }
+            }
+        }
+        "function_call" => {
+            pending.push_back(StreamEvent::ToolCall {
+                id: item
+                    .get("call_id")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                name: item
+                    .get("name")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                arguments: item
+                    .get("arguments")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("{}")
+                    .to_string(),
+                thought_signature: None,
+            });
+        }
+        "web_search_call" => {
+            if include_fallback_content {
+                pending.push_back(StreamEvent::ServerToolStart {
+                    name: "web_search".to_string(),
+                });
+            }
+            pending.push_back(StreamEvent::ServerToolDone {
+                name: "web_search".to_string(),
+                query: extract_web_search_query(item),
+            });
+        }
+        _ => {}
+    }
+}
+
+fn enable_encrypted_reasoning_replay(
+    body: &mut serde_json::Value,
+    base_url: &str,
+    model: &str,
+) -> bool {
+    if !supports_encrypted_reasoning_replay(base_url, model) {
+        return false;
+    }
+    body["store"] = serde_json::json!(false);
+    body["include"] = serde_json::json!(["reasoning.encrypted_content"]);
+    true
+}
+
+fn supports_encrypted_reasoning_replay(base_url: &str, model: &str) -> bool {
+    is_official_openai_base_url(Some(base_url)) && is_gpt_5_6_model(model)
 }
 
 /// Parse OpenAI Responses SSE events into StreamEvents.
@@ -362,10 +532,13 @@ struct SseStreamState<S> {
 /// (no incremental accumulation needed — the complete item is in one event).
 ///
 /// When a proxy (e.g. litellm) falls back to fake streaming, content may
-/// only appear in `response.completed`. The `has_streamed_*` flags track
+/// only appear in `response.completed`. The stream state tracks
 /// what was already delivered incrementally so we can extract missing items
 /// from `response.completed` without duplicating native OpenAI events.
-fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamEvent> + Send {
+fn build_event_stream(
+    response: reqwest::Response,
+    capture_raw_output_items: bool,
+) -> impl Stream<Item = StreamEvent> + Send {
     use eventsource_stream::Eventsource;
     use futures::StreamExt;
     use std::collections::VecDeque;
@@ -379,10 +552,10 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
         done: false,
         has_streamed_text: false,
         has_streamed_thinking: false,
-        has_streamed_items: false,
+        seen_output_items: std::collections::HashSet::new(),
     };
 
-    futures::stream::unfold(state, |mut st| async move {
+    futures::stream::unfold(state, move |mut st| async move {
         // Drain pending events first (multiple events from one SSE chunk).
         if let Some(event) = st.pending.pop_front() {
             return Some((event, st));
@@ -443,49 +616,24 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data)
                                 && let Some(item) = v.get("item")
                             {
-                                let item_type =
-                                    item.get("type").and_then(|t| t.as_str()).unwrap_or("");
-
-                                st.has_streamed_items = true;
-
-                                // Server-side web search call completed.
-                                if item_type == "web_search_call" {
-                                    let query = extract_web_search_query(item);
-                                    return Some((
-                                        StreamEvent::ServerToolDone {
-                                            name: "web_search".to_string(),
-                                            query,
-                                        },
-                                        st,
-                                    ));
-                                }
-
-                                // Complete function call item.
-                                if item_type == "function_call" {
-                                    let call_id = item
-                                        .get("call_id")
-                                        .and_then(|c| c.as_str())
-                                        .unwrap_or("")
-                                        .to_string();
-                                    let name = item
-                                        .get("name")
-                                        .and_then(|n| n.as_str())
-                                        .unwrap_or("")
-                                        .to_string();
-                                    let arguments = item
-                                        .get("arguments")
-                                        .and_then(|a| a.as_str())
-                                        .unwrap_or("{}")
-                                        .to_string();
-                                    return Some((
-                                        StreamEvent::ToolCall {
-                                            id: call_id,
-                                            name,
-                                            arguments,
-                                            thought_signature: None,
-                                        },
-                                        st,
-                                    ));
+                                let include_fallback_content = match item
+                                    .get("type")
+                                    .and_then(|value| value.as_str())
+                                    .unwrap_or("")
+                                {
+                                    "reasoning" => !st.has_streamed_thinking,
+                                    "message" => !st.has_streamed_text,
+                                    _ => false,
+                                };
+                                enqueue_output_item_events(
+                                    &mut st.pending,
+                                    &mut st.seen_output_items,
+                                    item,
+                                    include_fallback_content,
+                                    capture_raw_output_items,
+                                );
+                                if let Some(event) = st.pending.pop_front() {
+                                    return Some((event, st));
                                 }
                             }
                             continue;
@@ -503,83 +651,22 @@ fn build_event_stream(response: reqwest::Response) -> impl Stream<Item = StreamE
                                 .and_then(|o| o.as_array())
                             {
                                 for item in output {
-                                    let item_type =
-                                        item.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                                    match item_type {
-                                        "reasoning" if !st.has_streamed_thinking => {
-                                            if let Some(summary) =
-                                                item.get("summary").and_then(|s| s.as_array())
-                                            {
-                                                for part in summary {
-                                                    if let Some(text) =
-                                                        part.get("text").and_then(|t| t.as_str())
-                                                        && !text.is_empty()
-                                                    {
-                                                        st.pending.push_back(
-                                                            StreamEvent::ThinkingDelta(
-                                                                text.to_string(),
-                                                            ),
-                                                        );
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        "message" if !st.has_streamed_text => {
-                                            if let Some(content) =
-                                                item.get("content").and_then(|c| c.as_array())
-                                            {
-                                                for part in content {
-                                                    if part.get("type").and_then(|t| t.as_str())
-                                                        == Some("output_text")
-                                                        && let Some(text) = part
-                                                            .get("text")
-                                                            .and_then(|t| t.as_str())
-                                                        && !text.is_empty()
-                                                    {
-                                                        st.pending.push_back(
-                                                            StreamEvent::TextDelta(
-                                                                text.to_string(),
-                                                            ),
-                                                        );
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        "function_call" if !st.has_streamed_items => {
-                                            let call_id = item
-                                                .get("call_id")
-                                                .and_then(|c| c.as_str())
-                                                .unwrap_or("")
-                                                .to_string();
-                                            let name = item
-                                                .get("name")
-                                                .and_then(|n| n.as_str())
-                                                .unwrap_or("")
-                                                .to_string();
-                                            let arguments = item
-                                                .get("arguments")
-                                                .and_then(|a| a.as_str())
-                                                .unwrap_or("{}")
-                                                .to_string();
-                                            st.pending.push_back(StreamEvent::ToolCall {
-                                                id: call_id,
-                                                name,
-                                                arguments,
-                                                thought_signature: None,
-                                            });
-                                        }
-                                        "web_search_call" if !st.has_streamed_items => {
-                                            st.pending.push_back(StreamEvent::ServerToolStart {
-                                                name: "web_search".to_string(),
-                                            });
-                                            let query = extract_web_search_query(item);
-                                            st.pending.push_back(StreamEvent::ServerToolDone {
-                                                name: "web_search".to_string(),
-                                                query,
-                                            });
-                                        }
-                                        _ => {}
-                                    }
+                                    let item_type = item
+                                        .get("type")
+                                        .and_then(|value| value.as_str())
+                                        .unwrap_or("");
+                                    let include_fallback_content = match item_type {
+                                        "reasoning" => !st.has_streamed_thinking,
+                                        "message" => !st.has_streamed_text,
+                                        _ => true,
+                                    };
+                                    enqueue_output_item_events(
+                                        &mut st.pending,
+                                        &mut st.seen_output_items,
+                                        item,
+                                        include_fallback_content,
+                                        capture_raw_output_items,
+                                    );
                                 }
                             }
 
@@ -698,8 +785,15 @@ impl LlmClient for OpenAiResponsesClient {
     ) -> Result<Pin<Box<dyn Stream<Item = StreamEvent> + Send>>, LlmError> {
         let url = format!("{}/v1/responses", self.base_url);
 
-        // Build input array.
-        let input = convert_messages(messages, &self.agent_name, &self.other_agent_role);
+        let is_official_gpt_5_6 = supports_encrypted_reasoning_replay(&self.base_url, &self.model);
+
+        // Replay encrypted output items only for official GPT-5.6 requests.
+        let input = convert_messages_with_raw_replay(
+            messages,
+            &self.agent_name,
+            &self.other_agent_role,
+            is_official_gpt_5_6,
+        );
 
         // Build request body.
         let mut body = serde_json::json!({
@@ -708,16 +802,26 @@ impl LlmClient for OpenAiResponsesClient {
             "stream": true,
         });
 
+        enable_encrypted_reasoning_replay(&mut body, &self.base_url, &self.model);
+
         // Merge sampling parameters.
         let sampling_params = build_sampling_params(sampling);
         for (k, v) in sampling_params {
             body[k] = v;
         }
 
-        // Add reasoning if thinking is enabled.
-        if let Some(reasoning) =
-            build_reasoning_params(self.enable_thinking, self.thinking_effort, &self.model)
-        {
+        // GPT-5.6 mode and context are only sent to the official Responses API.
+        let reasoning_mode = is_official_gpt_5_6.then_some(self.reasoning_mode).flatten();
+        let reasoning_context = is_official_gpt_5_6
+            .then_some(self.reasoning_context)
+            .flatten();
+        if let Some(reasoning) = build_reasoning_params_with_options(
+            self.enable_thinking,
+            self.thinking_effort,
+            reasoning_mode,
+            reasoning_context,
+            &self.model,
+        ) {
             body["reasoning"] = reasoning;
         }
 
@@ -769,7 +873,7 @@ impl LlmClient for OpenAiResponsesClient {
         }
 
         // Convert to SSE event stream.
-        let stream = build_event_stream(response);
+        let stream = build_event_stream(response, is_official_gpt_5_6);
 
         Ok(Box::pin(stream))
     }
@@ -892,6 +996,72 @@ mod tests {
     }
 
     #[test]
+    fn convert_replays_current_agent_output_items_verbatim() {
+        let mut message = ChatMessage::text(
+            ChatRole::Assistant,
+            "flattened text",
+            Some("agent1".to_string()),
+        );
+        let reasoning = serde_json::json!({
+            "id": "rs_123",
+            "type": "reasoning",
+            "encrypted_content": "encrypted-payload",
+            "summary": [],
+        });
+        let output_message = serde_json::json!({
+            "id": "msg_123",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "flattened text"}],
+        });
+        message.raw_content_blocks = vec![reasoning.clone(), output_message.clone()];
+
+        let result =
+            convert_messages_with_raw_replay(&[message], "agent1", &OtherAgentRole::User, true);
+        assert_eq!(result, vec![reasoning, output_message]);
+    }
+
+    #[test]
+    fn convert_ignores_raw_output_items_without_replay_capability() {
+        let mut message = ChatMessage::text(
+            ChatRole::Assistant,
+            "flattened text",
+            Some("agent1".to_string()),
+        );
+        message.raw_content_blocks = vec![serde_json::json!({
+            "id": "rs_123",
+            "type": "reasoning",
+            "encrypted_content": "encrypted-payload",
+        })];
+
+        let result = convert_messages(&[message], "agent1", &OtherAgentRole::User);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0]["type"], "message");
+        assert_eq!(result[0]["content"][0]["text"], "flattened text");
+    }
+
+    #[test]
+    fn convert_does_not_replay_other_agents_output_items() {
+        let mut message = ChatMessage::text(
+            ChatRole::Assistant,
+            "other reply",
+            Some("agent2".to_string()),
+        );
+        message.raw_content_blocks = vec![serde_json::json!({
+            "id": "rs_private",
+            "type": "reasoning",
+            "encrypted_content": "encrypted-payload",
+        })];
+
+        let result =
+            convert_messages_with_raw_replay(&[message], "agent1", &OtherAgentRole::User, true);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0]["role"], "user");
+        assert_eq!(result[0]["content"], "[agent2] other reply");
+    }
+
+    #[test]
     fn convert_other_agent_to_user() {
         let messages = vec![ChatMessage::text(
             ChatRole::Assistant,
@@ -992,6 +1162,68 @@ mod tests {
         assert_eq!(url, "https://api.openai.com/v1/responses");
     }
 
+    #[test]
+    fn gpt_5_6_enables_stateless_encrypted_reasoning_replay() {
+        let mut body = serde_json::json!({});
+        assert!(enable_encrypted_reasoning_replay(
+            &mut body,
+            "https://api.openai.com",
+            "openai/gpt-5.6-terra",
+        ));
+        assert_eq!(body["store"], false);
+        assert_eq!(
+            body["include"],
+            serde_json::json!(["reasoning.encrypted_content"])
+        );
+    }
+
+    #[test]
+    fn compatible_provider_does_not_receive_openai_replay_fields() {
+        let mut body = serde_json::json!({});
+        assert!(!enable_encrypted_reasoning_replay(
+            &mut body,
+            "https://openai-compatible.example.com",
+            "gpt-5.6",
+        ));
+        assert!(body.get("store").is_none());
+        assert!(body.get("include").is_none());
+    }
+
+    #[test]
+    fn output_item_capture_preserves_encrypted_reasoning() {
+        let item = serde_json::json!({
+            "id": "rs_123",
+            "type": "reasoning",
+            "encrypted_content": "encrypted-payload",
+            "summary": [],
+        });
+        let mut pending = PendingQueue::new();
+        let mut seen = std::collections::HashSet::new();
+        enqueue_output_item_events(&mut pending, &mut seen, &item, false, true);
+
+        assert_eq!(pending.len(), 1);
+        match pending.pop_front().unwrap() {
+            StreamEvent::RawContentBlock(raw) => assert_eq!(raw, item),
+            event => panic!("expected raw output item, got {event:?}"),
+        }
+        enqueue_output_item_events(&mut pending, &mut seen, &item, false, true);
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn output_item_capture_is_disabled_for_other_responses_clients() {
+        let item = serde_json::json!({
+            "id": "rs_123",
+            "type": "reasoning",
+            "encrypted_content": "encrypted-payload",
+            "summary": [],
+        });
+        let mut pending = PendingQueue::new();
+        let mut seen = std::collections::HashSet::new();
+        enqueue_output_item_events(&mut pending, &mut seen, &item, false, false);
+        assert!(pending.is_empty());
+    }
+
     // ---- Thinking/Reasoning parameter tests (3.12) ----
 
     #[test]
@@ -1019,9 +1251,46 @@ mod tests {
     }
 
     #[test]
-    fn reasoning_disabled() {
+    fn explicit_reasoning_effort_is_honored_when_summary_is_disabled() {
         let result = build_reasoning_params(false, Some(ThinkingEffort::High), "gpt-5.4");
-        assert!(result.is_none());
+        let val = result.unwrap();
+        assert_eq!(val["effort"], "high");
+        assert!(val.get("summary").is_none());
+    }
+
+    #[test]
+    fn reasoning_unconfigured_and_disabled_is_omitted() {
+        assert!(build_reasoning_params(false, None, "gpt-5.6").is_none());
+    }
+
+    #[test]
+    fn gpt_5_6_supports_none_xhigh_and_max() {
+        let none = build_reasoning_params(true, Some(ThinkingEffort::None), "gpt-5.6-sol").unwrap();
+        assert_eq!(none["effort"], "none");
+        assert!(none.get("summary").is_none());
+
+        let xhigh =
+            build_reasoning_params(false, Some(ThinkingEffort::Xhigh), "gpt-5.6-terra").unwrap();
+        assert_eq!(xhigh["effort"], "xhigh");
+
+        let max = build_reasoning_params(false, Some(ThinkingEffort::Max), "openai/gpt-5.6-luna")
+            .unwrap();
+        assert_eq!(max["effort"], "max");
+    }
+
+    #[test]
+    fn gpt_5_6_pro_and_context_are_serialized() {
+        let val = build_reasoning_params_with_options(
+            false,
+            None,
+            Some(ReasoningMode::Pro),
+            Some(ReasoningContext::AllTurns),
+            "gpt-5.6",
+        )
+        .unwrap();
+        assert_eq!(val["mode"], "pro");
+        assert_eq!(val["context"], "all_turns");
+        assert!(val.get("effort").is_none());
     }
 
     #[test]

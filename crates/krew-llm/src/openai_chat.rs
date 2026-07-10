@@ -9,6 +9,7 @@ use krew_config::OtherAgentRole;
 use krew_config::RetryConfig;
 use krew_config::SamplingConfig;
 use krew_config::ThinkingEffort;
+use krew_config::is_gpt_5_6_model;
 use std::pin::Pin;
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com";
@@ -227,6 +228,10 @@ fn slug_matches_family(model: &str, family: &str) -> bool {
 ///
 /// Matches exact model name or model name with date suffix (e.g. "gpt-5.4-20260101").
 fn supports_xhigh(model: &str) -> bool {
+    if is_gpt_5_6_model(model) {
+        return true;
+    }
+
     const XHIGH_MODELS: &[&str] = &[
         "gpt-5.5",
         "gpt-5.5-pro",
@@ -264,33 +269,44 @@ fn build_reasoning_effort(
     thinking_effort: Option<ThinkingEffort>,
     model: &str,
 ) -> Option<&'static str> {
-    if !enable_thinking {
-        return None;
-    }
     if is_kimi_k26(model) {
         return None;
     }
     if is_deepseek_v4(model) {
         return Some(match thinking_effort {
             Some(ThinkingEffort::Max) => "max",
+            Some(ThinkingEffort::None) => return None,
             Some(ThinkingEffort::Low)
             | Some(ThinkingEffort::Medium)
             | Some(ThinkingEffort::High)
-            | Some(ThinkingEffort::Xhigh)
-            | None => "high",
+            | Some(ThinkingEffort::Xhigh) => "high",
+            None if enable_thinking => "high",
+            None => return None,
         });
     }
     Some(match thinking_effort {
+        Some(ThinkingEffort::None) => "none",
         Some(ThinkingEffort::Low) => "low",
         Some(ThinkingEffort::High) => "high",
-        Some(ThinkingEffort::Xhigh | ThinkingEffort::Max) => {
+        Some(ThinkingEffort::Xhigh) => {
             if supports_xhigh(model) {
                 "xhigh"
             } else {
                 "high"
             }
         }
-        Some(ThinkingEffort::Medium) | None => "medium",
+        Some(ThinkingEffort::Max) => {
+            if is_gpt_5_6_model(model) {
+                "max"
+            } else if supports_xhigh(model) {
+                "xhigh"
+            } else {
+                "high"
+            }
+        }
+        Some(ThinkingEffort::Medium) => "medium",
+        None if enable_thinking => "medium",
+        None => return None,
     })
 }
 
@@ -511,7 +527,13 @@ impl LlmClient for OpenAiChatClient {
         {
             body["reasoning_effort"] = serde_json::json!(effort);
         }
-        for (key, value) in build_compatible_thinking_fields(&self.model, self.enable_thinking) {
+        let compatible_thinking_enabled = self
+            .thinking_effort
+            .map(|effort| effort != ThinkingEffort::None)
+            .unwrap_or(self.enable_thinking);
+        for (key, value) in
+            build_compatible_thinking_fields(&self.model, compatible_thinking_enabled)
+        {
             body[key] = value;
         }
 
@@ -1122,9 +1144,30 @@ mod tests {
     }
 
     #[test]
-    fn reasoning_effort_disabled() {
+    fn explicit_reasoning_effort_is_honored_when_summary_is_disabled() {
         let result = build_reasoning_effort(false, Some(ThinkingEffort::Max), "gpt-5.4");
-        assert!(result.is_none());
+        assert_eq!(result, Some("xhigh"));
+    }
+
+    #[test]
+    fn gpt_5_6_supports_none_xhigh_and_max() {
+        assert_eq!(
+            build_reasoning_effort(false, Some(ThinkingEffort::None), "gpt-5.6-sol"),
+            Some("none")
+        );
+        assert_eq!(
+            build_reasoning_effort(false, Some(ThinkingEffort::Xhigh), "gpt-5.6-terra"),
+            Some("xhigh")
+        );
+        assert_eq!(
+            build_reasoning_effort(false, Some(ThinkingEffort::Max), "gpt-5.6-luna"),
+            Some("max")
+        );
+    }
+
+    #[test]
+    fn reasoning_effort_omitted_when_unconfigured_and_disabled() {
+        assert!(build_reasoning_effort(false, None, "gpt-5.6").is_none());
     }
 
     #[test]

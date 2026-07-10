@@ -297,8 +297,13 @@ pub struct AgentConfig {
     /// Whether to enable thinking/reasoning for this agent.
     #[serde(default)]
     pub enable_thinking: bool,
-    /// Thinking effort level (Low/Medium/High). Only used when enable_thinking is true.
+    /// Thinking effort level. For OpenAI, an explicit value controls compute
+    /// independently from `enable_thinking`.
     pub thinking_effort: Option<ThinkingEffort>,
+    /// OpenAI GPT-5.6 reasoning mode (standard or pro).
+    pub reasoning_mode: Option<ReasoningMode>,
+    /// OpenAI GPT-5.6 reasoning history scope.
+    pub reasoning_context: Option<ReasoningContext>,
 }
 
 /// Sampling parameters for LLM generation.
@@ -340,6 +345,51 @@ pub struct ProviderConfig {
     /// Extra HTTP headers to include in chat/inference requests.
     #[serde(default)]
     pub extra_headers: Option<std::collections::HashMap<String, String>>,
+}
+
+impl ProviderConfig {
+    /// Return whether this provider targets the official OpenAI API host.
+    pub fn is_official_openai(&self) -> bool {
+        if self.provider_type != ProviderType::OpenAI {
+            return false;
+        }
+
+        self.base_url
+            .as_deref()
+            .is_none_or(has_official_openai_host)
+    }
+
+    /// Return the default OpenAI API type for this provider.
+    pub fn default_api_type(&self) -> ApiType {
+        if self.is_official_openai() {
+            ApiType::Responses
+        } else {
+            ApiType::Chat
+        }
+    }
+}
+
+/// Return whether an optional base URL targets the official OpenAI API host.
+pub fn is_official_openai_base_url(base_url: Option<&str>) -> bool {
+    base_url.is_none_or(has_official_openai_host)
+}
+
+/// Return whether a model ID (optionally provider-prefixed) is GPT-5.6 family.
+pub fn is_gpt_5_6_model(model: &str) -> bool {
+    let slug = model.rsplit('/').next().unwrap_or(model);
+    slug == "gpt-5.6" || slug.starts_with("gpt-5.6-")
+}
+
+fn has_official_openai_host(base_url: &str) -> bool {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    let without_scheme = trimmed
+        .strip_prefix("https://")
+        .or_else(|| trimmed.strip_prefix("http://"))
+        .unwrap_or(trimmed);
+    let authority = without_scheme.split('/').next().unwrap_or_default();
+    let host_port = authority.rsplit('@').next().unwrap_or_default();
+    let host = host_port.split(':').next().unwrap_or_default();
+    host.eq_ignore_ascii_case("api.openai.com")
 }
 
 /// How to present other agents' messages in the conversation history.
@@ -494,6 +544,8 @@ pub enum ApiType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThinkingEffort {
+    /// Disable reasoning compute when the provider supports it.
+    None,
     Low,
     Medium,
     High,
@@ -501,6 +553,28 @@ pub enum ThinkingEffort {
     /// Opus 4.7+; other providers/models downgrade it to High.
     Xhigh,
     Max,
+}
+
+/// OpenAI GPT-5.6 reasoning mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningMode {
+    /// Standard reasoning mode (the API default).
+    Standard,
+    /// Higher-capability Pro reasoning mode.
+    Pro,
+}
+
+/// OpenAI GPT-5.6 reasoning history scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningContext {
+    /// Let OpenAI select the appropriate reasoning history.
+    Auto,
+    /// Use only reasoning from the current turn.
+    CurrentTurn,
+    /// Use reasoning from all available turns.
+    AllTurns,
 }
 
 /// AI-to-AI routing strategy when an agent @-mentions another agent.
@@ -575,6 +649,24 @@ impl Config {
                     "agent \"{}\" references unknown provider: \"{}\"",
                     agent.name, agent.provider
                 )));
+            }
+
+            if agent.reasoning_mode.is_some() || agent.reasoning_context.is_some() {
+                let Some(provider) = self.providers.get(&agent.provider) else {
+                    continue;
+                };
+                let api_type = agent
+                    .api_type
+                    .unwrap_or_else(|| provider.default_api_type());
+                if !provider.is_official_openai()
+                    || api_type != ApiType::Responses
+                    || !is_gpt_5_6_model(&agent.model)
+                {
+                    return Err(ConfigError::Validation(format!(
+                        "agent \"{}\": reasoning_mode and reasoning_context require an official OpenAI GPT-5.6 model using the Responses API",
+                        agent.name
+                    )));
+                }
             }
         }
 

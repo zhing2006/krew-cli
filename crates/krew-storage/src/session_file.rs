@@ -60,11 +60,10 @@ pub struct MessageEntry {
     /// helper can pass `Some(vec![])` without leaving an empty array on disk.
     #[serde(default, skip_serializing_if = "thinking_blocks_is_absent_or_empty")]
     pub thinking_blocks: Option<Vec<ThinkingBlockEntry>>,
-    /// Raw ordered content blocks (Anthropic) as a JSON-encoded string.
+    /// Raw ordered provider output items as a JSON-encoded string.
     ///
-    /// Preserves the exact assistant block sequence (thinking ↔ server_tool_use
-    /// ↔ web_search_tool_result ↔ text) so it can be replayed verbatim on the
-    /// next request, keeping the latest-turn thinking complete and ordered.
+    /// Preserves Anthropic content blocks and OpenAI Responses output items so
+    /// they can be replayed verbatim on the next request.
     /// Stored as a single JSON string because `serde_json::Value` does not map
     /// cleanly to TOML; this also losslessly preserves `encrypted_content`.
     /// Omitted when absent so pre-existing session files load unchanged.

@@ -2,8 +2,8 @@ use std::io::Write;
 use tempfile::NamedTempFile;
 
 use krew_config::{
-    AgentConfig, ApprovalMode, Config, ConfigError, McpServerConfig, ProviderConfig, ProviderType,
-    ThinkingEffort,
+    AgentConfig, ApiType, ApprovalMode, Config, ConfigError, McpServerConfig, ProviderConfig,
+    ProviderType, ReasoningContext, ReasoningMode, ThinkingEffort,
 };
 
 const VALID_CONFIG: &str = r#"
@@ -336,6 +336,12 @@ fn thinking_effort_deserialize_low() {
 }
 
 #[test]
+fn thinking_effort_deserialize_none() {
+    let w: ThinkingEffortWrapper = toml::from_str("val = \"none\"").unwrap();
+    assert_eq!(w.val, ThinkingEffort::None);
+}
+
+#[test]
 fn thinking_effort_deserialize_medium() {
     let w: ThinkingEffortWrapper = toml::from_str("val = \"medium\"").unwrap();
     assert_eq!(w.val, ThinkingEffort::Medium);
@@ -409,6 +415,24 @@ fn agent_config_enable_thinking_without_effort() {
     let agent: AgentConfig = toml::from_str(toml_str).unwrap();
     assert!(agent.enable_thinking);
     assert!(agent.thinking_effort.is_none());
+}
+
+#[test]
+fn agent_config_gpt_5_6_reasoning_options() {
+    let toml_str = r#"
+        name = "gpt"
+        display_name = "GPT"
+        provider = "openai"
+        model = "gpt-5.6-terra"
+        color = "green"
+        thinking_effort = "max"
+        reasoning_mode = "pro"
+        reasoning_context = "all_turns"
+    "#;
+    let agent: AgentConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(agent.thinking_effort, Some(ThinkingEffort::Max));
+    assert_eq!(agent.reasoning_mode, Some(ReasoningMode::Pro));
+    assert_eq!(agent.reasoning_context, Some(ReasoningContext::AllTurns));
 }
 
 // ── ProviderConfig deserialization ──────────────────────────────────────
@@ -511,6 +535,59 @@ fn provider_config_extra_headers_missing() {
     "#;
     let provider: ProviderConfig = toml::from_str(toml_str).unwrap();
     assert!(provider.extra_headers.is_none());
+}
+
+#[test]
+fn official_openai_defaults_to_responses() {
+    let provider: ProviderConfig = toml::from_str(
+        r#"
+        type = "openai"
+        api_key_env = "OPENAI_API_KEY"
+        base_url = "https://API.OPENAI.COM/v1"
+        "#,
+    )
+    .unwrap();
+    assert!(provider.is_official_openai());
+    assert_eq!(provider.default_api_type(), ApiType::Responses);
+}
+
+#[test]
+fn openai_compatible_defaults_to_chat() {
+    let provider: ProviderConfig = toml::from_str(
+        r#"
+        type = "openai"
+        api_key_env = "OPENAI_API_KEY"
+        base_url = "https://api.openai.com.proxy.example/v1"
+        "#,
+    )
+    .unwrap();
+    assert!(!provider.is_official_openai());
+    assert_eq!(provider.default_api_type(), ApiType::Chat);
+}
+
+#[test]
+fn validate_accepts_gpt_5_6_reasoning_options_on_official_responses() {
+    let toml = VALID_CONFIG.replace(
+        "model = \"gpt-5.2\"",
+        "model = \"openai/gpt-5.6-sol\"\nreasoning_mode = \"pro\"\nreasoning_context = \"current_turn\"",
+    );
+    let config: Config = toml::from_str(&toml).unwrap();
+    config.validate().unwrap();
+}
+
+#[test]
+fn validate_rejects_gpt_5_6_reasoning_options_on_compatible_provider() {
+    let toml = VALID_CONFIG
+        .replace(
+            "model = \"gpt-5.2\"",
+            "model = \"gpt-5.6\"\nreasoning_mode = \"pro\"",
+        )
+        .replace(
+            "api_key_env = \"OPENAI_API_KEY\"",
+            "api_key_env = \"OPENAI_API_KEY\"\nbase_url = \"https://proxy.example/v1\"",
+        );
+    let config: Config = toml::from_str(&toml).unwrap();
+    assert!(config.validate().is_err());
 }
 
 // ── Full config E2E ─────────────────────────────────────────────────────

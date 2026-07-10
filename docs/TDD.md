@@ -387,14 +387,15 @@ struct Usage {
 
 ##### OpenAI Client
 
-同时支持两种 API，通过 Agent 配置的 `api_type` 字段选择：
+同时支持两种 API，通过 Agent 配置的 `api_type` 字段选择。未配置时，官方 OpenAI 默认 Responses API，自定义 `base_url` 的 OpenAI 兼容服务默认 Chat Completions：
 
 - **Responses API** (`api_type = "responses"`)
   - API: `POST /v1/responses` (stream=true)
   - 请求格式: `{ model, input: [...], tools: [...], stream: true }`
   - 响应事件: `response.output_item.added`, `response.output_text.delta`, `response.completed` 等
   - Web Search: tools 中添加 `{ type: "web_search" }`
-  - Thinking: `reasoning` 字段 `{ effort: "low"|"medium"|"high", summary: "auto" }`
+  - Thinking: `reasoning` 支持 `effort`、`summary`，GPT-5.6 另支持 `mode` 和 `context`
+  - GPT-5.6 无状态 reasoning：请求固定设置 `store: false` 和 `include: ["reasoning.encrypted_content"]`；流式解析保存所有完成的 output item，通过既有 `raw_content_blocks_json` 本地持久化并在后续请求原样回放
 - **Chat Completions API** (`api_type = "chat"`)
   - API: `POST /v1/chat/completions` (stream=true, stream_options.include_usage=true)
   - 请求格式: `{ model, messages: [...], tools: [...], stream: true }`
@@ -481,7 +482,7 @@ Vertex Anthropic URL 拼接：
 **方案 A：其他 Agent 的回复作为 `user` role**（默认）
 
 ```txt
-{ role: "user", content: "[gpt] GPT-5.2:\n我建议使用 VecDeque..." }
+{ role: "user", content: "[gpt] GPT-5.6:\n我建议使用 VecDeque..." }
 ```
 
 优点：LLM 不会混淆自己和别人的发言。
@@ -489,7 +490,7 @@ Vertex Anthropic URL 拼接：
 **方案 B：其他 Agent 的回复作为 `assistant` role**
 
 ```txt
-{ role: "assistant", content: "[gpt] GPT-5.2:\n我建议使用 VecDeque..." }
+{ role: "assistant", content: "[gpt] GPT-5.6:\n我建议使用 VecDeque..." }
 ```
 
 优点：LLM 知道这是 AI 级别的回复。
@@ -583,6 +584,7 @@ struct RetryConfig {
 
 | Provider | 模型 | API 参数 | effort 映射 |
 | -------- | ---- | -------- | ----------- |
+| OpenAI Responses / Chat | GPT-5.6 / Sol / Terra / Luna | Responses: `reasoning: { effort, summary?, mode?, context? }`; Chat: `reasoning_effort` | none/low/medium/high/xhigh/max 原样映射；显式 effort 独立于 `enable_thinking`，后者仅控制 Responses summary |
 | OpenAI Responses | 白名单模型 (gpt-5.5/5.5-pro/5.4/5.4-pro/5.3-codex/5.2) | `reasoning: { effort, summary: "auto" }` | low→"low", medium→"medium", high→"high", max→"xhigh", 未设置→"medium" |
 | OpenAI Responses | 其他模型 | `reasoning: { effort, summary: "auto" }` | low→"low", medium→"medium", high→"high", max→"high" (降级), 未设置→"medium" |
 | Anthropic | Opus 4.6+ / Sonnet 4.6+（含 `claude-sonnet-5`） | `thinking: { type: "adaptive" }` + `output_config: { effort }` | 使用 adaptive thinking, effort 含 max；Sonnet 5 / Fable / Opus 4.7+ 还支持 xhigh |
@@ -592,6 +594,8 @@ struct RetryConfig {
 | Google | Gemini 2.5 | `thinkingConfig: { includeThoughts: true, thinkingBudget }` | low→1024, medium→8192, high/max→24576, 未设置→-1 (动态) |
 
 **Anthropic 强制约束**：启用 thinking 时强制 `temperature = 1.0`，覆盖用户配置（记录 warn 日志）。
+
+**GPT-5.6 扩展字段**：`reasoning_mode` 为 `standard | pro`，`reasoning_context` 为 `auto | current_turn | all_turns`。`standard` 和 `auto` 是服务端默认值，序列化时省略；配置校验限制这些字段只能用于官方 OpenAI GPT-5.6 Responses API。
 
 ### 3.3.8 通用工具函数（llm-common）
 
@@ -823,7 +827,7 @@ impl SlashCommand {
 
 ```txt
 Agents in session:
-  [gpt]    GPT-5.5          openai/gpt-5.5           3,284 tokens (1,250 in / 2,034 out)
+  [gpt]    GPT-5.6          openai/gpt-5.6           3,284 tokens (1,250 in / 2,034 out)
   [opus]   Claude Opus      anthropic/claude-opus-4-6 5,642 tokens (3,512 in / 2,130 out)
 ──────────────────────────────────────────────────────
   Total: 8,926 tokens
@@ -1243,15 +1247,19 @@ struct AgentConfig {
     system_prompt: Option<String>,
     tools: bool,
     enable_web_search: bool,    // 启用模型原生 Web 搜索
-    enable_thinking: bool,      // 启用思考/推理输出
-    thinking_effort: Option<ThinkingEffort>,  // 思考力度: low | medium | high | max
+    enable_thinking: bool,      // 请求显示思考/推理摘要
+    thinking_effort: Option<ThinkingEffort>,  // none | low | medium | high | xhigh | max
+    reasoning_mode: Option<ReasoningMode>,    // GPT-5.6: standard | pro
+    reasoning_context: Option<ReasoningContext>, // auto | current_turn | all_turns
     sampling: Option<SamplingConfig>,  // 采样参数（均可选，未设置则使用模型默认值）
 }
 
 enum ThinkingEffort {
+    None,
     Low,
     Medium,
     High,
+    Xhigh,
     Max,
 }
 
@@ -1395,6 +1403,7 @@ struct AgentWriteData {
     model: String,
     color: String,
     enable_thinking: bool,
+    thinking_effort: Option<String>,
     enable_web_search: bool,
     tools: bool,                        // config wizard 固定为 true
     api_type: Option<String>,           // OpenAI 系: "responses" | "chat"

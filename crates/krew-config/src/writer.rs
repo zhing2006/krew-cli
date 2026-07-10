@@ -127,6 +127,7 @@ pub struct AgentWriteData {
     pub model: String,
     pub color: String,
     pub enable_thinking: bool,
+    pub thinking_effort: Option<String>,
     pub enable_web_search: bool,
     pub tools: bool,
     pub api_type: Option<String>,
@@ -246,6 +247,10 @@ fn append_agent_to_doc(doc: &mut DocumentMut, data: &AgentWriteData) {
     table["color"] = toml_edit::value(&data.color);
     table["enable_thinking"] = toml_edit::value(data.enable_thinking);
     table["enable_web_search"] = toml_edit::value(data.enable_web_search);
+
+    if let Some(ref thinking_effort) = data.thinking_effort {
+        table["thinking_effort"] = toml_edit::value(thinking_effort.as_str());
+    }
 
     if let Some(ref api_type) = data.api_type {
         table["api_type"] = toml_edit::value(api_type.as_str());

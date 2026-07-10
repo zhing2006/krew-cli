@@ -198,12 +198,14 @@ reply_order = ["gpt", "opus"]
 
 [[agents]]
 name = "gpt"
-display_name = "GPT-5.5"
+display_name = "GPT-5.6"
 provider = "openai"
-model = "gpt-5.5"
+model = "gpt-5.6"
 api_type = "responses"
 color = "green"
 tools = true
+enable_thinking = true
+thinking_effort = "medium"
 
 [[agents]]
 name = "opus"
@@ -260,7 +262,7 @@ reply_order = ["gpt", "opus"]
 name = "gpt"
 display_name = "GPT"
 provider = "openai"
-model = "gpt-5.5"
+model = "gpt-5.6"
 api_type = "responses"
 color = "green"
 tools = true
@@ -530,13 +532,15 @@ color = "magenta"                # Terminal color: red/green/yellow/blue/magenta
 system_prompt = ""               # Custom system prompt (optional)
 tools = true                     # Enable tool use (default: false)
 enable_web_search = false        # Enable provider-native web search (default: false)
-enable_thinking = false          # Show model thinking/reasoning (default: false)
-# thinking_effort = "medium"     # Thinking effort: low | medium | high | xhigh | max
-                                 # (xhigh: Anthropic Fable family, Opus 4.7+, and Sonnet 5 only;
-                                 # other models/providers downgrade it to high)
+enable_thinking = false          # Request a visible reasoning summary (default: false)
+# thinking_effort = "medium"     # Reasoning effort: none | low | medium | high | xhigh | max
+                                 # GPT-5.6 supports all six values; unsupported provider/model
+                                 # combinations may downgrade xhigh/max to high.
 
 # OpenAI-specific
-# api_type = "responses"         # "responses" (Responses API) or "chat" (Chat Completions)
+# api_type = "responses"         # Official OpenAI defaults to Responses; custom URLs to Chat
+# reasoning_mode = "pro"         # GPT-5.6 Responses: standard | pro
+# reasoning_context = "all_turns" # GPT-5.6 Responses: auto | current_turn | all_turns
 
 # Sampling parameters (all optional, use provider defaults if unset)
 # sampling.temperature = 0.7     # OpenAI/Google: 0-2, Anthropic: 0-1
@@ -549,6 +553,15 @@ enable_thinking = false          # Show model thinking/reasoning (default: false
 ```
 
 **Reserved name:** `"all"` cannot be used as an agent name.
+
+**OpenAI GPT-5.6 notes** (`gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`):
+
+- `gpt-5.6` is the alias and routes to Sol. The explicit Sol, Terra, and Luna model IDs are also available in the fallback model list.
+- All six reasoning efforts are supported: `none`, `low`, `medium`, `high`, `xhigh`, and `max`. An explicit `thinking_effort` controls reasoning compute even when `enable_thinking = false`; the latter only requests a visible reasoning summary for OpenAI Responses.
+- `reasoning_mode = "pro"` enables Pro reasoning. Omit it (or use `"standard"`) for standard mode. `reasoning_context` accepts `auto`, `current_turn`, or `all_turns`. These fields require an official OpenAI GPT-5.6 model using the Responses API.
+- krew uses stateless encrypted reasoning replay: requests set `store = false`, request `reasoning.encrypted_content`, persist complete output items locally, and replay them on later turns. No server-side response ID is required.
+- The setup wizard exposes reasoning effort and summary display. Pro mode and reasoning context remain advanced, hand-edited settings.
+- GPT-5.6-native Ultra mode, provider multi-agent orchestration, and PTC controls are not exposed in krew 0.12.0.
 
 **Claude Fable 5 / Mythos 5 notes** (`claude-fable-5`, `claude-mythos-5`):
 
@@ -699,6 +712,8 @@ krew config init --project    # Only set up project-level config (.krew/settings
 **Project config setup** offers two modes:
 - **Smart Preset**: fetches available models from your providers, offers 1-agent or 3-agent presets, lets you pick models via fuzzy search
 - **Manual Setup**: loop-based agent creation — you pick provider, model, name, display name, color, thinking, and web search; `tools` is always enabled
+
+For official GPT-5.6 models, both modes show a six-level reasoning-effort selector (default `medium`). If the effort is not `none`, the wizard then asks **Show reasoning summary?** (default yes). Pro mode and reasoning context are configured manually.
 
 ### 6.2 `krew config add`
 

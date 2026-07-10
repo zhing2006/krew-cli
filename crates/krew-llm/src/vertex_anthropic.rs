@@ -209,6 +209,8 @@ mod tests {
             retry_config: RetryConfig::default(),
             enable_thinking: false,
             thinking_effort: None,
+            reasoning_mode: None,
+            reasoning_context: None,
             enable_web_search,
             extra_headers: vec![(
                 "x-pass-anthropic-beta".into(),

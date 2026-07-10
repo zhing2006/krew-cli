@@ -295,6 +295,7 @@ fn add_agent_to_empty_file() {
             model: "claude-sonnet-4-6".into(),
             color: "blue".into(),
             enable_thinking: true,
+            thinking_effort: None,
             enable_web_search: false,
             tools: true,
             api_type: None,
@@ -335,6 +336,7 @@ fn add_agent_appends_to_existing() {
             model: "gpt-5.4".into(),
             color: "green".into(),
             enable_thinking: false,
+            thinking_effort: Some("max".into()),
             enable_web_search: true,
             tools: true,
             api_type: Some("chat".into()),
@@ -346,6 +348,7 @@ fn add_agent_appends_to_existing() {
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(content.contains("name = \"gpt\""));
     assert!(content.contains("api_type = \"chat\""));
+    assert!(content.contains("thinking_effort = \"max\""));
     // reply_order should now include both.
     assert!(content.contains("claude"));
     assert!(content.contains("gpt"));
@@ -374,6 +377,7 @@ fn add_agent_duplicate_name_errors() {
             model: "m".into(),
             color: "blue".into(),
             enable_thinking: true,
+            thinking_effort: None,
             enable_web_search: false,
             tools: true,
             api_type: None,
@@ -453,6 +457,7 @@ fn batch_add_agents_to_new_file() {
             model: "claude-sonnet-4-6".into(),
             color: "blue".into(),
             enable_thinking: true,
+            thinking_effort: None,
             enable_web_search: false,
             tools: true,
             api_type: None,
@@ -465,6 +470,7 @@ fn batch_add_agents_to_new_file() {
             model: "gpt-5.4".into(),
             color: "green".into(),
             enable_thinking: true,
+            thinking_effort: None,
             enable_web_search: false,
             tools: true,
             api_type: None,
@@ -477,6 +483,7 @@ fn batch_add_agents_to_new_file() {
             model: "gemini-3.1-pro-preview".into(),
             color: "cyan".into(),
             enable_thinking: true,
+            thinking_effort: None,
             enable_web_search: false,
             tools: true,
             api_type: None,
@@ -514,6 +521,7 @@ fn batch_add_agents_refuses_if_agents_exist() {
         model: "m".into(),
         color: "green".into(),
         enable_thinking: true,
+        thinking_effort: None,
         enable_web_search: false,
         tools: true,
         api_type: None,
@@ -540,6 +548,7 @@ fn batch_add_agents_ok_if_file_exists_but_no_agents() {
         model: "m".into(),
         color: "blue".into(),
         enable_thinking: true,
+        thinking_effort: None,
         enable_web_search: false,
         tools: true,
         api_type: None,
@@ -650,6 +659,7 @@ fn format_preservation_after_add_remove() {
             model: "gpt-5.4".into(),
             color: "green".into(),
             enable_thinking: false,
+            thinking_effort: None,
             enable_web_search: false,
             tools: true,
             api_type: None,

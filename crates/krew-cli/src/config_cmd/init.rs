@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use anyhow::Context;
 use dialoguer::{Confirm, FuzzySelect, Input, Password, Select};
 use krew_config::writer::{AgentWriteData, ProviderWriteData};
-use krew_config::{CONFIG_FILENAME, ProviderConfig, ProviderType, user_config_path};
+use krew_config::{
+    CONFIG_FILENAME, ProviderConfig, ProviderType, is_gpt_5_6_model, user_config_path,
+};
 use krew_llm::{ListModelsConfig, fallback_models, list_models};
 
 /// Available colors for agent assignment.
@@ -412,23 +414,17 @@ async fn run_smart_preset(
             .iter()
             .find(|(n, _)| n == provider_name)
             .map(|(_, c)| c);
-        let prov_type = prov_cfg
-            .map(|c| c.provider_type)
-            .unwrap_or(ProviderType::OpenAI);
-        let prov_base_url = prov_cfg.and_then(|c| c.base_url.as_deref());
+        let prov_cfg = prov_cfg.context("Selected provider is no longer available")?;
 
         let agent_name = derive_agent_name(model_id, &used_names);
         let display = capitalize_first(&agent_name);
         let color = AGENT_COLORS.get(i).copied().unwrap_or("white").to_string();
 
-        // Confirm thinking.
-        let thinking = Confirm::new()
-            .with_prompt(format!("Enable thinking for {}?", agent_name))
-            .default(true)
-            .interact()?;
+        let (thinking, thinking_effort) =
+            prompt_thinking_settings(prov_cfg, model_id, Some(&agent_name))?;
 
         // For OpenAI-Compatible providers, ask user to choose api_type.
-        let api_type = prompt_api_type_if_compatible(prov_type, prov_base_url)?;
+        let api_type = prompt_api_type_if_compatible(prov_cfg)?;
 
         agents.push(AgentWriteData {
             name: agent_name.clone(),
@@ -437,6 +433,7 @@ async fn run_smart_preset(
             model: model_id.clone(),
             color,
             enable_thinking: thinking,
+            thinking_effort,
             enable_web_search: false,
             tools: true,
             api_type,
@@ -596,20 +593,14 @@ pub async fn collect_agent_data(
         .to_string();
 
     // 6. Thinking & web search.
-    let thinking = Confirm::new()
-        .with_prompt("Enable thinking?")
-        .default(true)
-        .interact()?;
+    let (thinking, thinking_effort) = prompt_thinking_settings(provider_cfg, &model_id, None)?;
     let web_search = Confirm::new()
         .with_prompt("Enable web search?")
         .default(false)
         .interact()?;
 
     // For OpenAI-Compatible providers, ask user to choose api_type.
-    let api_type = prompt_api_type_if_compatible(
-        provider_cfg.provider_type,
-        provider_cfg.base_url.as_deref(),
-    )?;
+    let api_type = prompt_api_type_if_compatible(provider_cfg)?;
 
     Ok(AgentWriteData {
         name,
@@ -618,6 +609,7 @@ pub async fn collect_agent_data(
         model: model_id.clone(),
         color,
         enable_thinking: thinking,
+        thinking_effort,
         enable_web_search: web_search,
         tools: true,
         api_type,
@@ -697,21 +689,50 @@ fn capitalize_first(s: &str) -> String {
     }
 }
 
+fn prompt_thinking_settings(
+    provider: &ProviderConfig,
+    model: &str,
+    agent_name: Option<&str>,
+) -> anyhow::Result<(bool, Option<String>)> {
+    if provider.is_official_openai() && is_gpt_5_6_model(model) {
+        let efforts = &["none", "low", "medium", "high", "xhigh", "max"];
+        let effort_idx = Select::new()
+            .with_prompt(match agent_name {
+                Some(name) => format!("Reasoning effort for {name}"),
+                None => "Reasoning effort".to_string(),
+            })
+            .items(efforts)
+            .default(2)
+            .interact()?;
+        let effort = efforts[effort_idx];
+        if effort == "none" {
+            return Ok((false, Some(effort.to_string())));
+        }
+        let show_summary = Confirm::new()
+            .with_prompt("Show reasoning summary?")
+            .default(true)
+            .interact()?;
+        return Ok((show_summary, Some(effort.to_string())));
+    }
+
+    let thinking = Confirm::new()
+        .with_prompt(match agent_name {
+            Some(name) => format!("Enable thinking for {name}?"),
+            None => "Enable thinking?".to_string(),
+        })
+        .default(true)
+        .interact()?;
+    Ok((thinking, None))
+}
+
 /// For OpenAI-Compatible providers (custom base_url), prompt the user to choose api_type.
 /// For official OpenAI, default to "responses". For non-OpenAI providers, return None.
-fn prompt_api_type_if_compatible(
-    provider_type: ProviderType,
-    base_url: Option<&str>,
-) -> anyhow::Result<Option<String>> {
-    if provider_type != ProviderType::OpenAI {
+fn prompt_api_type_if_compatible(provider: &ProviderConfig) -> anyhow::Result<Option<String>> {
+    if provider.provider_type != ProviderType::OpenAI {
         return Ok(None);
     }
 
-    let is_official = base_url
-        .map(|u| u.contains("api.openai.com"))
-        .unwrap_or(true);
-
-    if is_official {
+    if provider.is_official_openai() {
         return Ok(Some("responses".to_string()));
     }
 

@@ -187,6 +187,8 @@ pub fn init_agents(config: &Config, cwd: Option<PathBuf>) -> InitAgentsResult {
             retry_config: config.settings.retry.clone(),
             enable_thinking: agent_config.enable_thinking,
             thinking_effort: agent_config.thinking_effort,
+            reasoning_mode: agent_config.reasoning_mode,
+            reasoning_context: agent_config.reasoning_context,
             enable_web_search: agent_config.enable_web_search,
             extra_headers,
         };
@@ -194,7 +196,9 @@ pub fn init_agents(config: &Config, cwd: Option<PathBuf>) -> InitAgentsResult {
         // Create LLM client based on provider type.
         let client: Arc<dyn LlmClient> = match provider_config.provider_type {
             ProviderType::OpenAI => {
-                let api_type = agent_config.api_type.unwrap_or(ApiType::Chat);
+                let api_type = agent_config
+                    .api_type
+                    .unwrap_or_else(|| provider_config.default_api_type());
                 match api_type {
                     ApiType::Chat => Arc::new(OpenAiChatClient::new(client_config)),
                     ApiType::Responses => Arc::new(OpenAiResponsesClient::new(client_config)),
@@ -319,6 +323,8 @@ mod tests {
             sampling: None,
             enable_thinking: false,
             thinking_effort: None,
+            reasoning_mode: None,
+            reasoning_context: None,
         });
         config.providers.insert(
             "vertex-anthropic".into(),

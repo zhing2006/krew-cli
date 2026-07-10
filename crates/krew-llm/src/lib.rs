@@ -19,7 +19,7 @@ pub use vertex_anthropic::VertexAnthropicClient;
 
 use chrono::{DateTime, Utc};
 use futures::Stream;
-use krew_config::{RetryConfig, SamplingConfig, ThinkingEffort};
+use krew_config::{ReasoningContext, ReasoningMode, RetryConfig, SamplingConfig, ThinkingEffort};
 use std::pin::Pin;
 
 /// Common configuration shared by all LLM client constructors.
@@ -41,8 +41,12 @@ pub struct LlmClientConfig {
     pub retry_config: RetryConfig,
     /// Whether thinking/reasoning is enabled for this agent.
     pub enable_thinking: bool,
-    /// Thinking effort level (only used when `enable_thinking` is true).
+    /// Thinking effort level. An explicit value controls reasoning compute.
     pub thinking_effort: Option<ThinkingEffort>,
+    /// OpenAI GPT-5.6 reasoning mode.
+    pub reasoning_mode: Option<ReasoningMode>,
+    /// OpenAI GPT-5.6 reasoning history scope.
+    pub reasoning_context: Option<ReasoningContext>,
     /// Whether to inject the provider's native web search tool.
     pub enable_web_search: bool,
     /// Extra HTTP headers to include in chat/inference requests.
@@ -141,17 +145,12 @@ pub struct ChatMessage {
     /// when receiving streams and when serializing assistant history.
     pub thinking_blocks: Vec<ThinkingBlock>,
     /// Raw, ordered content blocks captured verbatim from the assistant's
-    /// response, preserving the exact interleaving of thinking /
-    /// server_tool_use / web_search_tool_result / text blocks.
+    /// response, preserving the exact provider-native ordering.
     ///
-    /// When non-empty (current Anthropic agent only), these are replayed
-    /// as-is on the next request, so the protocol rule "the latest assistant
-    /// turn's thinking blocks must be complete and unmodified" holds even
-    /// across server-side web_search turns — which the flattened fields
-    /// (`content`/`thinking_blocks`/`server_tool_uses`) cannot reconstruct in
-    /// the original order. Empty for all other providers/agents. Persisted to
-    /// session files (as a JSON string) so the interleaving survives across
-    /// process restarts and the verbatim replay holds on resume.
+    /// When non-empty for the current provider, these are replayed as-is on
+    /// the next request. Anthropic uses content blocks and OpenAI Responses
+    /// uses encrypted output items. Persisted to session files (as a JSON
+    /// string) so replay survives across process restarts.
     pub raw_content_blocks: Vec<serde_json::Value>,
 }
 

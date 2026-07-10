@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use krew_config::ProviderType;
+use krew_config::{ProviderType, is_official_openai_base_url};
 use serde::Deserialize;
 
 use crate::LlmError;
@@ -32,10 +32,7 @@ impl ListModelsConfig {
     /// (i.e. not the official OpenAI API).
     fn is_openai_compatible(&self) -> bool {
         self.provider_type == ProviderType::OpenAI
-            && self
-                .base_url
-                .as_deref()
-                .is_some_and(|u| !u.contains("api.openai.com"))
+            && !is_official_openai_base_url(self.base_url.as_deref())
     }
 }
 
@@ -74,7 +71,16 @@ pub fn fallback_models(provider_type: ProviderType) -> Vec<ModelInfo> {
             "claude-sonnet-4-6",
             "claude-haiku-4-5-20251001",
         ],
-        ProviderType::OpenAI => vec!["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"],
+        ProviderType::OpenAI => vec![
+            "gpt-5.6",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-5.5",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5.4-nano",
+        ],
         ProviderType::Google => vec!["gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview"],
         ProviderType::VertexAnthropic => vec![
             "claude-opus-4-8",
@@ -445,7 +451,11 @@ mod tests {
     #[test]
     fn fallback_openai() {
         let models = fallback_models(ProviderType::OpenAI);
-        assert_eq!(models.len(), 4);
+        assert_eq!(models.len(), 8);
+        assert!(models.iter().any(|m| m.id == "gpt-5.6"));
+        assert!(models.iter().any(|m| m.id == "gpt-5.6-sol"));
+        assert!(models.iter().any(|m| m.id == "gpt-5.6-terra"));
+        assert!(models.iter().any(|m| m.id == "gpt-5.6-luna"));
         assert!(models.iter().any(|m| m.id == "gpt-5.5"));
         assert!(models.iter().any(|m| m.id == "gpt-5.4"));
         assert!(models.iter().any(|m| m.id == "gpt-5.4-mini"));

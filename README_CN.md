@@ -79,7 +79,7 @@ cargo install --path crates/krew-cli
 
 | Provider | 模型（示例） | API |
 | -------- | ------------ | --- |
-| OpenAI | GPT-5.2 | Responses / Chat Completions |
+| OpenAI | GPT-5.6（Sol / Terra / Luna） | Responses / Chat Completions |
 | Anthropic | Claude Opus 4.6, Sonnet 5 / 4.6 | Messages |
 | Google | Gemini 3.1 Pro | generateContent（+ Vertex AI） |
 | Vertex Anthropic | Claude Opus 4.7, Sonnet 4.6 | Vertex AI Claude `streamRawPredict` |
@@ -181,12 +181,14 @@ reply_order = ["gpt", "opus"]
 
 [[agents]]
 name = "gpt"
-display_name = "GPT-5.2"
+display_name = "GPT-5.6"
 provider = "openai"
-model = "gpt-5.2"
+model = "gpt-5.6"
 api_type = "responses"
 color = "green"
 tools = true
+enable_thinking = true
+thinking_effort = "medium"
 
 [[agents]]
 name = "opus"

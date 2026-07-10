@@ -428,8 +428,8 @@ struct StreamResult {
     /// Anthropic can validate the signatures.
     thinking_blocks: Vec<ThinkingBlock>,
     /// Raw, ordered content blocks aggregated from `StreamEvent::RawContentBlock`
-    /// in stream order. Replayed verbatim on the next turn to preserve the
-    /// thinking ↔ server_tool_use ↔ web_search_tool_result ↔ text interleaving.
+    /// in stream order. Replayed verbatim on the next turn to preserve native
+    /// content ordering and encrypted reasoning state.
     raw_content_blocks: Vec<serde_json::Value>,
     /// Token usage from the stream (if received).
     usage: Option<Usage>,

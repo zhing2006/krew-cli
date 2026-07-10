@@ -357,7 +357,7 @@ fn build_generation_config(
     }
 
     // Add thinking config if enabled.
-    if enable_thinking {
+    if enable_thinking && thinking_effort != Some(ThinkingEffort::None) {
         config.insert(
             "thinkingConfig".into(),
             build_thinking_config(thinking_effort, model),
@@ -388,6 +388,7 @@ fn build_thinking_config(
     if is_gemini_2_5(model) {
         // Gemini 2.5: use thinkingBudget
         let budget = match thinking_effort {
+            Some(ThinkingEffort::None) => serde_json::json!(0),
             Some(ThinkingEffort::Low) => serde_json::json!(1024),
             Some(ThinkingEffort::Medium) => serde_json::json!(8192),
             Some(ThinkingEffort::High | ThinkingEffort::Xhigh | ThinkingEffort::Max) => {
@@ -402,6 +403,7 @@ fn build_thinking_config(
     } else {
         // Gemini 3.x or unknown: use thinkingLevel
         let level = match thinking_effort {
+            Some(ThinkingEffort::None) => "low",
             Some(ThinkingEffort::Low) => "low",
             Some(ThinkingEffort::Medium) => "medium",
             Some(ThinkingEffort::High | ThinkingEffort::Xhigh | ThinkingEffort::Max) | None => {
