@@ -213,11 +213,7 @@ impl ToolHandler for ReadFileTool {
             }
 
             let line_text = String::from_utf8_lossy(&buffer);
-            let display = if line_text.len() > MAX_LINE_LENGTH {
-                &line_text[..MAX_LINE_LENGTH]
-            } else {
-                &line_text
-            };
+            let display = crate::truncate_utf8(&line_text, MAX_LINE_LENGTH);
             collected.push(format!("L{line_num}: {display}"));
         }
 

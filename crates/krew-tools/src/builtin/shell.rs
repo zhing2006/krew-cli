@@ -16,6 +16,14 @@ const DEFAULT_TIMEOUT_SECS: u64 = 120;
 /// Maximum output size in bytes before truncation.
 const MAX_OUTPUT_BYTES: usize = 100 * 1024; // 100 KB
 
+fn truncate_output(output: &mut String) {
+    if output.len() > MAX_OUTPUT_BYTES {
+        let boundary = crate::truncate_utf8(output, MAX_OUTPUT_BYTES).len();
+        output.truncate(boundary);
+        output.push_str("\n\n[output truncated at 100KB]");
+    }
+}
+
 /// Built-in tool for executing shell commands.
 pub struct ShellTool {
     cwd: PathBuf,
@@ -291,10 +299,7 @@ impl ToolHandler for ShellTool {
         let exit_code = status.code().unwrap_or(-1);
 
         // Truncate if too large.
-        if combined.len() > MAX_OUTPUT_BYTES {
-            combined.truncate(MAX_OUTPUT_BYTES);
-            combined.push_str("\n\n[output truncated at 100KB]");
-        }
+        truncate_output(&mut combined);
 
         if combined.is_empty() {
             combined = format!("(no output, exit code {exit_code})");
@@ -310,5 +315,23 @@ impl ToolHandler for ShellTool {
             is_error,
             images: vec![],
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_OUTPUT_BYTES, truncate_output};
+
+    #[test]
+    fn truncate_output_respects_utf8_boundary() {
+        let ascii_prefix = "a".repeat(MAX_OUTPUT_BYTES - 1);
+        let mut output = format!("{ascii_prefix}指tail");
+
+        truncate_output(&mut output);
+
+        assert_eq!(
+            output,
+            format!("{ascii_prefix}\n\n[output truncated at 100KB]")
+        );
     }
 }

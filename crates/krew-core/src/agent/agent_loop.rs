@@ -616,7 +616,8 @@ pub(crate) fn generate_tool_summary(tool_name: &str, result: &krew_tools::ToolRe
         let msg = result.content.lines().next().unwrap_or("error");
         const MAX_ERROR_LEN: usize = 120;
         if msg.len() > MAX_ERROR_LEN {
-            return format!("error: {}…", &msg[..MAX_ERROR_LEN]);
+            let boundary = msg.floor_char_boundary(MAX_ERROR_LEN);
+            return format!("error: {}…", &msg[..boundary]);
         }
         return format!("error: {msg}");
     }
@@ -650,6 +651,35 @@ mod tests {
 
     fn drain_events(rx: &mut mpsc::UnboundedReceiver<AgentEvent>) {
         while rx.try_recv().is_ok() {}
+    }
+
+    #[test]
+    fn tool_summary_truncates_error_at_utf8_boundary() {
+        let ascii_prefix = "a".repeat(118);
+        let result = krew_tools::ToolResult {
+            content: format!("{ascii_prefix}指tail"),
+            is_error: true,
+            images: vec![],
+        };
+
+        assert_eq!(
+            generate_tool_summary("read_file", &result),
+            format!("error: {ascii_prefix}…")
+        );
+    }
+
+    #[test]
+    fn tool_summary_keeps_short_unicode_error() {
+        let result = krew_tools::ToolResult {
+            content: "无法读取 MEMORY.md".to_string(),
+            is_error: true,
+            images: vec![],
+        };
+
+        assert_eq!(
+            generate_tool_summary("read_file", &result),
+            "error: 无法读取 MEMORY.md"
+        );
     }
 
     #[tokio::test]

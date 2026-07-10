@@ -215,7 +215,7 @@ impl ToolHandler for GrepTool {
                 if regex.is_match(&line) {
                     let line_num = line_idx + 1;
                     let display_line = if line.len() > MAX_LINE_LENGTH {
-                        format!("{}...", &line[..MAX_LINE_LENGTH])
+                        format!("{}...", crate::truncate_utf8(&line, MAX_LINE_LENGTH))
                     } else {
                         line
                     };

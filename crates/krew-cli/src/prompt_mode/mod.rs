@@ -684,6 +684,18 @@ async fn consume_agent_events(
 }
 
 /// Format tool arguments as a short preview string for text output.
+fn truncate_tool_args_preview(value: &str) -> String {
+    const MAX_PREVIEW_LEN: usize = 60;
+    const MAX_PREVIEW_CONTENT_LEN: usize = 57;
+
+    if value.len() > MAX_PREVIEW_LEN {
+        let boundary = value.floor_char_boundary(MAX_PREVIEW_CONTENT_LEN);
+        format!("{}...", &value[..boundary])
+    } else {
+        value.to_string()
+    }
+}
+
 fn format_tool_args_preview(tool_name: &str, arguments: &str) -> String {
     let args: serde_json::Value = serde_json::from_str(arguments).unwrap_or_default();
     match tool_name {
@@ -700,13 +712,7 @@ fn format_tool_args_preview(tool_name: &str, arguments: &str) -> String {
         "shell" => args
             .get("command")
             .and_then(|v| v.as_str())
-            .map(|cmd| {
-                if cmd.len() > 60 {
-                    format!("{}...", &cmd[..57])
-                } else {
-                    cmd.to_string()
-                }
-            })
+            .map(truncate_tool_args_preview)
             .unwrap_or_default(),
         "glob" => args
             .get("pattern")
@@ -720,11 +726,7 @@ fn format_tool_args_preview(tool_name: &str, arguments: &str) -> String {
             .to_string(),
         _ => {
             let s = arguments.to_string();
-            if s.len() > 60 {
-                format!("{}...", &s[..57])
-            } else {
-                s
-            }
+            truncate_tool_args_preview(&s)
         }
     }
 }

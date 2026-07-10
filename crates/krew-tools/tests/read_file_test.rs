@@ -36,6 +36,25 @@ async fn reads_full_file() {
 }
 
 #[tokio::test]
+async fn truncates_multibyte_long_line_at_utf8_boundary() {
+    let ascii_prefix = "a".repeat(1999);
+    let (dir, file_path) = setup_test_file(&format!("{ascii_prefix}指tail\n"));
+    let tool = ReadFileTool::new(dir.path().to_path_buf(), true);
+
+    let result = tool
+        .execute(
+            json!({ "file_path": file_path.to_str().unwrap() }),
+            &ToolContext::default(),
+        )
+        .await
+        .unwrap();
+
+    assert!(!result.is_error);
+    assert!(result.content.contains(&format!("L1: {ascii_prefix}")));
+    assert!(!result.content.contains("指tail"));
+}
+
+#[tokio::test]
 async fn reads_with_offset_and_limit() {
     let (dir, file_path) = setup_test_file("first\nsecond\nthird\nfourth\n");
     let tool = ReadFileTool::new(dir.path().to_path_buf(), true);

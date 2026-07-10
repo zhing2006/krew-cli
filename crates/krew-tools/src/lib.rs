@@ -13,6 +13,15 @@ pub const MAX_IMAGE_SIZE: u64 = 20 * 1024 * 1024;
 /// Number of bytes to probe for binary detection.
 const BINARY_PROBE_SIZE: usize = 8192;
 
+/// Truncate a UTF-8 string to at most `max_bytes` bytes on a character boundary.
+pub(crate) fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        s
+    } else {
+        &s[..s.floor_char_boundary(max_bytes)]
+    }
+}
+
 /// Image content returned by a tool (e.g. read_file on an image file).
 #[derive(Debug, Clone)]
 pub struct ImageContent {
@@ -298,5 +307,21 @@ pub fn check_binary(path: &Path) -> Option<ToolResult> {
         })
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_utf8;
+
+    #[test]
+    fn truncate_utf8_keeps_short_and_boundary_aligned_strings() {
+        assert_eq!(truncate_utf8("你好", 6), "你好");
+        assert_eq!(truncate_utf8("你好世界", 6), "你好");
+    }
+
+    #[test]
+    fn truncate_utf8_floors_partial_character_boundary() {
+        assert_eq!(truncate_utf8("aa指tail", 4), "aa");
     }
 }

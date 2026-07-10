@@ -635,6 +635,17 @@ fn tool_args_preview_shell_long_truncates() {
 }
 
 #[test]
+fn tool_args_preview_shell_truncates_at_utf8_boundary() {
+    let ascii_prefix = "a".repeat(56);
+    let command = format!("{ascii_prefix}指tail");
+    let args = serde_json::json!({ "command": command }).to_string();
+
+    let result = format_tool_args_preview("shell", &args);
+
+    assert_eq!(result, format!("{ascii_prefix}..."));
+}
+
+#[test]
 fn tool_args_preview_glob() {
     let result = format_tool_args_preview("glob", r#"{"pattern":"**/*.rs"}"#);
     assert_eq!(result, "**/*.rs");

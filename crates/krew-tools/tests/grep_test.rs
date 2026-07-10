@@ -38,6 +38,27 @@ async fn finds_matching_lines() {
 }
 
 #[tokio::test]
+async fn truncates_multibyte_matching_line_at_utf8_boundary() {
+    let dir = TempDir::new().unwrap();
+    let ascii_prefix = format!("MATCH{}", "a".repeat(494));
+    std::fs::write(
+        dir.path().join("long.txt"),
+        format!("{ascii_prefix}指tail\n"),
+    )
+    .unwrap();
+    let tool = GrepTool::new(dir.path().to_path_buf(), true);
+
+    let result = tool
+        .execute(json!({ "pattern": "MATCH" }), &ToolContext::default())
+        .await
+        .unwrap();
+
+    assert!(!result.is_error);
+    assert!(result.content.contains(&format!("{ascii_prefix}...")));
+    assert!(!result.content.contains("指tail"));
+}
+
+#[tokio::test]
 async fn filters_by_include_glob() {
     let dir = setup_test_files();
     let tool = GrepTool::new(dir.path().to_path_buf(), true);

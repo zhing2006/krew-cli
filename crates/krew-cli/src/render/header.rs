@@ -4,6 +4,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
@@ -11,15 +12,43 @@ use crate::custom_terminal;
 
 use super::parse_color;
 
-/// Shorten a path to fit within `max_len` by collapsing the middle with "...".
-fn shorten_path(path: &str, max_len: usize) -> String {
-    if path.len() <= max_len || max_len < 8 {
+/// Shorten a path to fit within `max_width` columns by collapsing the middle.
+fn shorten_path(path: &str, max_width: usize) -> String {
+    if path.width() <= max_width {
         return path.to_string();
     }
-    // Keep the first and last segments, join with "...".
-    let keep = (max_len - 3) / 2;
-    let head = &path[..keep];
-    let tail = &path[path.len() - (max_len - 3 - keep)..];
+    if max_width <= 3 {
+        return ".".repeat(max_width);
+    }
+
+    let available_width = max_width - 3;
+    let head_width = available_width / 2;
+    let tail_width = available_width - head_width;
+
+    let mut head = String::new();
+    let mut used_width = 0;
+    for grapheme in path.graphemes(true) {
+        let width = grapheme.width();
+        if used_width + width > head_width {
+            break;
+        }
+        head.push_str(grapheme);
+        used_width += width;
+    }
+
+    let mut tail_graphemes = Vec::new();
+    used_width = 0;
+    for grapheme in path.graphemes(true).rev() {
+        let width = grapheme.width();
+        if used_width + width > tail_width {
+            break;
+        }
+        tail_graphemes.push(grapheme);
+        used_width += width;
+    }
+    tail_graphemes.reverse();
+    let tail = tail_graphemes.concat();
+
     format!("{head}...{tail}")
 }
 
@@ -51,7 +80,7 @@ pub fn insert_header(terminal: &mut custom_terminal::Terminal, app: &App) -> any
 
     // Measure content widths to determine box width dynamically.
     // Line 1: " >_ Krew CLI (vX.Y.Z) — session_id"
-    let line1_w = format!(" >_ Krew CLI (v{version}) — {session_id}").len();
+    let line1_w = format!(" >_ Krew CLI (v{version}) — {session_id}").width();
     // Line 2: " Agents: [name] Display | ..." + trailing space
     let agents_text_w: usize = agents_spans
         .iter()
@@ -61,7 +90,7 @@ pub fn insert_header(terminal: &mut custom_terminal::Terminal, app: &App) -> any
     // Line 3: " Directory: <path>  Type /help for commands "
     let dir_label = " Directory: ";
     let right_part = "Type /help for commands ";
-    let line3_min_w = dir_label.len() + dir_full.len() + 2 + right_part.len();
+    let line3_min_w = dir_label.width() + dir_full.width() + 2 + right_part.width();
 
     // Inner width = max of all lines; box width = inner + 2 borders.
     let content_w = line1_w.max(agents_text_w).max(line3_min_w);
@@ -82,8 +111,8 @@ pub fn insert_header(terminal: &mut custom_terminal::Terminal, app: &App) -> any
             .saturating_sub(right_part.len())
             .saturating_sub(1);
         let dir = shorten_path(&dir_full, max_path);
-        let left_len = dir_label.len() + dir.len();
-        let gap = inner_w.saturating_sub(left_len + right_part.len());
+        let left_len = dir_label.width() + dir.width();
+        let gap = inner_w.saturating_sub(left_len + right_part.width());
 
         let lines = vec![
             Line::from(vec![
@@ -125,4 +154,36 @@ pub fn insert_header(terminal: &mut custom_terminal::Terminal, app: &App) -> any
     })?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shorten_path;
+    use unicode_width::UnicodeWidthStr;
+
+    #[test]
+    fn shorten_path_keeps_ascii_path_within_width() {
+        let shortened = shorten_path("/very/long/project/path", 14);
+
+        assert!(shortened.width() <= 14);
+        assert!(shortened.contains("..."));
+        assert!(shortened.starts_with('/'));
+        assert!(shortened.ends_with("path"));
+    }
+
+    #[test]
+    fn shorten_path_handles_cjk_and_emoji_graphemes() {
+        let shortened = shorten_path("/用户/项目/🚀/文件", 12);
+
+        assert!(shortened.width() <= 12);
+        assert!(shortened.contains("..."));
+        assert!(shortened.ends_with("/文件"));
+    }
+
+    #[test]
+    fn shorten_path_handles_narrow_widths() {
+        assert_eq!(shorten_path("/用户/项目", 0), "");
+        assert_eq!(shorten_path("/用户/项目", 1), ".");
+        assert_eq!(shorten_path("/用户/项目", 3), "...");
+    }
 }
