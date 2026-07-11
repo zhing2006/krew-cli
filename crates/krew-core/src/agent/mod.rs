@@ -6,12 +6,12 @@ mod prune;
 
 use std::sync::Arc;
 
-use krew_config::{AgentConfig, ApprovalMode, OtherAgentRole};
+use krew_config::{AgentConfig, OtherAgentRole};
 use krew_llm::{ChatMessage, ChatRole, ToolDefinition};
 use krew_tools::ToolRegistry;
 use tokio::sync::mpsc;
 
-use crate::event::{AgentEvent, ApprovalCache};
+use crate::event::{AgentEvent, ApprovalCache, SharedApprovalMode};
 
 pub use init::{InitAgentsResult, init_agents, register_sub_agents};
 
@@ -33,8 +33,9 @@ pub struct AgentRuntime {
     pub is_responding: bool,
     /// How to present other agents' messages in this agent's conversation.
     pub other_agent_role: OtherAgentRole,
-    /// Tool approval policy for this session.
-    pub approval_mode: ApprovalMode,
+    /// Tool approval policy for this session (shared handle; runtime mode
+    /// cycling is observed by in-flight loops at their next approval check).
+    pub approval_mode: SharedApprovalMode,
     /// Session-scoped approval cache (persists across agent turns).
     pub approval_cache: ApprovalCache,
     /// Permission rules that auto-approve matching tool calls.
@@ -128,7 +129,7 @@ impl AgentRuntime {
         let client = Arc::clone(&self.client);
         let tools = Arc::clone(&self.tools);
         let max_rounds = max_tool_rounds.unwrap_or(DEFAULT_MAX_TOOL_ROUNDS);
-        let approval_mode = self.approval_mode;
+        let approval_mode = self.approval_mode.clone();
         let approval_cache = self.approval_cache.clone();
         let allow_rules = self.allow_rules.clone();
         let deny_rules = self.deny_rules.clone();

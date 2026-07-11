@@ -10,7 +10,7 @@ use krew_llm::{
 use krew_tools::ToolRegistry;
 use krew_tools::builtin::SkillInfo;
 
-use crate::event::ApprovalCache;
+use crate::event::{ApprovalCache, SharedApprovalMode};
 use crate::skill::{self, SkillRecord};
 use crate::sub_agent::{self, SubAgentDef};
 
@@ -238,7 +238,7 @@ pub fn init_agents(config: &Config, cwd: Option<PathBuf>) -> InitAgentsResult {
             tools,
             is_responding: false,
             other_agent_role: config.settings.other_agent_role,
-            approval_mode: config.settings.approval_mode,
+            approval_mode: SharedApprovalMode::new(config.settings.approval_mode),
             approval_cache: shared_approval_cache.clone(),
             allow_rules: config.allow_rules.clone(),
             deny_rules: config.deny_rules.clone(),
@@ -282,7 +282,7 @@ pub fn register_sub_agents(
         }
 
         let perms = sub_agent::run_agent_tool::PermissionConfig {
-            approval_mode: runtime.approval_mode,
+            approval_mode: runtime.approval_mode.clone(),
             approval_cache: runtime.approval_cache.clone(),
             allow_rules: runtime.allow_rules.clone(),
             deny_rules: runtime.deny_rules.clone(),

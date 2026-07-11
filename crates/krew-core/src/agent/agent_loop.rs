@@ -1,14 +1,13 @@
 use std::sync::Arc;
 
 use futures::StreamExt;
-use krew_config::ApprovalMode;
 use krew_llm::{
     ChatMessage, ChatRole, StreamEvent, ThinkingBlock, ToolCallInfo, ToolDefinition, Usage,
 };
 use krew_tools::ToolRegistry;
 use tokio::sync::mpsc;
 
-use crate::event::{AgentEvent, ApprovalCache, ReviewDecision};
+use crate::event::{AgentEvent, ApprovalCache, ReviewDecision, SharedApprovalMode};
 
 use super::approval::{ApprovalContext, ToolApproval, cache_session_approval, check_tool_approval};
 
@@ -22,7 +21,9 @@ pub(crate) struct AgentLoopContext<'a> {
     pub(crate) tx: &'a mpsc::UnboundedSender<AgentEvent>,
     pub(crate) agent_name: &'a str,
     pub(crate) max_rounds: u32,
-    pub(crate) approval_mode: ApprovalMode,
+    /// Shared handle: read at each approval check so runtime mode cycling
+    /// takes effect mid-completion.
+    pub(crate) approval_mode: SharedApprovalMode,
     pub(crate) approval_cache: &'a ApprovalCache,
     pub(crate) allow_rules: &'a [krew_config::PermissionRule],
     pub(crate) deny_rules: &'a [krew_config::PermissionRule],
@@ -167,7 +168,7 @@ pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
         for tc in &result.tool_calls {
             let approval_ctx = ApprovalContext {
                 tools: ctx.tools,
-                mode: ctx.approval_mode,
+                mode: ctx.approval_mode.get(),
                 cache: ctx.approval_cache,
                 allow_rules: ctx.allow_rules,
                 deny_rules: ctx.deny_rules,
@@ -842,7 +843,7 @@ mod tests {
             tx: &tx,
             agent_name: "claude",
             max_rounds: 4,
-            approval_mode: ApprovalMode::FullAuto,
+            approval_mode: SharedApprovalMode::new(ApprovalMode::FullAuto),
             approval_cache: &approval_cache,
             allow_rules: &[],
             deny_rules: &[],

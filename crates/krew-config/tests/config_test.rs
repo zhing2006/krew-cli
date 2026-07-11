@@ -727,3 +727,15 @@ fn mcp_server_config_in_full_config() {
     assert_eq!(headers.len(), 2);
     assert_eq!(headers.get("Authorization").unwrap(), "Bearer token123");
 }
+
+#[test]
+fn approval_mode_next_cycles_through_all_modes() {
+    assert_eq!(ApprovalMode::Suggest.next(), ApprovalMode::AutoEdit);
+    assert_eq!(ApprovalMode::AutoEdit.next(), ApprovalMode::FullAuto);
+    assert_eq!(ApprovalMode::FullAuto.next(), ApprovalMode::Suggest);
+    // Three steps return to the start.
+    assert_eq!(
+        ApprovalMode::Suggest.next().next().next(),
+        ApprovalMode::Suggest
+    );
+}

@@ -15,7 +15,8 @@ use crate::task::{TaskRequest, run_task_with_events};
 
 /// Grouped permission-related configuration for Sub-Agent tool delegation.
 pub struct PermissionConfig {
-    pub approval_mode: krew_config::ApprovalMode,
+    /// Shared handle: sub-agents follow runtime approval-mode cycling.
+    pub approval_mode: crate::event::SharedApprovalMode,
     pub approval_cache: crate::event::ApprovalCache,
     pub allow_rules: Vec<krew_config::PermissionRule>,
     pub deny_rules: Vec<krew_config::PermissionRule>,
@@ -199,7 +200,7 @@ impl ToolHandler for RunAgentTool {
             sampling: self.sampling.clone(),
             max_rounds: def.max_turns,
             agent_name: agent_name.to_string(),
-            approval_mode: self.perms.approval_mode,
+            approval_mode: self.perms.approval_mode.clone(),
             approval_cache: self.perms.approval_cache.clone(),
             allow_rules: self.perms.allow_rules.clone(),
             deny_rules: self.perms.deny_rules.clone(),
@@ -406,7 +407,7 @@ mod tests {
 
     fn make_perms() -> PermissionConfig {
         PermissionConfig {
-            approval_mode: ApprovalMode::FullAuto,
+            approval_mode: crate::event::SharedApprovalMode::new(ApprovalMode::FullAuto),
             approval_cache: ApprovalCache::new(),
             allow_rules: vec![],
             deny_rules: vec![],

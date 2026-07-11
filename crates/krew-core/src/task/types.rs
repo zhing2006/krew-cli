@@ -2,11 +2,11 @@
 
 use std::sync::Arc;
 
-use krew_config::{ApprovalMode, PermissionRule, SamplingConfig};
+use krew_config::{PermissionRule, SamplingConfig};
 use krew_llm::{ChatMessage, ToolDefinition, Usage};
 use krew_tools::ToolRegistry;
 
-use crate::event::ApprovalCache;
+use crate::event::{ApprovalCache, SharedApprovalMode};
 
 /// Input for a task engine execution.
 ///
@@ -29,8 +29,8 @@ pub struct TaskRequest {
     pub max_rounds: u32,
     /// Agent name used in message `name` fields.
     pub agent_name: String,
-    /// Tool approval policy.
-    pub approval_mode: ApprovalMode,
+    /// Tool approval policy (shared handle; follows runtime mode cycling).
+    pub approval_mode: SharedApprovalMode,
     /// Approval cache (can be shared with parent agent).
     pub approval_cache: ApprovalCache,
     /// Rules that auto-approve matching tool calls.

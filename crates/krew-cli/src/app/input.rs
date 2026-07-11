@@ -45,6 +45,14 @@ impl App {
             self.quit_hint = None;
         }
 
+        // Shift+Tab (BackTab) cycles the approval mode for this session.
+        // Suppressed while the approval overlay is active (keys are consumed
+        // upstream in handle_event before reaching here).
+        if key_event.code == KeyCode::BackTab {
+            self.cycle_approval_mode();
+            return Ok(());
+        }
+
         // If popup is active, intercept navigation keys.
         if self.popup.is_active() && self.handle_popup_key(key_event, terminal)? {
             if burst_enabled {
@@ -275,6 +283,19 @@ impl App {
                 self.textarea.insert_str(ch.to_string().as_str());
             }
             super::paste_burst::FlushResult::None => {}
+        }
+    }
+
+    /// Cycle the approval mode (session-only; not persisted to settings.toml).
+    ///
+    /// Updates the config value (read live by the status bar) and the shared
+    /// per-runtime handles (read by in-flight agent loops at their next
+    /// tool-approval check).
+    fn cycle_approval_mode(&mut self) {
+        let next = self.config.settings.approval_mode.next();
+        self.config.settings.approval_mode = next;
+        for agent in self.agents.values() {
+            agent.approval_mode.set(next);
         }
     }
 

@@ -1564,6 +1564,14 @@ Enter (光标在最后一行):
 
 **PendingTarget 弹窗**（非打字触发）：agent 响应期间按 Enter 且输入无 `@`/`#` 寻址时打开，为待入队消息选择目标 Agent。与补全弹窗不同点：完全模态（除 ↑↓ 导航、Enter/Tab 确认、Esc 取消外的按键被吞掉，textarea 存的是消息正文而非过滤前缀）；Enter/Tab 直接入队（前置 `@name `）而非插入文本；顶部多一行暗色操作提示标题（`extra_height` 因此为 `popup_height` 而非 `popup_height - 1`）；不受 `sync_popup` 每帧同步关闭（与 SessionPicker/RewindPicker 同在白名单）。
 
+#### 3.9.7 审批模式运行时切换
+
+Shift+Tab（`KeyCode::BackTab`）循环切换审批模式：suggest → auto-edit → full-auto → suggest。**仅当前会话生效**，不写回 settings.toml；状态栏模式指示（含颜色）实时更新。
+
+实现：`approval_mode` 以共享原子句柄 `SharedApprovalMode`（`Arc<AtomicU8>` 包装，`krew-core/src/event.rs`）贯穿 `AgentRuntime` → `AgentLoopContext` → 子代理 `PermissionConfig`/`TaskRequest`。`ApprovalContext` 在每次工具调用时现建并 `.get()` 取实时值，因此切换对**正在输出的 Agent 的下一个工具调用**即刻生效，子代理同样跟随。切换入口 `App::cycle_approval_mode` 同时更新 `config.settings.approval_mode`（状态栏读取）与所有 runtime 句柄。
+
+边界：审批弹窗（approval overlay）活跃期间按键在 `handle_event` 上游即被 overlay 消费，Shift+Tab 不响应——已弹出的审批请求（oneshot 等待中）不受切换影响，仍需手动确认；full-auto 下受保护路径 / ask_rules 仍强制审批（既有保证不变）。
+
 ### 3.10 日志系统
 
 使用 `tracing-subscriber` + `tracing-appender` 将日志写入 `.krew/logs/` 目录。按天滚动（daily rolling），默认保留 7 天，过期自动删除。日志不输出到 stdout/stderr（不干扰 TUI）。`--verbose` 参数切换 DEBUG/INFO 级别。

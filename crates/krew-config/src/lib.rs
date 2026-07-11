@@ -505,6 +505,17 @@ pub enum ApprovalMode {
     FullAuto,
 }
 
+impl ApprovalMode {
+    /// Next mode in the runtime cycling order (Shift+Tab in the TUI).
+    pub fn next(self) -> Self {
+        match self {
+            Self::Suggest => Self::AutoEdit,
+            Self::AutoEdit => Self::FullAuto,
+            Self::FullAuto => Self::Suggest,
+        }
+    }
+}
+
 impl std::fmt::Display for ApprovalMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

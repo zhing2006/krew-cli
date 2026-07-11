@@ -100,7 +100,7 @@ async fn run_task_inner(
         tx: &tx,
         agent_name: &req.agent_name,
         max_rounds: req.max_rounds,
-        approval_mode: req.approval_mode,
+        approval_mode: req.approval_mode.clone(),
         approval_cache: &req.approval_cache,
         allow_rules: &req.allow_rules,
         deny_rules: &req.deny_rules,

@@ -67,8 +67,8 @@ pub async fn run_prompt_mode(
     }
 
     // Force FullAuto approval mode on all agents.
-    for agent in agents.values_mut() {
-        agent.approval_mode = ApprovalMode::FullAuto;
+    for agent in agents.values() {
+        agent.approval_mode.set(ApprovalMode::FullAuto);
     }
 
     // Initialize MCP servers if configured.

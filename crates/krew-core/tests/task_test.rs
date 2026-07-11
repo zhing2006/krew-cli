@@ -6,7 +6,7 @@ use krew_config::{ApprovalMode, SamplingConfig};
 use krew_llm::{ChatMessage, ChatRole, LlmClient, StreamEvent, Usage};
 use krew_tools::ToolRegistry;
 
-use krew_core::event::{AgentEvent, ApprovalCache};
+use krew_core::event::{AgentEvent, ApprovalCache, SharedApprovalMode};
 use krew_core::task::{TaskRequest, run_task, run_task_with_events};
 
 // ---------------------------------------------------------------------------
@@ -89,7 +89,7 @@ fn build_request(client: Arc<dyn LlmClient>) -> TaskRequest {
         sampling: SamplingConfig::default(),
         max_rounds: 5,
         agent_name: "test-task".to_string(),
-        approval_mode: ApprovalMode::FullAuto,
+        approval_mode: SharedApprovalMode::new(ApprovalMode::FullAuto),
         approval_cache: ApprovalCache::new(),
         allow_rules: vec![],
         deny_rules: vec![],

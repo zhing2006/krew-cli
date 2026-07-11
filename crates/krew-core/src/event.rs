@@ -1,8 +1,51 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 
+use krew_config::ApprovalMode;
 use krew_llm::{ChatMessage, Usage};
 use tokio::sync::Mutex;
+
+/// Approval mode shared between the app, in-flight agent loops, and
+/// sub-agent launches.
+///
+/// Cloning shares the same underlying value (via `Arc`), so runtime cycling
+/// (Shift+Tab in the TUI) is observed by running loops at their next
+/// tool-approval check without restarting completions.
+#[derive(Debug, Clone)]
+pub struct SharedApprovalMode(Arc<AtomicU8>);
+
+impl SharedApprovalMode {
+    pub fn new(mode: ApprovalMode) -> Self {
+        Self(Arc::new(AtomicU8::new(Self::encode(mode))))
+    }
+
+    /// Current mode.
+    pub fn get(&self) -> ApprovalMode {
+        Self::decode(self.0.load(Ordering::Relaxed))
+    }
+
+    /// Replace the mode; visible to every clone of this handle.
+    pub fn set(&self, mode: ApprovalMode) {
+        self.0.store(Self::encode(mode), Ordering::Relaxed);
+    }
+
+    fn encode(mode: ApprovalMode) -> u8 {
+        match mode {
+            ApprovalMode::Suggest => 0,
+            ApprovalMode::AutoEdit => 1,
+            ApprovalMode::FullAuto => 2,
+        }
+    }
+
+    fn decode(value: u8) -> ApprovalMode {
+        match value {
+            1 => ApprovalMode::AutoEdit,
+            2 => ApprovalMode::FullAuto,
+            _ => ApprovalMode::Suggest,
+        }
+    }
+}
 
 /// User's decision on a tool approval request.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -143,4 +186,29 @@ pub enum AgentEvent {
         /// Delay in seconds before the retry.
         delay_secs: f64,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_approval_mode_round_trips_all_modes() {
+        for mode in [
+            ApprovalMode::Suggest,
+            ApprovalMode::AutoEdit,
+            ApprovalMode::FullAuto,
+        ] {
+            assert_eq!(SharedApprovalMode::new(mode).get(), mode);
+        }
+    }
+
+    #[test]
+    fn shared_approval_mode_set_is_visible_to_clones() {
+        let shared = SharedApprovalMode::new(ApprovalMode::Suggest);
+        let clone = shared.clone();
+
+        shared.set(ApprovalMode::FullAuto);
+        assert_eq!(clone.get(), ApprovalMode::FullAuto);
+    }
 }
