@@ -1545,11 +1545,11 @@ pending_messages: VecDeque<PendingMessage>
 ```txt
 Enter (光标在最后一行):
   1. agent_event_rx.is_none() → send_message()
-  2. agent_event_rx.is_some() + pending 未满 → queue_message()
+  2. agent_event_rx.is_some() + pending 未满 → queue_message()（无寻址时打开目标选择弹窗，见下）
   3. agent_event_rx.is_some() + pending 已满 → insert_newline()
 ```
 
-**入队验证：** 非空 + 必须含 `@`/`#` 寻址（`LastRespondent` 被拒绝，textarea 保留）。原因：pending 期间 `last_respondent` 随串行执行和 A2A 触发而漂移，目标不确定。
+**入队验证：** 非空校验保留；无 `@`/`#` 寻址（`LastRespondent`）不再拒绝，改为打开 `PendingTarget` 目标选择弹窗（默认高亮当前正在输出的 Agent（`current_agent_name`），无则回退 `last_respondent`；候选与 `@` 补全同源、含 `all`）。确认后自动前置 `@name ` 入队——与手动输入 `@name` 完全等价（`PendingMessage` 存 raw_input，drain 时重新 parse）；Esc 取消且 textarea 保留。背景：pending 期间 `last_respondent` 随串行执行和 A2A 触发而漂移，目标不确定，由用户显式选择解决。确认时若轮次已结束（`agent_event_rx` 为 None），跳过队列直接立即发送。
 
 **↑ 键双模式：** 光标在第一行时，有 pending → `pop_back()` 到 textarea（直接替换）；无 pending → 调取输入历史。
 
@@ -1560,6 +1560,8 @@ Enter (光标在最后一行):
 #### 3.9.6 补全弹窗
 
 输入 `/`、`@`、`#` 触发对应的补全弹窗，替换状态栏区域并扩展 viewport 高度。支持键盘导航（上下箭头、Tab/Enter 确认、Esc 关闭），同一时间只能显示一个弹窗。Slash 命令补全同时包含内置命令和自定义命令。
+
+**PendingTarget 弹窗**（非打字触发）：agent 响应期间按 Enter 且输入无 `@`/`#` 寻址时打开，为待入队消息选择目标 Agent。与补全弹窗不同点：完全模态（除 ↑↓ 导航、Enter/Tab 确认、Esc 取消外的按键被吞掉，textarea 存的是消息正文而非过滤前缀）；Enter/Tab 直接入队（前置 `@name `）而非插入文本；顶部多一行暗色操作提示标题（`extra_height` 因此为 `popup_height` 而非 `popup_height - 1`）；不受 `sync_popup` 每帧同步关闭（与 SessionPicker/RewindPicker 同在白名单）。
 
 ### 3.10 日志系统
 

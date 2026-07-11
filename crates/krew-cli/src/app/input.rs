@@ -306,7 +306,8 @@ impl App {
                     | ActivePopup::AgentName(s)
                     | ActivePopup::WhisperName(s)
                     | ActivePopup::SessionPicker(s)
-                    | ActivePopup::RewindPicker(s) => s.move_up(),
+                    | ActivePopup::RewindPicker(s)
+                    | ActivePopup::PendingTarget(s) => s.move_up(),
                     ActivePopup::None => {}
                 }
                 Ok(true)
@@ -317,13 +318,18 @@ impl App {
                     | ActivePopup::AgentName(s)
                     | ActivePopup::WhisperName(s)
                     | ActivePopup::SessionPicker(s)
-                    | ActivePopup::RewindPicker(s) => s.move_down(),
+                    | ActivePopup::RewindPicker(s)
+                    | ActivePopup::PendingTarget(s) => s.move_down(),
                     ActivePopup::None => {}
                 }
                 Ok(true)
             }
             KeyCode::Tab => {
-                self.accept_completion();
+                if matches!(self.popup, ActivePopup::PendingTarget(_)) {
+                    self.confirm_pending_target(terminal)?;
+                } else {
+                    self.accept_completion();
+                }
                 Ok(true)
             }
             KeyCode::Enter => {
@@ -382,6 +388,10 @@ impl App {
                             return Ok(true);
                         }
                     }
+                    ActivePopup::PendingTarget(_) => {
+                        self.confirm_pending_target(terminal)?;
+                        return Ok(true);
+                    }
                     ActivePopup::None => {}
                 }
                 Ok(false)
@@ -390,7 +400,8 @@ impl App {
                 self.popup = ActivePopup::None;
                 Ok(true)
             }
-            _ => Ok(false), // Let other keys pass through to textarea.
+            // PendingTarget is modal: swallow all other keys while it is open.
+            _ => Ok(matches!(self.popup, ActivePopup::PendingTarget(_))),
         }
     }
 
@@ -426,7 +437,10 @@ impl App {
                     }
                 }
             }
-            ActivePopup::SessionPicker(_) | ActivePopup::RewindPicker(_) | ActivePopup::None => {}
+            ActivePopup::SessionPicker(_)
+            | ActivePopup::RewindPicker(_)
+            | ActivePopup::PendingTarget(_)
+            | ActivePopup::None => {}
         }
         self.popup = ActivePopup::None;
     }
@@ -467,10 +481,12 @@ impl App {
 
     /// Detect whether a completion popup should be shown based on current input.
     pub(crate) fn sync_popup(&mut self) {
-        // Session/rewind picker is managed by commands, not input-driven.
+        // Session/rewind/pending-target pickers are managed by actions, not input-driven.
         if matches!(
             self.popup,
-            ActivePopup::SessionPicker(_) | ActivePopup::RewindPicker(_)
+            ActivePopup::SessionPicker(_)
+                | ActivePopup::RewindPicker(_)
+                | ActivePopup::PendingTarget(_)
         ) {
             return;
         }
@@ -632,7 +648,7 @@ impl App {
     }
 
     /// Build completion items for agent names (including "all").
-    fn agent_name_items(&self) -> Vec<CompletionItem> {
+    pub(crate) fn agent_name_items(&self) -> Vec<CompletionItem> {
         let mut items = vec![CompletionItem {
             value: "all".to_string(),
             description: "Broadcast to all agents".to_string(),

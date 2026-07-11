@@ -25,6 +25,8 @@ pub enum ActivePopup {
     SessionPicker(CompletionState),
     /// Rewind picker (triggered by `/rewind`).
     RewindPicker(CompletionState),
+    /// Target picker for a queued (pending) message without @/# addressing.
+    PendingTarget(CompletionState),
 }
 
 /// Completion item with display text and optional description.
@@ -58,6 +60,17 @@ impl CompletionState {
             filtered,
             selected: 0,
             filter: String::new(),
+        }
+    }
+
+    /// Select the item whose value equals `value`, if present.
+    pub fn select_value(&mut self, value: &str) {
+        if let Some(idx) = self
+            .filtered
+            .iter()
+            .position(|&i| self.all_items[i].value == value)
+        {
+            self.selected = idx;
         }
     }
 
@@ -140,6 +153,14 @@ impl ActivePopup {
                     state.popup_height().saturating_sub(1)
                 }
             }
+            ActivePopup::PendingTarget(state) => {
+                if state.is_empty() {
+                    0
+                } else {
+                    // One extra title row on top of the items, so net extra = popup_height.
+                    state.popup_height()
+                }
+            }
         }
     }
 
@@ -151,19 +172,25 @@ impl ActivePopup {
             | ActivePopup::AgentName(s)
             | ActivePopup::WhisperName(s)
             | ActivePopup::SessionPicker(s)
-            | ActivePopup::RewindPicker(s) => !s.is_empty(),
+            | ActivePopup::RewindPicker(s)
+            | ActivePopup::PendingTarget(s) => !s.is_empty(),
         }
     }
 
     /// Build the lines to render for the popup.
     pub fn render_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let state = match self {
+        // PendingTarget shows a title row (it is not triggered by visible typing).
+        let (state, title) = match self {
             ActivePopup::None => return vec![],
             ActivePopup::SlashCommand(s)
             | ActivePopup::AgentName(s)
             | ActivePopup::WhisperName(s)
             | ActivePopup::SessionPicker(s)
-            | ActivePopup::RewindPicker(s) => s,
+            | ActivePopup::RewindPicker(s) => (s, None),
+            ActivePopup::PendingTarget(s) => (
+                s,
+                Some("Queue for agent  (↑↓ select · Enter queue · Esc cancel)"),
+            ),
         };
 
         let items = state.visible_items();
@@ -176,7 +203,15 @@ impl ActivePopup {
             state.selected + 1 - visible_count
         };
 
-        let mut lines = Vec::with_capacity(visible_count);
+        let mut lines = Vec::with_capacity(visible_count + usize::from(title.is_some()));
+        if let Some(title) = title
+            && !items.is_empty()
+        {
+            lines.push(Line::from(Span::styled(
+                title.to_string(),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
         for (display_idx, &item) in items
             .iter()
             .enumerate()
@@ -213,4 +248,63 @@ fn render_popup_line(item: &CompletionItem, selected: bool, _width: u16) -> Line
         Span::styled(format!("{:<12}", item.value), name_style),
         Span::styled(item.description.clone(), desc_style),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn items(names: &[&str]) -> Vec<CompletionItem> {
+        names
+            .iter()
+            .map(|name| CompletionItem {
+                value: name.to_string(),
+                description: String::new(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn select_value_selects_matching_item() {
+        let mut state = CompletionState::new(items(&["all", "gpt", "opus"]));
+        state.select_value("opus");
+        assert_eq!(state.selected_item().unwrap().value, "opus");
+    }
+
+    #[test]
+    fn select_value_ignores_missing_value() {
+        let mut state = CompletionState::new(items(&["all", "gpt"]));
+        state.select_value("missing");
+        assert_eq!(state.selected_item().unwrap().value, "all");
+    }
+
+    #[test]
+    fn pending_target_empty_state_is_inactive_with_zero_height() {
+        let popup = ActivePopup::PendingTarget(CompletionState::new(vec![]));
+        assert!(!popup.is_active());
+        assert_eq!(popup.extra_height(), 0);
+    }
+
+    #[test]
+    fn pending_target_renders_title_and_holds_height_invariant() {
+        let popup = ActivePopup::PendingTarget(CompletionState::new(items(&["all", "gpt"])));
+        assert!(popup.is_active());
+
+        let lines = popup.render_lines(80);
+        // Title row + one row per item.
+        assert_eq!(lines.len(), 3);
+        assert!(lines[0].to_string().contains("Queue for agent"));
+        // Popup rows replace the 1-row status bar: extra = rendered rows - 1.
+        assert_eq!(popup.extra_height() as usize, lines.len() - 1);
+    }
+
+    #[test]
+    fn pending_target_marks_selected_item() {
+        let mut state = CompletionState::new(items(&["all", "gpt", "opus"]));
+        state.select_value("gpt");
+        let popup = ActivePopup::PendingTarget(state);
+
+        let lines = popup.render_lines(80);
+        assert!(lines[2].to_string().starts_with("▸ "));
+    }
 }

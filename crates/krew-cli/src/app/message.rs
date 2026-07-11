@@ -7,6 +7,7 @@ use krew_core::command::SlashCommand;
 use krew_core::router::{self, Addressee};
 use krew_llm::ChatMessage;
 
+use crate::completion::{ActivePopup, CompletionState};
 use crate::custom_terminal;
 use crate::render;
 
@@ -73,8 +74,9 @@ impl App {
 
     /// Queue the current textarea content as a pending message.
     ///
-    /// Validates that input is non-empty and contains @/# addressing.
-    /// On success, clears the textarea. On failure, preserves textarea content.
+    /// Validates that input is non-empty. Input without @/# addressing opens
+    /// the pending-target picker popup instead of being enqueued directly.
+    /// On success, clears the textarea. Otherwise, preserves textarea content.
     pub(crate) fn queue_message(
         &mut self,
         terminal: &mut custom_terminal::Terminal,
@@ -90,16 +92,18 @@ impl App {
             return Ok(());
         }
 
-        // Validate: must have @/# addressing (LastRespondent not allowed for pending).
+        // Untargeted input (LastRespondent) opens the target picker instead of enqueuing.
         let agent_names: Vec<String> = self.config.agents.iter().map(|a| a.name.clone()).collect();
         match router::parse_input(trimmed, &agent_names) {
             Ok((Addressee::LastRespondent, _, _)) => {
-                // No @/# target — show hint and keep textarea.
-                self.show_error(
-                    terminal,
-                    "Pending message requires a target — use @name or #name",
-                )?;
-                return Ok(());
+                // No @/# target — open the agent picker instead of rejecting.
+                if !self.open_pending_target_popup() {
+                    self.show_error(
+                        terminal,
+                        "No agents available — use @name to specify a target agent",
+                    )?;
+                }
+                return Ok(()); // Textarea preserved either way.
             }
             Err(e) => {
                 self.show_error(terminal, &e.to_string())?;
@@ -112,6 +116,69 @@ impl App {
             raw_input: trimmed.to_string(),
         });
         self.clear_textarea();
+        Ok(())
+    }
+
+    /// Open the pending-target picker popup for an untargeted queued message.
+    ///
+    /// Returns false if there are no candidates to show.
+    pub(crate) fn open_pending_target_popup(&mut self) -> bool {
+        let items = self.agent_name_items();
+        if items.is_empty() {
+            return false;
+        }
+        let mut state = CompletionState::new(items);
+        // Default-highlight the agent currently speaking, falling back to the
+        // last respondent when no completion is in flight.
+        if let Some(name) = self
+            .current_agent_name
+            .clone()
+            .or_else(|| self.last_respondent.clone())
+        {
+            state.select_value(&name);
+        }
+        self.popup = ActivePopup::PendingTarget(state);
+        true
+    }
+
+    /// Confirm the pending-target popup: enqueue the message as `@{name} {text}`.
+    ///
+    /// Reads the textarea at confirm time (content may change via paste while
+    /// the popup is open). If the round finished while the popup was open,
+    /// the message is sent immediately instead of being queued.
+    pub(crate) fn confirm_pending_target(
+        &mut self,
+        terminal: &mut custom_terminal::Terminal,
+    ) -> anyhow::Result<()> {
+        let name = match &self.popup {
+            ActivePopup::PendingTarget(state) => state.selected_item().map(|i| i.value.clone()),
+            _ => None,
+        };
+        self.popup = ActivePopup::None;
+        let Some(name) = name else {
+            return Ok(());
+        };
+
+        let text = self.expanded_text();
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Ok(());
+        }
+        let raw = format!("@{name} {trimmed}");
+
+        if self.agent_event_rx.is_some() {
+            if self.pending_messages.len() < MAX_PENDING_MESSAGES {
+                self.pending_messages
+                    .push_back(PendingMessage { raw_input: raw });
+                self.clear_textarea();
+            }
+            // Queue full is unreachable here (popup only opens with room);
+            // defensively keep the textarea untouched.
+        } else {
+            // Round finished while the popup was open — send immediately.
+            self.clear_textarea();
+            self.submit_raw_input(&raw, terminal)?;
+        }
         Ok(())
     }
 
@@ -360,6 +427,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::resolve_implicit_target;
+    use krew_core::router::{self, Addressee};
     use std::collections::HashSet;
 
     fn names(values: &[&str]) -> Vec<String> {
@@ -409,5 +477,27 @@ mod tests {
         let target = resolve_implicit_target(None, &[], &available(&["gpt"]));
 
         assert_eq!(target, None);
+    }
+
+    #[test]
+    fn pending_target_prefix_parses_as_single_addressee() {
+        // Locks in the confirm_pending_target contract: prepending "@{name} "
+        // to an untargeted input parses like a manually typed @name message,
+        // with the full prefixed input kept as the body.
+        let raw = format!("@{} {}", "opus", "hello there");
+        let (addressee, body, is_whisper) =
+            router::parse_input(&raw, &names(&["gpt", "opus"])).unwrap();
+
+        assert!(matches!(addressee, Addressee::Single(name) if name == "opus"));
+        assert_eq!(body, "@opus hello there");
+        assert!(!is_whisper);
+    }
+
+    #[test]
+    fn pending_target_prefix_supports_all() {
+        let raw = format!("@{} {}", "all", "hello there");
+        let (addressee, _, _) = router::parse_input(&raw, &names(&["gpt", "opus"])).unwrap();
+
+        assert!(matches!(addressee, Addressee::All));
     }
 }
