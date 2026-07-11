@@ -357,7 +357,13 @@ fn render_pending_area(frame: &mut custom_terminal::Frame, app: &App, area: Rect
         if let Ok((addressee, _, is_whisper)) =
             router::parse_input(&pending.raw_input, &agent_names)
         {
-            if is_whisper {
+            // Untargeted messages queued during a whisper round continue the
+            // whisper group at drain time — preview them as such.
+            let whisper_continuation = matches!(addressee, router::Addressee::LastRespondent)
+                .then(|| app.whisper_continuation_targets())
+                .flatten();
+
+            if is_whisper || whisper_continuation.is_some() {
                 spans.push(Span::styled(
                     "\u{1F512}".to_string(),
                     Style::default().add_modifier(Modifier::BOLD),
@@ -365,12 +371,18 @@ fn render_pending_area(frame: &mut custom_terminal::Frame, app: &App, area: Rect
             }
 
             let available: std::collections::HashSet<String> = app.agents.keys().cloned().collect();
-            let target_names = router::resolve_target_names(
-                &addressee,
-                &app.config.settings.reply_order,
-                &available,
-                None,
-            );
+            let target_names: Vec<String> = match whisper_continuation {
+                Some(targets) => targets,
+                None => router::resolve_target_names(
+                    &addressee,
+                    &app.config.settings.reply_order,
+                    &available,
+                    None,
+                )
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            };
             for name in &target_names {
                 let color = app
                     .config

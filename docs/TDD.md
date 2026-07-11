@@ -329,7 +329,8 @@ fn parse_input(input: &str, known_agents: &[String]) -> Result<(Addressee, Strin
 | `@all` | 所有 Agent（按 reply_order 串行） | 全部可见 |
 | `@gpt` | 仅 gpt | 全部可见（上下文共享） |
 | `@gpt @opus` | gpt 和 opus（按 @ 出现顺序串行） | 全部可见 |
-| 无识别的 @/# | 上一个回答者；无则使用 `reply_order` 中第一个可用的 Agent | 全部可见 |
+| 无识别的 @/#（上一条用户消息为公开） | 上一个回答者；无则使用 `reply_order` 中第一个可用的 Agent | 全部可见 |
+| 无识别的 @/#（上一条用户消息为密语） | 延续整个密语组（等价于重发 `#组内成员`），直到用户显式 `@name`/`@all` 退出 | 组内可见（密语延续） |
 | `#opus` | 仅 opus | 仅 opus 可见内容，其他 Agent 看到占位符 |
 | `#opus #gemini` | opus 和 gemini | 组内成员互相可见，组外 Agent 看到占位符 |
 
@@ -1549,7 +1550,7 @@ Enter (光标在最后一行):
   3. agent_event_rx.is_some() + pending 已满 → insert_newline()
 ```
 
-**入队验证：** 非空校验保留；无 `@`/`#` 寻址（`LastRespondent`）不再拒绝，改为打开 `PendingTarget` 目标选择弹窗（默认高亮当前正在输出的 Agent（`current_agent_name`），无则回退 `last_respondent`；候选与 `@` 补全同源、含 `all`）。确认后自动前置 `@name ` 入队——与手动输入 `@name` 完全等价（`PendingMessage` 存 raw_input，drain 时重新 parse）；Esc 取消且 textarea 保留。背景：pending 期间 `last_respondent` 随串行执行和 A2A 触发而漂移，目标不确定，由用户显式选择解决。确认时若轮次已结束（`agent_event_rx` 为 None），跳过队列直接立即发送。
+**入队验证：** 非空校验保留；无 `@`/`#` 寻址（`LastRespondent`）不再拒绝：若上一条用户消息为密语（密语轮次进行中），直接入队、drain 时自动延续该密语组（不弹窗，pending 面板显示 🔒 + 组内圆点）；否则打开 `PendingTarget` 目标选择弹窗（默认高亮当前正在输出的 Agent（`current_agent_name`），无则回退 `last_respondent`；候选与 `@` 补全同源、含 `all`）。确认后自动前置 `@name ` 入队——与手动输入 `@name` 完全等价（`PendingMessage` 存 raw_input，drain 时重新 parse）；Esc 取消且 textarea 保留。背景：pending 期间 `last_respondent` 随串行执行和 A2A 触发而漂移，目标不确定，由用户显式选择解决。确认时若轮次已结束（`agent_event_rx` 为 None），跳过队列直接立即发送。
 
 **↑ 键双模式：** 光标在第一行时，有 pending → `pop_back()` 到 textarea（直接替换）；无 pending → 调取输入历史。
 

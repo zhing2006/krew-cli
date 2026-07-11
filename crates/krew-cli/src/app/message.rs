@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 
 use krew_core::command::SlashCommand;
 use krew_core::router::{self, Addressee};
-use krew_llm::ChatMessage;
+use krew_llm::{ChatMessage, ChatRole};
 
 use crate::completion::{ActivePopup, CompletionState};
 use crate::custom_terminal;
@@ -13,6 +13,21 @@ use crate::render;
 
 use super::App;
 use super::state::{MAX_PENDING_MESSAGES, PendingMessage};
+
+/// Whisper targets of the most recent user message, if it was a whisper.
+///
+/// An untargeted follow-up continues that whisper group; a public user
+/// message breaks the chain. Deriving from message history (instead of
+/// per-round state) keeps this correct across resume, rewind, and drain
+/// (round whisper state is cleared before pending messages drain).
+fn whisper_continuation_targets(messages: &[ChatMessage]) -> Option<Vec<String>> {
+    messages
+        .iter()
+        .rev()
+        .find(|m| m.role == ChatRole::User)
+        .and_then(|m| m.whisper_targets.clone())
+        .filter(|targets| !targets.is_empty())
+}
 
 fn resolve_implicit_target(
     last_respondent: Option<&str>,
@@ -92,10 +107,14 @@ impl App {
             return Ok(());
         }
 
-        // Untargeted input (LastRespondent) opens the target picker instead of enqueuing.
+        // Untargeted input (LastRespondent) opens the target picker instead of
+        // enqueuing — unless a whisper round is being continued, in which case
+        // the message drains back into the same whisper group and needs no picker.
         let agent_names: Vec<String> = self.config.agents.iter().map(|a| a.name.clone()).collect();
         match router::parse_input(trimmed, &agent_names) {
-            Ok((Addressee::LastRespondent, _, _)) => {
+            Ok((Addressee::LastRespondent, _, _))
+                if self.whisper_continuation_targets().is_none() =>
+            {
                 // No @/# target — open the agent picker instead of rejecting.
                 if !self.open_pending_target_popup() {
                     self.show_error(
@@ -117,6 +136,12 @@ impl App {
         });
         self.clear_textarea();
         Ok(())
+    }
+
+    /// Whisper targets to continue for an untargeted message, if the most
+    /// recent user message was a whisper.
+    pub(crate) fn whisper_continuation_targets(&self) -> Option<Vec<String>> {
+        whisper_continuation_targets(&self.messages)
     }
 
     /// Open the pending-target picker popup for an untargeted queued message.
@@ -241,6 +266,19 @@ impl App {
                 self.show_error(terminal, &e.to_string())?;
                 return Ok(());
             }
+        };
+
+        // Whisper continuation: an untargeted message following a whisper
+        // round stays within the same whisper group.
+        let (addressee, is_whisper) = match addressee {
+            Addressee::LastRespondent => match self.whisper_continuation_targets() {
+                Some(mut targets) if targets.len() == 1 => {
+                    (Addressee::Single(targets.remove(0)), true)
+                }
+                Some(targets) => (Addressee::Multiple(targets), true),
+                None => (Addressee::LastRespondent, is_whisper),
+            },
+            other => (other, is_whisper),
         };
 
         let available: std::collections::HashSet<String> = self.agents.keys().cloned().collect();
@@ -426,8 +464,9 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_implicit_target;
+    use super::{resolve_implicit_target, whisper_continuation_targets};
     use krew_core::router::{self, Addressee};
+    use krew_llm::{ChatMessage, ChatRole};
     use std::collections::HashSet;
 
     fn names(values: &[&str]) -> Vec<String> {
@@ -499,5 +538,53 @@ mod tests {
         let (addressee, _, _) = router::parse_input(&raw, &names(&["gpt", "opus"])).unwrap();
 
         assert!(matches!(addressee, Addressee::All));
+    }
+
+    fn user_msg(whisper_targets: Option<&[&str]>) -> ChatMessage {
+        ChatMessage::user_with_addressee("hi", Some("gpt".to_string()))
+            .with_whisper_targets(whisper_targets.map(names))
+    }
+
+    fn assistant_msg(agent: &str) -> ChatMessage {
+        ChatMessage::text(ChatRole::Assistant, "reply", Some(agent.to_string()))
+    }
+
+    #[test]
+    fn whisper_continuation_returns_group_after_whisper_round() {
+        let messages = vec![
+            user_msg(Some(&["gpt", "opus"])),
+            assistant_msg("gpt"),
+            assistant_msg("opus"),
+        ];
+
+        let targets = whisper_continuation_targets(&messages);
+        assert_eq!(targets, Some(names(&["gpt", "opus"])));
+    }
+
+    #[test]
+    fn whisper_continuation_none_after_public_round() {
+        let messages = vec![user_msg(None), assistant_msg("gpt")];
+
+        assert_eq!(whisper_continuation_targets(&messages), None);
+    }
+
+    #[test]
+    fn whisper_continuation_broken_by_later_public_message() {
+        let messages = vec![
+            user_msg(Some(&["opus"])),
+            assistant_msg("opus"),
+            user_msg(None),
+            assistant_msg("gpt"),
+        ];
+
+        assert_eq!(whisper_continuation_targets(&messages), None);
+    }
+
+    #[test]
+    fn whisper_continuation_ignores_empty_targets_and_history() {
+        assert_eq!(whisper_continuation_targets(&[]), None);
+
+        let messages = vec![user_msg(Some(&[]))];
+        assert_eq!(whisper_continuation_targets(&messages), None);
     }
 }
