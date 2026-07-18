@@ -384,13 +384,7 @@ fn render_pending_area(frame: &mut custom_terminal::Frame, app: &App, area: Rect
                 .collect(),
             };
             for name in &target_names {
-                let color = app
-                    .config
-                    .agents
-                    .iter()
-                    .find(|a| a.name == *name)
-                    .map(|a| parse_color(&a.color))
-                    .unwrap_or(Color::White);
+                let color = app.agent_color(name).unwrap_or(Color::White);
                 spans.push(Span::styled(
                     "\u{25cf}".to_string(),
                     Style::default().fg(color).add_modifier(Modifier::BOLD),

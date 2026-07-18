@@ -438,23 +438,27 @@ impl App {
             }
             ActivePopup::AgentName(state) => {
                 if let Some(item) = state.selected_item() {
-                    let mention = format!("@{}", item.value);
+                    // Clone the name up front so the popup borrow ends before
+                    // the mutable textarea calls below.
+                    let name = item.value.clone();
+                    let mention = format!("@{name}");
                     let insert_text = format!("{mention} ");
                     // Replace the @token at cursor with the selected name,
                     // then mark the @name part as an atomic element.
                     if let Some(at_pos) = self.replace_trigger_token('@', &insert_text) {
                         let mention_range = at_pos..(at_pos + mention.len());
-                        self.textarea.add_element_range(mention_range);
+                        self.mark_mention_element(mention_range, &name);
                     }
                 }
             }
             ActivePopup::WhisperName(state) => {
                 if let Some(item) = state.selected_item() {
-                    let mention = format!("#{}", item.value);
+                    let name = item.value.clone();
+                    let mention = format!("#{name}");
                     let insert_text = format!("{mention} ");
                     if let Some(hash_pos) = self.replace_trigger_token('#', &insert_text) {
                         let mention_range = hash_pos..(hash_pos + mention.len());
-                        self.textarea.add_element_range(mention_range);
+                        self.mark_mention_element(mention_range, &name);
                     }
                 }
             }
@@ -464,6 +468,14 @@ impl App {
             | ActivePopup::None => {}
         }
         self.popup = ActivePopup::None;
+    }
+
+    /// Mark a mention range as an atomic element, using the agent's configured
+    /// display color when the name matches a known agent (falls back to the
+    /// default element color for `@all` and unknown names).
+    fn mark_mention_element(&mut self, range: std::ops::Range<usize>, name: &str) {
+        let color = self.agent_color(name);
+        self.textarea.add_element_range(range, color);
     }
 
     /// Replace the trigger token (`@` or `#`) at the cursor position with `replacement`.

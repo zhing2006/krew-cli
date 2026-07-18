@@ -10,6 +10,16 @@ use crate::render::diff_render;
 use super::App;
 
 impl App {
+    /// Look up the configured display color for an agent by name.
+    /// Returns `None` when the name matches no configured agent (e.g. `all`).
+    pub(crate) fn agent_color(&self, name: &str) -> Option<Color> {
+        self.config
+            .agents
+            .iter()
+            .find(|a| a.name == name)
+            .map(|a| render::parse_color(&a.color))
+    }
+
     /// Insert the agent header label: `[name] DisplayName:` (with optional lock icon for whisper).
     pub(crate) fn insert_agent_header(
         &self,

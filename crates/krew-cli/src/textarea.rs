@@ -132,6 +132,8 @@ struct TextElement {
     id: u64,
     range: Range<usize>,
     name: Option<String>,
+    /// Custom render color; falls back to cyan when None.
+    color: Option<Color>,
 }
 
 // ── TextArea ─────────────────────────────────────────────────────────
@@ -896,7 +898,8 @@ impl TextArea {
     }
 
     /// Mark an existing text range as an atomic element without changing the text.
-    pub fn add_element_range(&mut self, range: Range<usize>) -> Option<u64> {
+    /// `color` overrides the default element render color (cyan) when given.
+    pub fn add_element_range(&mut self, range: Range<usize>, color: Option<Color>) -> Option<u64> {
         let start = self.clamp_pos_to_char_boundary(range.start.min(self.text.len()));
         let end = self.clamp_pos_to_char_boundary(range.end.min(self.text.len()));
         if start >= end {
@@ -916,7 +919,7 @@ impl TextArea {
         {
             return None;
         }
-        let id = self.add_element(start..end);
+        let id = self.add_element_with_id(start..end, None, color);
         Some(id)
     }
 
@@ -1037,16 +1040,26 @@ impl TextArea {
         }
     }
 
-    fn add_element_with_id(&mut self, range: Range<usize>, name: Option<String>) -> u64 {
+    fn add_element_with_id(
+        &mut self,
+        range: Range<usize>,
+        name: Option<String>,
+        color: Option<Color>,
+    ) -> u64 {
         let id = self.next_element_id();
-        let elem = TextElement { id, range, name };
+        let elem = TextElement {
+            id,
+            range,
+            name,
+            color,
+        };
         self.elements.push(elem);
         self.elements.sort_by_key(|e| e.range.start);
         id
     }
 
     fn add_element(&mut self, range: Range<usize>) -> u64 {
-        self.add_element_with_id(range, None)
+        self.add_element_with_id(range, None, None)
     }
 
     fn next_element_id(&mut self) -> u64 {
@@ -1275,7 +1288,7 @@ impl TextArea {
                 }
                 let styled = &self.text[overlap_start..overlap_end];
                 let x_off = self.text[line_range.start..overlap_start].width() as u16;
-                let style = Style::default().fg(Color::Cyan);
+                let style = Style::default().fg(elem.color.unwrap_or(Color::Cyan));
                 buf.set_string(area.x + x_off, y, styled, style);
             }
         }

@@ -436,13 +436,7 @@ impl App {
 
         if !target_names.is_empty() {
             for name in target_names {
-                let color = self
-                    .config
-                    .agents
-                    .iter()
-                    .find(|a| a.name == *name)
-                    .map(|a| render::parse_color(&a.color))
-                    .unwrap_or(Color::White);
+                let color = self.agent_color(name).unwrap_or(Color::White);
                 spans.push(Span::styled(
                     "\u{25cf}".to_string(), // ●
                     Style::default().fg(color).add_modifier(Modifier::BOLD),
