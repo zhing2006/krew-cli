@@ -114,7 +114,7 @@ reply_order = ["opus"]
 name = "opus"
 display_name = "Claude Opus"
 provider = "anthropic"
-model = "claude-opus-4-6"
+model = "claude-opus-5"
 color = "magenta"
 tools = true
 
@@ -211,7 +211,7 @@ thinking_effort = "medium"
 name = "opus"
 display_name = "Claude Opus"
 provider = "anthropic"
-model = "claude-opus-4-6"
+model = "claude-opus-5"
 color = "magenta"
 tools = true
 
@@ -271,7 +271,7 @@ tools = true
 name = "opus"
 display_name = "Opus"
 provider = "anthropic"
-model = "claude-opus-4-6"
+model = "claude-opus-5"
 color = "magenta"
 tools = true
 ```
@@ -527,7 +527,7 @@ pattern = "github.com"
 name = "opus"                    # Unique name for @ addressing (required)
 display_name = "Claude Opus"     # Display name in TUI (required)
 provider = "anthropic"           # References a [providers.*] entry (required)
-model = "claude-opus-4-6"        # Model ID (required)
+model = "claude-opus-5"        # Model ID (required)
 color = "magenta"                # Terminal color: red/green/yellow/blue/magenta/cyan/white
 system_prompt = ""               # Custom system prompt (optional)
 tools = true                     # Enable tool use (default: false)
@@ -573,13 +573,26 @@ enable_thinking = false          # Request a visible reasoning summary (default:
 - Requires 30-day data retention on your Anthropic organization; zero-data-retention orgs get 400 on all requests. Pricing: $10/$50 per MTok input/output.
 - `claude-mythos-5` is only available to Project Glasswing organizations.
 
+**Claude Opus 5 notes** (`claude-opus-5`):
+
+- Uses the dateless naming scheme. krew recognizes it as an adaptive-thinking model supporting the full `thinking_effort` range including `xhigh` and `max`.
+- **Thinking runs by default.** Unlike Opus 4.8 and earlier, omitting the thinking parameter makes the API think anyway, so with `enable_thinking = false` krew sends an explicit `thinking = disabled`.
+- With thinking disabled the model can occasionally emit tool calls as plain text or leak internal XML tags into visible output. For tool-heavy agents prefer `enable_thinking = true` with `thinking_effort = "low"` or `"medium"` over turning thinking off.
+- `thinking_effort = "xhigh"` / `"max"` are rejected with 400 when thinking is disabled, so krew caps them at `high` in that case.
+- `sampling.max_tokens` is a hard limit on **thinking plus response text** together. krew defaults it to 128,000; if you override it, leave room for both.
+- The API's own `effort` default is `high`. krew only sends `output_config.effort` when `thinking_effort` is configured.
+- `sampling.temperature` / `top_p` / `top_k` are not supported (the API rejects non-default values with 400); krew silently omits them and logs a warning if configured.
+- Safety classifiers may refuse a request (`stop_reason: "refusal"`), including a cybersecurity category. krew surfaces this as an agent error with the refusal category.
+- Pricing: $5/$25 per MTok input/output; 1M context, 128k max output.
+
 **Claude Sonnet 5 notes** (`claude-sonnet-5`):
 
 - Uses the new naming scheme without a minor version segment. krew recognizes it as an adaptive-thinking model.
 - `sampling.temperature` / `top_p` / `top_k` are not supported (the API rejects non-default values with 400); krew silently omits them and logs a warning if configured.
 - Adaptive thinking is on by default; `thinking_effort` supports the full range including `xhigh` and `max`.
 - New tokenizer: the same content uses roughly 30% more tokens than Sonnet 4.6 — watch your `auto_compact_threshold`.
-- Default max output stays at 64,000 (consistent with other Sonnet models); override via `sampling.max_tokens` if you need more.
+- Default max output is 128,000 (raised from 64,000 on Sonnet 4.6); override via `sampling.max_tokens` if you want a tighter cap.
+- Thinking runs by default when the thinking parameter is omitted, so `enable_thinking = false` makes krew send an explicit `thinking = disabled`, with `xhigh` / `max` effort capped to `high` — same rules as Opus 5 above.
 
 ### 5.4 Provider configuration
 

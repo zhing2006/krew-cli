@@ -472,6 +472,18 @@ fn supports_xhigh_effort(model: &str) -> bool {
         || (model.contains("sonnet") && version_at_least(model, 5, 0))
 }
 
+/// Whether the model runs adaptive thinking by default when the `thinking`
+/// key is omitted (Opus 5+ and Sonnet 5+). On those models turning thinking
+/// off requires an explicit `{"type": "disabled"}` config, and that config
+/// may not be combined with effort "xhigh" or "max" (400).
+///
+/// The Fable family is also always-on but rejects `disabled` outright, so it
+/// is deliberately excluded here — `claude_version` returns `None` for those
+/// names, which already keeps them out.
+fn thinking_on_by_default(model: &str) -> bool {
+    (model.contains("opus") || model.contains("sonnet")) && version_at_least(model, 5, 0)
+}
+
 /// Build the thinking parameter for the request body.
 pub(crate) fn build_thinking_params(
     enable_thinking: bool,
@@ -479,11 +491,12 @@ pub(crate) fn build_thinking_params(
     model: &str,
 ) -> Option<serde_json::Value> {
     if !enable_thinking || thinking_effort == Some(ThinkingEffort::None) {
-        // Sonnet 5+ runs adaptive thinking by default when the `thinking` key
-        // is omitted, so disabling requires an explicit `disabled` config.
-        // The Fable family rejects `disabled` (thinking is always on there)
-        // and older models default to off, so both omit the key entirely.
-        if model.contains("sonnet") && version_at_least(model, 5, 0) {
+        // Opus 5+ / Sonnet 5+ run adaptive thinking by default when the
+        // `thinking` key is omitted, so disabling requires an explicit
+        // `disabled` config. The Fable family rejects `disabled` (thinking is
+        // always on there) and older models default to off, so both omit the
+        // key entirely.
+        if thinking_on_by_default(model) {
             return Some(serde_json::json!({"type": "disabled"}));
         }
         return None;
@@ -529,6 +542,13 @@ pub(crate) fn build_output_config(
         return None;
     }
 
+    // Opus 5+ / Sonnet 5+ reject `thinking: {type: "disabled"}` combined with
+    // effort "xhigh" or "max" with a 400, validated per request. Whenever
+    // `build_thinking_params` would emit that `disabled` config, cap the effort
+    // at "high" so the two builders can never produce the rejected pair.
+    let thinking_off = !enable_thinking || thinking_effort == Some(ThinkingEffort::None);
+    let cap_at_high = thinking_off && thinking_on_by_default(model);
+
     thinking_effort.and_then(|effort| {
         let effort_str = match effort {
             ThinkingEffort::None => return None,
@@ -536,18 +556,20 @@ pub(crate) fn build_output_config(
             ThinkingEffort::Medium => "medium",
             ThinkingEffort::High => "high",
             ThinkingEffort::Xhigh => {
-                if supports_xhigh_effort(model) {
+                if supports_xhigh_effort(model) && !cap_at_high {
                     "xhigh"
                 } else {
-                    // Downgrade to high on models that don't support xhigh.
+                    // Downgrade to high on models that don't support xhigh,
+                    // and whenever thinking is explicitly disabled.
                     "high"
                 }
             }
             ThinkingEffort::Max => {
-                if supports_max_effort(model) {
+                if supports_max_effort(model) && !cap_at_high {
                     "max"
                 } else {
-                    // Downgrade to high on models that don't support max.
+                    // Downgrade to high on models that don't support max,
+                    // and whenever thinking is explicitly disabled.
                     "high"
                 }
             }
@@ -2752,16 +2774,22 @@ mod tests {
 
     #[test]
     fn thinking_sonnet_5_disabled_sends_explicit_disabled() {
-        // Omitting the `thinking` key on Sonnet 5 silently runs adaptive
-        // thinking; disabling requires an explicit `disabled` config.
+        // Omitting the `thinking` key on Opus 5 / Sonnet 5 silently runs
+        // adaptive thinking; disabling requires an explicit `disabled` config.
         for model in [
             "claude-sonnet-5",
             "claude-sonnet-5-20260630",
             "claude-sonnet-5@20260630",
+            "claude-opus-5",
+            "claude-opus-5-20260724",
+            "claude-opus-5@20260724",
         ] {
             let val = build_thinking_params(false, None, model).unwrap();
             assert_eq!(val["type"], "disabled", "{model}");
             assert!(val.get("budget_tokens").is_none(), "{model}");
+            // An explicit "none" effort is the other way to turn thinking off.
+            let val = build_thinking_params(true, Some(ThinkingEffort::None), model).unwrap();
+            assert_eq!(val["type"], "disabled", "{model}");
         }
         // Fable still omits the key (explicit `disabled` returns 400 there),
         // and pre-5 models keep omitting it (off is their default).
@@ -2769,6 +2797,88 @@ mod tests {
         assert!(build_thinking_params(false, None, "claude-mythos-5").is_none());
         assert!(build_thinking_params(false, None, "claude-sonnet-4-6").is_none());
         assert!(build_thinking_params(false, None, "claude-opus-4-8").is_none());
+    }
+
+    #[test]
+    fn opus_5_capabilities() {
+        // Claude Opus 5 uses the dateless naming scheme; it must be recognized
+        // as an adaptive, effort/xhigh/max-capable model that rejects sampling
+        // parameters, with the 128k output ceiling of the Opus 4.6+ line.
+        for model in [
+            "claude-opus-5",
+            "claude-opus-5-20260724",
+            "claude-opus-5@20260724",
+        ] {
+            assert!(supports_adaptive(model), "{model}");
+            assert!(supports_effort(model), "{model}");
+            assert!(supports_max_effort(model), "{model}");
+            assert!(supports_xhigh_effort(model), "{model}");
+            assert!(sampling_params_removed(model), "{model}");
+            assert!(thinking_on_by_default(model), "{model}");
+            assert_eq!(default_max_tokens(model), 128_000, "{model}");
+            // Thinking uses adaptive (budget_tokens would 400), and asks for
+            // summarized display since the API default is "omitted".
+            let val = build_thinking_params(true, None, model).unwrap();
+            assert_eq!(val["type"], "adaptive", "{model}");
+            assert_eq!(val["display"], "summarized", "{model}");
+        }
+    }
+
+    #[test]
+    fn thinking_on_by_default_only_for_5_and_later() {
+        assert!(thinking_on_by_default("claude-opus-5"));
+        assert!(thinking_on_by_default("claude-sonnet-5"));
+        assert!(!thinking_on_by_default("claude-opus-4-8"));
+        assert!(!thinking_on_by_default("claude-opus-4-7"));
+        assert!(!thinking_on_by_default("claude-opus-4-6"));
+        assert!(!thinking_on_by_default("claude-sonnet-4-6"));
+        assert!(!thinking_on_by_default("claude-haiku-4-5"));
+        // The Fable family is always-on too, but rejects an explicit
+        // `disabled`, so it must not be treated as "disable-able".
+        assert!(!thinking_on_by_default("claude-fable-5"));
+        assert!(!thinking_on_by_default("claude-mythos-5"));
+    }
+
+    #[test]
+    fn disabled_thinking_never_pairs_with_xhigh_or_max_effort() {
+        // Opus 5+ / Sonnet 5+ return 400 for `thinking: {type: "disabled"}`
+        // combined with effort "xhigh" or "max". Lock the invariant across
+        // every (enable_thinking, effort) combination the config can produce.
+        let efforts = [
+            None,
+            Some(ThinkingEffort::None),
+            Some(ThinkingEffort::Low),
+            Some(ThinkingEffort::Medium),
+            Some(ThinkingEffort::High),
+            Some(ThinkingEffort::Xhigh),
+            Some(ThinkingEffort::Max),
+        ];
+        for model in [
+            "claude-opus-5",
+            "claude-sonnet-5",
+            "claude-opus-4-8",
+            "claude-fable-5",
+        ] {
+            for enable_thinking in [false, true] {
+                for effort in efforts {
+                    let thinking = build_thinking_params(enable_thinking, effort, model);
+                    let disabled = thinking.as_ref().is_some_and(|t| t["type"] == "disabled");
+                    if !disabled {
+                        continue;
+                    }
+                    let output = build_output_config(enable_thinking, effort, model);
+                    let sent = output
+                        .as_ref()
+                        .and_then(|o| o["effort"].as_str())
+                        .unwrap_or("high"); // API default when omitted
+                    assert!(
+                        sent != "xhigh" && sent != "max",
+                        "{model}: disabled thinking must not pair with effort {sent} \
+                         (enable_thinking={enable_thinking}, effort={effort:?})"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

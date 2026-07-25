@@ -114,7 +114,7 @@ reply_order = ["opus"]
 name = "opus"
 display_name = "Claude Opus"
 provider = "anthropic"
-model = "claude-opus-4-6"
+model = "claude-opus-5"
 color = "magenta"
 tools = true
 
@@ -211,7 +211,7 @@ thinking_effort = "medium"
 name = "opus"
 display_name = "Claude Opus"
 provider = "anthropic"
-model = "claude-opus-4-6"
+model = "claude-opus-5"
 color = "magenta"
 tools = true
 
@@ -271,7 +271,7 @@ tools = true
 name = "opus"
 display_name = "Opus"
 provider = "anthropic"
-model = "claude-opus-4-6"
+model = "claude-opus-5"
 color = "magenta"
 tools = true
 ```
@@ -528,7 +528,7 @@ pattern = "github.com"
 name = "opus"                    # @ 寻址名（必填，不可重复，不可为 "all"）
 display_name = "Claude Opus"     # TUI 显示名（必填）
 provider = "anthropic"           # 引用 [providers.*] 条目（必填）
-model = "claude-opus-4-6"        # 模型 ID（必填）
+model = "claude-opus-5"        # 模型 ID（必填）
 color = "magenta"                # 终端颜色: red/green/yellow/blue/magenta/cyan/white
 system_prompt = ""               # 自定义系统提示词（可选）
 tools = true                     # 启用工具（默认 false）
@@ -572,13 +572,26 @@ enable_thinking = false          # 请求显示推理摘要（默认 false）
 - 要求 Anthropic 组织开启 30 天数据保留；零数据保留（ZDR）组织的所有请求都会返回 400。定价：输入 $10 / 输出 $50 每百万 token。
 - `claude-mythos-5` 仅 Project Glasswing 组织可用。
 
+**Claude Opus 5 注意事项**（`claude-opus-5`）：
+
+- 采用无日期后缀的新命名，krew 将其识别为 adaptive thinking 模型，`thinking_effort` 支持完整档位，包括 `xhigh` 和 `max`。
+- **思考默认开启。** 与 Opus 4.8 及更早版本相反，省略 thinking 参数时 API 仍会思考，因此 `enable_thinking = false` 时 krew 会显式发送 `thinking = disabled`。
+- 关闭思考后，模型偶尔会把工具调用以纯文本形式输出，或在可见回复中泄漏内部 XML 标签。工具密集型 agent 建议用 `enable_thinking = true` + `thinking_effort = "low"` / `"medium"`，而不是关闭思考。
+- 思考关闭时 `thinking_effort = "xhigh"` / `"max"` 会被 API 以 400 拒绝，krew 在这种情况下会自动降级为 `high`。
+- `sampling.max_tokens` 是**思考 + 正文**的总上限。krew 默认填 128,000；若自行覆盖，请给两者都留出空间。
+- API 自身的 `effort` 默认值是 `high`。krew 仅在配置了 `thinking_effort` 时才发送 `output_config.effort`。
+- 不支持 `sampling.temperature` / `top_p` / `top_k`（非默认值 API 返回 400）；krew 会自动忽略并打印警告日志。
+- 安全分类器可能拒绝请求（`stop_reason: "refusal"`），包含网络安全类别。krew 会将其作为 agent 错误展示（含拒绝类别）。
+- 定价：输入 $5 / 输出 $25 每百万 token；1M 上下文，最大输出 128k。
+
 **Claude Sonnet 5 注意事项**（`claude-sonnet-5`）：
 
 - 采用去掉小版本号的新命名，krew 将其识别为 adaptive thinking 模型。
 - 不支持 `sampling.temperature` / `top_p` / `top_k`（非默认值 API 返回 400）；krew 会自动忽略并打印警告日志。
 - adaptive thinking 默认开启；`thinking_effort` 支持完整档位，包括 `xhigh` 和 `max`。
 - 新 tokenizer：相同内容的 token 用量比 Sonnet 4.6 多约 30%，请留意 `auto_compact_threshold` 设置。
-- 默认最大输出保持 64,000（与其它 Sonnet 模型一致），如需更大可通过 `sampling.max_tokens` 覆盖。
+- 默认最大输出为 128,000（相比 Sonnet 4.6 的 64,000 提升），如需收紧可通过 `sampling.max_tokens` 覆盖。
+- 省略 thinking 参数时默认开启思考，因此 `enable_thinking = false` 时 krew 会显式发送 `thinking = disabled`，且 `xhigh` / `max` 会降级为 `high` —— 规则与上面的 Opus 5 相同。
 
 ### 5.4 Provider 配置
 

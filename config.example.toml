@@ -66,19 +66,26 @@ enable_web_search = false
 name = "opus"
 display_name = "Claude Opus"
 provider = "anthropic"
-model = "claude-opus-4-6"
-# model = "claude-fable-5"               # Claude Fable 5: thinking is always on,
+model = "claude-opus-5"                  # Claude Opus 5: thinking runs by default,
                                          # sampling.temperature/top_p/top_k are ignored
                                          # (the API rejects them), supports thinking_effort
                                          # up to "xhigh" and "max"
+# model = "claude-fable-5"               # Claude Fable 5: thinking is always on and
+                                         # cannot be turned off; same sampling/effort rules
 color = "magenta"
 system_prompt = ""
 tools = true
 enable_web_search = false
-# enable_thinking = true
+# enable_thinking = true                 # on Opus 5 / Sonnet 5 the API thinks by default;
+                                         # leaving this false sends an explicit
+                                         # thinking = disabled (which can make the model
+                                         # emit tool calls as plain text — prefer
+                                         # enable_thinking = true with a low effort)
 # thinking_effort = "xhigh"              # low | medium | high | xhigh | max
-                                         # (xhigh: Fable family and Opus 4.7+ only;
-                                         # other models downgrade it to high)
+                                         # (xhigh: Fable family, Opus 4.7+ and Sonnet 5+;
+                                         # other models downgrade it to high. With thinking
+                                         # disabled, xhigh/max are capped to high because
+                                         # Opus 5 / Sonnet 5 reject that combination)
 
 [[agents]]
 name = "sonnet"

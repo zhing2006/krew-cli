@@ -569,8 +569,13 @@ struct RetryConfig {
 | GPT-4o | 16,384 |
 | GPT-4.1 / 4.1-mini / 4.1-nano | 32,768 |
 | o3 / o4-mini | 100,000 |
-| Claude Opus 4 / 4.5 / 4.6 | 32,000 |
-| Claude Sonnet 4 / 4.5 / 4.6 / 5 | 64,000 |
+| Claude Opus 4 / 4.1 | 32,000 |
+| Claude Opus 4.5 | 64,000 |
+| Claude Opus 4.6 / 4.7 / 4.8 / 5 | 128,000 |
+| Claude Sonnet 4 | 32,000 |
+| Claude Sonnet 4.5 / 4.6 | 64,000 |
+| Claude Sonnet 5 | 128,000 |
+| Claude Fable 5 / Mythos 5 | 128,000 |
 | Claude Haiku 4.5 | 64,000 |
 | Gemini 2.5 Pro / Flash | 65,536 |
 
@@ -588,7 +593,8 @@ struct RetryConfig {
 | OpenAI Responses / Chat | GPT-5.6 / Sol / Terra / Luna | Responses: `reasoning: { effort, summary?, mode?, context? }`; Chat: `reasoning_effort` | none/low/medium/high/xhigh/max 原样映射；显式 effort 独立于 `enable_thinking`，后者仅控制 Responses summary |
 | OpenAI Responses | 白名单模型 (gpt-5.5/5.5-pro/5.4/5.4-pro/5.3-codex/5.2) | `reasoning: { effort, summary: "auto" }` | low→"low", medium→"medium", high→"high", max→"xhigh", 未设置→"medium" |
 | OpenAI Responses | 其他模型 | `reasoning: { effort, summary: "auto" }` | low→"low", medium→"medium", high→"high", max→"high" (降级), 未设置→"medium" |
-| Anthropic | Opus 4.6+ / Sonnet 4.6+（含 `claude-sonnet-5`） | `thinking: { type: "adaptive" }` + `output_config: { effort }` | 使用 adaptive thinking, effort 含 max；Sonnet 5 / Fable / Opus 4.7+ 还支持 xhigh |
+| Anthropic | Opus 4.6+ / Sonnet 4.6+（含 `claude-opus-5`、`claude-sonnet-5`） | `thinking: { type: "adaptive", display: "summarized" }` + `output_config: { effort }` | 使用 adaptive thinking, effort 含 max；Opus 4.7+ / Sonnet 5+ / Fable 还支持 xhigh |
+| Anthropic | Opus 5+ / Sonnet 5+（thinking 关闭时） | `thinking: { type: "disabled" }` | 这些模型省略 thinking 参数等于开启 adaptive thinking，故必须显式发送 `disabled`；此时 effort 上限为 high（xhigh/max 会被 API 以 400 拒绝，krew 自动降级） |
 | Anthropic | Opus 4.5 | `thinking: { type: "enabled", budget_tokens }` + `output_config: { effort }` | budget: low→1024, medium→8192, high/max→32768; effort: max 降为 "high" |
 | Anthropic | 其他旧模型 | `thinking: { type: "enabled", budget_tokens }` | low→1024, medium→8192, high/max→32768, 未设置→8192, 不发送 effort |
 | Google | Gemini 3.x | `thinkingConfig: { includeThoughts: true, thinkingLevel }` | low→"low", medium→"medium", high/max→"high", 未设置→"high" |

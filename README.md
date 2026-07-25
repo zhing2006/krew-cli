@@ -80,9 +80,9 @@ cargo install --path crates/krew-cli
 | Provider | Models (examples) | API |
 | -------- | ----------------- | --- |
 | OpenAI | GPT-5.6 (Sol / Terra / Luna) | Responses / Chat Completions |
-| Anthropic | Claude Opus 4.6, Sonnet 5 / 4.6 | Messages |
+| Anthropic | Claude Opus 5 / 4.6, Sonnet 5 / 4.6 | Messages |
 | Google | Gemini 3.1 Pro | generateContent (+ Vertex AI) |
-| Vertex Anthropic | Claude Opus 4.7, Sonnet 4.6 | Vertex AI Claude `streamRawPredict` |
+| Vertex Anthropic | Claude Opus 5 / 4.7, Sonnet 4.6 | Vertex AI Claude `streamRawPredict` |
 | OpenAI-Compatible | Doubao, LiteLLM, etc. | Responses / Chat Completions |
 
 ## Quick Start
@@ -194,7 +194,7 @@ thinking_effort = "medium"
 name = "opus"
 display_name = "Claude Opus"
 provider = "anthropic"
-model = "claude-opus-4-6"
+model = "claude-opus-5"
 color = "magenta"
 tools = true
 ```
