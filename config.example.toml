@@ -70,28 +70,38 @@ model = "claude-opus-5"                  # Claude Opus 5: thinking runs by defau
                                          # sampling.temperature/top_p/top_k are ignored
                                          # (the API rejects them), supports thinking_effort
                                          # up to "xhigh" and "max"
-# model = "claude-fable-5"               # Claude Fable 5: thinking is always on and
+# model = "claude-opus-5-5"              # Claude Opus 5.5: thinking is always on and
+                                         # cannot be turned off (API default effort: medium);
+                                         # same sampling/effort rules
+# model = "claude-fable-5-1"             # Claude Fable 5.1 / 5: thinking is always on and
                                          # cannot be turned off; same sampling/effort rules
 color = "magenta"
 system_prompt = ""
 tools = true
 enable_web_search = false
-# enable_thinking = true                 # on Opus 5 / Sonnet 5 the API thinks by default;
-                                         # leaving this false sends an explicit
-                                         # thinking = disabled (which can make the model
-                                         # emit tool calls as plain text — prefer
-                                         # enable_thinking = true with a low effort)
-# thinking_effort = "xhigh"              # low | medium | high | xhigh | max
-                                         # (xhigh: Fable family, Opus 4.7+ and Sonnet 5+;
-                                         # other models downgrade it to high. With thinking
-                                         # disabled, xhigh/max are capped to high because
-                                         # Opus 5 / Sonnet 5 reject that combination)
+# enable_thinking = true                 # on Opus 5 / Sonnet 5 / Haiku 5.5 the API thinks
+                                         # by default; leaving this false sends an explicit
+                                         # thinking = disabled (Sonnet 5.5: between_tools),
+                                         # which can make the model emit tool calls as plain
+                                         # text — prefer enable_thinking = true with a low
+                                         # effort. Fable and Opus 5.5 cannot turn thinking
+                                         # off, so false only hides the summary there
+# thinking_effort = "xhigh"              # none | low | medium | high | xhigh | max
+                                         # (xhigh: Fable family, Opus 4.7+ and all Claude 5
+                                         # models; other models downgrade it to high. With
+                                         # thinking disabled, xhigh/max are capped to high
+                                         # because the API rejects that combination. On
+                                         # Fable / Opus 5.5, "none" is sent as "low")
 
 [[agents]]
 name = "sonnet"
 display_name = "Claude Sonnet"
 provider = "anthropic"
 model = "claude-sonnet-4-6"
+# model = "claude-sonnet-5-5"            # Claude Sonnet 5.5: enable_thinking = false sends
+                                         # thinking = between_tools (disabled is rejected)
+# model = "claude-haiku-5-5"             # Claude Haiku 5.5: adaptive thinking, full effort
+                                         # range, temperature/top_p/top_k are ignored
 color = "cyan"
 system_prompt = ""
 tools = true
@@ -102,6 +112,9 @@ name = "gemini"
 display_name = "Gemini 3.1 Pro"
 provider = "google"
 model = "gemini-3.1-pro"
+# model = "gemini-4-argon"               # Gemini 4 Argon: thinking_effort maps to
+                                         # thinkingLevel low/medium/high; the API ignores
+                                         # temperature/top_p/top_k; max output 65,536
 color = "blue"
 system_prompt = ""
 tools = true

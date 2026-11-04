@@ -415,7 +415,7 @@ struct Usage {
 - `max_tokens` **必填**，未设置时根据模型名自动填入最大输出 token 数
 - `temperature` clamp 到 0-1 范围
 - Web Search: tools 中添加 `{ type: "web_search_20250305", name: "web_search" }`
-- Thinking: 使用能力函数矩阵判断模型支持。Opus 4.6+/Sonnet 4.6+（含新命名 `claude-sonnet-5`）使用 `adaptive` thinking + `output_config.effort`（含 max；Sonnet 5、Fable 家族、Opus 4.7+ 还支持 xhigh）；Opus 4.5 使用 `enabled` + `budget_tokens` + `output_config.effort`（Max 降为 high）；其他旧模型仅使用 `enabled` + `budget_tokens`，不发送 effort。启用 thinking 时强制 `temperature = 1.0`（Sonnet 5、Fable 家族、Opus 4.7+ 直接移除采样参数）
+- Thinking: 使用能力函数矩阵判断模型支持。Opus 4.6+/Sonnet 4.6+ 及所有 Claude 5 代模型（含 `claude-sonnet-5`、`claude-opus-5-5`、`claude-haiku-5-5`）使用 `adaptive` thinking + `output_config.effort`（含 max；Claude 5 代、Fable 家族、Opus 4.7+ 还支持 xhigh）。关闭 thinking 的方式由 `thinking_off_mode` 决定：旧模型省略参数；Opus 5 / Sonnet 5 / Haiku 5.5 发送 `disabled`；Sonnet 5.5 发送 `between_tools`；Fable 家族与 Opus 5.5 无法关闭，省略参数且 effort `none` 映射为 `low`；Opus 4.5 使用 `enabled` + `budget_tokens` + `output_config.effort`（Max 降为 high）；其他旧模型仅使用 `enabled` + `budget_tokens`，不发送 effort。启用 thinking 时强制 `temperature = 1.0`（Claude 5 代、Fable 家族、Opus 4.7+ 直接移除采样参数）。模型版本解析时，无小版本号命名后的 8 位日期（如 `claude-opus-5-20260724`）视为 `.0`，不会被误判为高版本
 
 ##### Vertex Anthropic Client
 
@@ -571,13 +571,15 @@ struct RetryConfig {
 | o3 / o4-mini | 100,000 |
 | Claude Opus 4 / 4.1 | 32,000 |
 | Claude Opus 4.5 | 64,000 |
-| Claude Opus 4.6 / 4.7 / 4.8 / 5 | 128,000 |
+| Claude Opus 4.6 / 4.7 / 4.8 / 5 / 5.5 | 128,000 |
 | Claude Sonnet 4 | 32,000 |
 | Claude Sonnet 4.5 / 4.6 | 64,000 |
-| Claude Sonnet 5 | 128,000 |
-| Claude Fable 5 / Mythos 5 | 128,000 |
+| Claude Sonnet 5 / 5.5 | 128,000 |
+| Claude Fable 5 / 5.1, Mythos 5 / 5.1 | 128,000 |
 | Claude Haiku 4.5 | 64,000 |
+| Claude Haiku 5.5 | 128,000 |
 | Gemini 2.5 Pro / Flash | 65,536 |
+| Gemini 4 Argon | 65,536 |
 
 - `temperature`：默认不设置（各 Provider 默认 1.0），用户可按场景自行调整
 - 其余参数：默认不设置，使用 Provider 默认值
@@ -593,11 +595,13 @@ struct RetryConfig {
 | OpenAI Responses / Chat | GPT-5.6 / Sol / Terra / Luna | Responses: `reasoning: { effort, summary?, mode?, context? }`; Chat: `reasoning_effort` | none/low/medium/high/xhigh/max 原样映射；显式 effort 独立于 `enable_thinking`，后者仅控制 Responses summary |
 | OpenAI Responses | 白名单模型 (gpt-5.5/5.5-pro/5.4/5.4-pro/5.3-codex/5.2) | `reasoning: { effort, summary: "auto" }` | low→"low", medium→"medium", high→"high", max→"xhigh", 未设置→"medium" |
 | OpenAI Responses | 其他模型 | `reasoning: { effort, summary: "auto" }` | low→"low", medium→"medium", high→"high", max→"high" (降级), 未设置→"medium" |
-| Anthropic | Opus 4.6+ / Sonnet 4.6+（含 `claude-opus-5`、`claude-sonnet-5`） | `thinking: { type: "adaptive", display: "summarized" }` + `output_config: { effort }` | 使用 adaptive thinking, effort 含 max；Opus 4.7+ / Sonnet 5+ / Fable 还支持 xhigh |
-| Anthropic | Opus 5+ / Sonnet 5+（thinking 关闭时） | `thinking: { type: "disabled" }` | 这些模型省略 thinking 参数等于开启 adaptive thinking，故必须显式发送 `disabled`；此时 effort 上限为 high（xhigh/max 会被 API 以 400 拒绝，krew 自动降级） |
+| Anthropic | Opus 4.6+ / Sonnet 4.6+ / Claude 5 代（含 `claude-opus-5-5`、`claude-sonnet-5-5`、`claude-haiku-5-5`） | `thinking: { type: "adaptive", display: "summarized" }` + `output_config: { effort }` | 使用 adaptive thinking, effort 含 max；Opus 4.7+ / Claude 5 代 / Fable 还支持 xhigh |
+| Anthropic | Opus 5 / Sonnet 5 / Haiku 5.5+（thinking 关闭时） | `thinking: { type: "disabled" }` | 这些模型省略 thinking 参数等于开启 adaptive thinking，故必须显式发送 `disabled`；此时 effort 上限为 high（xhigh/max 会被 API 以 400 拒绝，krew 自动降级） |
+| Anthropic | Sonnet 5.5+（thinking 关闭时） | `thinking: { type: "between_tools" }` | Sonnet 5.5 以 400 拒绝 `disabled`，改发 `between_tools`（不带其他字段）；effort 上限同样为 high |
+| Anthropic | Fable 家族 / Opus 5.5+（thinking 关闭时） | 省略 `thinking` | 思考无法关闭（`disabled` 和 `budget_tokens` 均返回 400）；已配置的 effort 照常发送且不降级，effort `none` 映射为 `low` |
 | Anthropic | Opus 4.5 | `thinking: { type: "enabled", budget_tokens }` + `output_config: { effort }` | budget: low→1024, medium→8192, high/max→32768; effort: max 降为 "high" |
 | Anthropic | 其他旧模型 | `thinking: { type: "enabled", budget_tokens }` | low→1024, medium→8192, high/max→32768, 未设置→8192, 不发送 effort |
-| Google | Gemini 3.x | `thinkingConfig: { includeThoughts: true, thinkingLevel }` | low→"low", medium→"medium", high/max→"high", 未设置→"high" |
+| Google | Gemini 3.x / 4.x（含 `gemini-4-argon`） | `thinkingConfig: { includeThoughts: true, thinkingLevel }` | low→"low", medium→"medium", high/max→"high", 未设置→"high" |
 | Google | Gemini 2.5 | `thinkingConfig: { includeThoughts: true, thinkingBudget }` | low→1024, medium→8192, high/max→24576, 未设置→-1 (动态) |
 
 **Anthropic 强制约束**：启用 thinking 时强制 `temperature = 1.0`，覆盖用户配置（记录 warn 日志）。

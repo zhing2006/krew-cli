@@ -72,7 +72,8 @@ impl AnthropicClient {
 /// Parse the `(major, minor)` version from a Claude model name such as
 /// `claude-opus-4-8`, `claude-opus-4-8-20260301`, or the Vertex form
 /// `claude-opus-4-8@20260301`. The newer naming scheme drops the minor
-/// segment (e.g. `claude-sonnet-5`), which is parsed as `(5, 0)`. Returns
+/// segment (e.g. `claude-sonnet-5`, `claude-opus-5-20260724`), which is
+/// parsed as `(5, 0)`. Returns
 /// `None` for names without a `<family>-<major>[-<minor>]` segment (e.g.
 /// legacy `claude-3-5-sonnet-...`, where the version precedes the family and
 /// only a date suffix follows it).
@@ -83,7 +84,13 @@ fn claude_version(model: &str) -> Option<(u32, u32)> {
             let mut parts = rest.split(['-', '@']);
             let major = parts.next()?.parse::<u32>().ok()?;
             let minor = match parts.next() {
-                Some(m) => m.parse::<u32>().ok()?,
+                // A dateless new-scheme name followed by a snapshot date
+                // (e.g. `claude-opus-5-20260724`) has no minor segment; the
+                // 8-digit date must not be read as minor version 20260724.
+                Some(m) => match m.parse::<u32>().ok()? {
+                    v if v >= 1000 => 0,
+                    v => v,
+                },
                 // New naming scheme (e.g. `claude-sonnet-5`) has no minor
                 // segment; treat it as `.0`. Legacy names put the version
                 // before the family and leave only an 8-digit date suffix
@@ -108,23 +115,33 @@ fn version_at_least(model: &str, major: u32, minor: u32) -> bool {
     claude_version(model).is_some_and(|(maj, min)| maj > major || (maj == major && min >= minor))
 }
 
-/// Whether the model belongs to the Fable family (Claude Fable 5 /
-/// Claude Mythos 5). These models use a new naming scheme without a minor
-/// version segment (e.g. `claude-fable-5`), so they are detected by family
-/// name instead of via `claude_version`. Both share the same API behavior:
+/// Whether the model belongs to the Fable family (Claude Fable 5 / 5.1 and
+/// Claude Mythos 5 / 5.1). These names (e.g. `claude-fable-5`,
+/// `claude-fable-5-1`) carry no Opus/Sonnet/Haiku family segment, so they are
+/// detected by family name instead of via `claude_version`. All share the same
+/// API behavior:
 /// thinking is always on (adaptive only), sampling parameters are removed,
 /// and effort supports the full low..=max range including xhigh.
 fn is_fable_family(model: &str) -> bool {
     model.contains("fable") || model.contains("mythos")
 }
 
+/// Whether the model belongs to the Claude 5 generation of the Opus, Sonnet
+/// or Haiku families (Opus 5 / 5.5, Sonnet 5 / 5.5, Haiku 5.5 and later).
+/// `claude_version` only parses those three families, so a parsed version of
+/// at least 5.0 already implies one of them.
+fn is_claude_5_plus(model: &str) -> bool {
+    version_at_least(model, 5, 0)
+}
+
 /// Whether the model rejects sampling parameters (`temperature`, `top_p`,
-/// `top_k`) with a 400 error. True for the Fable family, Opus 4.7+, and
-/// Sonnet 5+.
+/// `top_k`) with a 400 error. True for the Fable family, Opus 4.7+, and every
+/// Claude 5 generation model (Sonnet 5+ and Haiku 5.5 reject non-default
+/// values).
 fn sampling_params_removed(model: &str) -> bool {
     is_fable_family(model)
         || (model.contains("opus") && version_at_least(model, 4, 7))
-        || (model.contains("sonnet") && version_at_least(model, 5, 0))
+        || is_claude_5_plus(model)
 }
 
 // ---------------------------------------------------------------------------
@@ -136,7 +153,7 @@ fn default_max_tokens(model: &str) -> u32 {
     let has = |s: &str| model.contains(s);
     if is_fable_family(model)
         || (has("opus") && version_at_least(model, 4, 6))
-        || (has("sonnet") && version_at_least(model, 5, 0))
+        || is_claude_5_plus(model)
     {
         128_000
     } else if (has("opus") && version_at_least(model, 4, 5))
@@ -448,9 +465,10 @@ pub(crate) fn build_sampling_params(
 // ---------------------------------------------------------------------------
 
 /// Check if a model supports adaptive thinking (Fable family, Opus/Sonnet 4.6
-/// and later — including the new-scheme `claude-sonnet-5`).
+/// and later, and every Claude 5 generation model including Haiku 5.5).
 fn supports_adaptive(model: &str) -> bool {
     is_fable_family(model)
+        || is_claude_5_plus(model)
         || ((model.contains("opus") || model.contains("sonnet")) && version_at_least(model, 4, 6))
 }
 
@@ -465,23 +483,51 @@ fn supports_max_effort(model: &str) -> bool {
 }
 
 /// Check if a model supports effort = "xhigh" (Fable family, Opus 4.7+, and
-/// Sonnet 5+).
+/// every Claude 5 generation model).
 fn supports_xhigh_effort(model: &str) -> bool {
     is_fable_family(model)
         || (model.contains("opus") && version_at_least(model, 4, 7))
-        || (model.contains("sonnet") && version_at_least(model, 5, 0))
+        || is_claude_5_plus(model)
 }
 
-/// Whether the model runs adaptive thinking by default when the `thinking`
-/// key is omitted (Opus 5+ and Sonnet 5+). On those models turning thinking
-/// off requires an explicit `{"type": "disabled"}` config, and that config
-/// may not be combined with effort "xhigh" or "max" (400).
-///
-/// The Fable family is also always-on but rejects `disabled` outright, so it
-/// is deliberately excluded here — `claude_version` returns `None` for those
-/// names, which already keeps them out.
-fn thinking_on_by_default(model: &str) -> bool {
-    (model.contains("opus") || model.contains("sonnet")) && version_at_least(model, 5, 0)
+/// How a model's thinking is turned off when the user disables it
+/// (`enable_thinking = false` or `thinking_effort = "none"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ThinkingOffMode {
+    /// Thinking is off by default: omit the `thinking` key (pre-5 models).
+    Omit,
+    /// Thinking is always on and cannot be disabled — both `disabled` and
+    /// `budget_tokens` return 400. Omit the `thinking` key and steer depth
+    /// with effort only (Fable family, Opus 5.5+).
+    AlwaysOn,
+    /// Thinking runs by default when the key is omitted, so turning it off
+    /// needs an explicit `{"type": "disabled"}` (Opus 5, Sonnet 5, Haiku 5.5+).
+    Disabled,
+    /// Thinking runs by default and `disabled` returns 400; turning it off
+    /// needs `{"type": "between_tools"}` with no other field (Sonnet 5.5+).
+    BetweenTools,
+}
+
+impl ThinkingOffMode {
+    /// Whether the explicit off config is rejected (400) when combined with
+    /// effort "xhigh" or "max", validated per request.
+    fn rejects_high_effort(self) -> bool {
+        matches!(self, Self::Disabled | Self::BetweenTools)
+    }
+}
+
+/// Determine how thinking is turned off for `model`. Later versions inherit
+/// the newest behavior of their family.
+fn thinking_off_mode(model: &str) -> ThinkingOffMode {
+    if is_fable_family(model) || (model.contains("opus") && version_at_least(model, 5, 5)) {
+        ThinkingOffMode::AlwaysOn
+    } else if model.contains("sonnet") && version_at_least(model, 5, 5) {
+        ThinkingOffMode::BetweenTools
+    } else if is_claude_5_plus(model) {
+        ThinkingOffMode::Disabled
+    } else {
+        ThinkingOffMode::Omit
+    }
 }
 
 /// Build the thinking parameter for the request body.
@@ -491,19 +537,22 @@ pub(crate) fn build_thinking_params(
     model: &str,
 ) -> Option<serde_json::Value> {
     if !enable_thinking || thinking_effort == Some(ThinkingEffort::None) {
-        // Opus 5+ / Sonnet 5+ run adaptive thinking by default when the
-        // `thinking` key is omitted, so disabling requires an explicit
-        // `disabled` config. The Fable family rejects `disabled` (thinking is
-        // always on there) and older models default to off, so both omit the
-        // key entirely.
-        if thinking_on_by_default(model) {
-            return Some(serde_json::json!({"type": "disabled"}));
-        }
-        return None;
+        // Claude 5 generation models run adaptive thinking by default when the
+        // `thinking` key is omitted, so disabling requires an explicit config:
+        // `disabled` on Opus 5 / Sonnet 5 / Haiku 5.5, `between_tools` on
+        // Sonnet 5.5 (which rejects `disabled`). The Fable family and Opus 5.5
+        // cannot turn thinking off at all (any non-adaptive config is a 400),
+        // and older models default to off, so those omit the key entirely.
+        return match thinking_off_mode(model) {
+            ThinkingOffMode::Disabled => Some(serde_json::json!({"type": "disabled"})),
+            ThinkingOffMode::BetweenTools => Some(serde_json::json!({"type": "between_tools"})),
+            ThinkingOffMode::AlwaysOn | ThinkingOffMode::Omit => None,
+        };
     }
 
     if supports_adaptive(model) {
-        // Fable family / Opus 4.6+ / Sonnet 4.6+: use adaptive thinking with
+        // Fable family / Opus 4.6+ / Sonnet 4.6+ / Claude 5 generation
+        // (including Haiku 5.5): use adaptive thinking with
         // summarized display so the model emits thinking summary blocks the
         // TUI can render. Note: the Fable family rejects any non-adaptive
         // thinking config (`disabled` and `budget_tokens` both return 400);
@@ -536,21 +585,27 @@ pub(crate) fn build_output_config(
     thinking_effort: Option<ThinkingEffort>,
     model: &str,
 ) -> Option<serde_json::Value> {
-    // The Fable family's thinking is always on regardless of enable_thinking,
-    // so a configured effort must still be honored there.
-    if !supports_effort(model) || (!enable_thinking && !is_fable_family(model)) {
+    let off_mode = thinking_off_mode(model);
+    let always_on = off_mode == ThinkingOffMode::AlwaysOn;
+
+    // On always-on models (Fable family, Opus 5.5+) thinking runs regardless
+    // of enable_thinking, so a configured effort must still be honored there.
+    if !supports_effort(model) || (!enable_thinking && !always_on) {
         return None;
     }
 
-    // Opus 5+ / Sonnet 5+ reject `thinking: {type: "disabled"}` combined with
-    // effort "xhigh" or "max" with a 400, validated per request. Whenever
-    // `build_thinking_params` would emit that `disabled` config, cap the effort
-    // at "high" so the two builders can never produce the rejected pair.
+    // The explicit off configs (`disabled` / `between_tools`) are rejected
+    // with a 400 when combined with effort "xhigh" or "max". Whenever
+    // `build_thinking_params` would emit one of them, cap the effort at
+    // "high" so the two builders can never produce the rejected pair.
     let thinking_off = !enable_thinking || thinking_effort == Some(ThinkingEffort::None);
-    let cap_at_high = thinking_off && thinking_on_by_default(model);
+    let cap_at_high = thinking_off && off_mode.rejects_high_effort();
 
     thinking_effort.and_then(|effort| {
         let effort_str = match effort {
+            // Always-on models cannot turn thinking off; the closest match to
+            // an explicit "none" is the lowest effort level.
+            ThinkingEffort::None if always_on => "low",
             ThinkingEffort::None => return None,
             ThinkingEffort::Low => "low",
             ThinkingEffort::Medium => "medium",
@@ -2285,14 +2340,15 @@ mod tests {
         assert_eq!(claude_version("claude-opus-5-0"), Some((5, 0)));
         // New naming scheme without a minor segment → parsed as `.0`.
         assert_eq!(claude_version("claude-sonnet-5"), Some((5, 0)));
-        assert_eq!(
-            claude_version("claude-sonnet-5-20260630"),
-            Some((5, 20260630))
-        );
-        assert_eq!(
-            claude_version("claude-sonnet-5@20260630"),
-            Some((5, 20260630))
-        );
+        // A snapshot date after a dateless name is not a minor version, so
+        // `claude-opus-5-<date>` must never look like Opus 5.5+.
+        assert_eq!(claude_version("claude-sonnet-5-20260630"), Some((5, 0)));
+        assert_eq!(claude_version("claude-sonnet-5@20260630"), Some((5, 0)));
+        assert_eq!(claude_version("claude-opus-5-20260724"), Some((5, 0)));
+        // Claude 5.5 generation names keep their minor segment.
+        assert_eq!(claude_version("claude-opus-5-5"), Some((5, 5)));
+        assert_eq!(claude_version("claude-sonnet-5-5-20261001"), Some((5, 5)));
+        assert_eq!(claude_version("claude-haiku-5-5@20261001"), Some((5, 5)));
         // Legacy ordering (family after the version) is not parsed → None.
         assert_eq!(claude_version("claude-3-5-sonnet-20241022"), None);
     }
@@ -2719,13 +2775,20 @@ mod tests {
         assert!(is_fable_family("claude-mythos-5"));
         assert!(is_fable_family("claude-fable-5-20260601"));
         assert!(is_fable_family("claude-fable-5@20260601"));
+        assert!(is_fable_family("claude-fable-5-1"));
+        assert!(is_fable_family("claude-mythos-5-1"));
         assert!(!is_fable_family("claude-opus-4-8"));
         assert!(!is_fable_family("claude-sonnet-4-6"));
     }
 
     #[test]
     fn fable_capabilities() {
-        for model in ["claude-fable-5", "claude-mythos-5"] {
+        for model in [
+            "claude-fable-5",
+            "claude-mythos-5",
+            "claude-fable-5-1",
+            "claude-mythos-5-1",
+        ] {
             assert!(supports_adaptive(model));
             assert!(supports_effort(model));
             assert!(supports_max_effort(model));
@@ -2740,8 +2803,12 @@ mod tests {
         assert!(supports_xhigh_effort("claude-opus-4-7"));
         assert!(supports_xhigh_effort("claude-opus-4-8"));
         assert!(supports_xhigh_effort("claude-sonnet-5"));
+        assert!(supports_xhigh_effort("claude-opus-5-5"));
+        assert!(supports_xhigh_effort("claude-sonnet-5-5"));
+        assert!(supports_xhigh_effort("claude-haiku-5-5"));
         assert!(!supports_xhigh_effort("claude-opus-4-6"));
         assert!(!supports_xhigh_effort("claude-sonnet-4-6"));
+        assert!(!supports_xhigh_effort("claude-haiku-4-5"));
     }
 
     #[test]
@@ -2749,8 +2816,12 @@ mod tests {
         assert!(sampling_params_removed("claude-opus-4-7"));
         assert!(sampling_params_removed("claude-opus-4-8"));
         assert!(sampling_params_removed("claude-sonnet-5"));
+        assert!(sampling_params_removed("claude-opus-5-5"));
+        assert!(sampling_params_removed("claude-sonnet-5-5"));
+        assert!(sampling_params_removed("claude-haiku-5-5"));
         assert!(!sampling_params_removed("claude-opus-4-6"));
         assert!(!sampling_params_removed("claude-sonnet-4-6"));
+        assert!(!sampling_params_removed("claude-haiku-4-5"));
     }
 
     #[test]
@@ -2814,7 +2885,11 @@ mod tests {
             assert!(supports_max_effort(model), "{model}");
             assert!(supports_xhigh_effort(model), "{model}");
             assert!(sampling_params_removed(model), "{model}");
-            assert!(thinking_on_by_default(model), "{model}");
+            assert_eq!(
+                thinking_off_mode(model),
+                ThinkingOffMode::Disabled,
+                "{model}"
+            );
             assert_eq!(default_max_tokens(model), 128_000, "{model}");
             // Thinking uses adaptive (budget_tokens would 400), and asks for
             // summarized display since the API default is "omitted".
@@ -2825,25 +2900,46 @@ mod tests {
     }
 
     #[test]
-    fn thinking_on_by_default_only_for_5_and_later() {
-        assert!(thinking_on_by_default("claude-opus-5"));
-        assert!(thinking_on_by_default("claude-sonnet-5"));
-        assert!(!thinking_on_by_default("claude-opus-4-8"));
-        assert!(!thinking_on_by_default("claude-opus-4-7"));
-        assert!(!thinking_on_by_default("claude-opus-4-6"));
-        assert!(!thinking_on_by_default("claude-sonnet-4-6"));
-        assert!(!thinking_on_by_default("claude-haiku-4-5"));
-        // The Fable family is always-on too, but rejects an explicit
-        // `disabled`, so it must not be treated as "disable-able".
-        assert!(!thinking_on_by_default("claude-fable-5"));
-        assert!(!thinking_on_by_default("claude-mythos-5"));
+    fn thinking_off_mode_by_model() {
+        use ThinkingOffMode::*;
+        let cases = [
+            // Pre-5 models default to off.
+            ("claude-opus-4-8", Omit),
+            ("claude-opus-4-7", Omit),
+            ("claude-opus-4-6", Omit),
+            ("claude-sonnet-4-6", Omit),
+            ("claude-haiku-4-5", Omit),
+            ("claude-haiku-4-5-20251001", Omit),
+            // Opus 5 / Sonnet 5 / Haiku 5.5 think by default, `disabled` works.
+            ("claude-opus-5", Disabled),
+            ("claude-sonnet-5", Disabled),
+            ("claude-haiku-5-5", Disabled),
+            ("claude-haiku-5-5@20261001", Disabled),
+            // Sonnet 5.5 rejects `disabled`; `between_tools` turns it off.
+            ("claude-sonnet-5-5", BetweenTools),
+            ("claude-sonnet-5-5@20261001", BetweenTools),
+            // Fable family and Opus 5.5 cannot turn thinking off at all.
+            ("claude-fable-5", AlwaysOn),
+            ("claude-mythos-5", AlwaysOn),
+            ("claude-fable-5-1", AlwaysOn),
+            ("claude-mythos-5-1", AlwaysOn),
+            ("claude-opus-5-5", AlwaysOn),
+            ("claude-opus-5-5@20261001", AlwaysOn),
+            // Later versions inherit the newest behavior of their family.
+            ("claude-opus-6", AlwaysOn),
+            ("claude-sonnet-6", BetweenTools),
+        ];
+        for (model, expected) in cases {
+            assert_eq!(thinking_off_mode(model), expected, "{model}");
+        }
     }
 
     #[test]
     fn disabled_thinking_never_pairs_with_xhigh_or_max_effort() {
-        // Opus 5+ / Sonnet 5+ return 400 for `thinking: {type: "disabled"}`
-        // combined with effort "xhigh" or "max". Lock the invariant across
-        // every (enable_thinking, effort) combination the config can produce.
+        // Opus 5 / Sonnet 5 / Haiku 5.5 return 400 for `thinking: {type:
+        // "disabled"}` combined with effort "xhigh" or "max", and Sonnet 5.5
+        // does the same for `between_tools`. Lock the invariant across every
+        // (enable_thinking, effort) combination the config can produce.
         let efforts = [
             None,
             Some(ThinkingEffort::None),
@@ -2855,14 +2951,20 @@ mod tests {
         ];
         for model in [
             "claude-opus-5",
+            "claude-opus-5-5",
             "claude-sonnet-5",
+            "claude-sonnet-5-5",
+            "claude-haiku-5-5",
             "claude-opus-4-8",
             "claude-fable-5",
+            "claude-fable-5-1",
         ] {
             for enable_thinking in [false, true] {
                 for effort in efforts {
                     let thinking = build_thinking_params(enable_thinking, effort, model);
-                    let disabled = thinking.as_ref().is_some_and(|t| t["type"] == "disabled");
+                    let disabled = thinking
+                        .as_ref()
+                        .is_some_and(|t| t["type"] == "disabled" || t["type"] == "between_tools");
                     if !disabled {
                         continue;
                     }
@@ -2879,6 +2981,122 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ---- Claude 5.5 generation tests ----
+
+    #[test]
+    fn claude_5_5_generation_capabilities() {
+        // Opus 5.5, Sonnet 5.5 and Haiku 5.5 parse as version 5.5 and must all
+        // be adaptive, effort/xhigh/max-capable, sampling-free 128k models.
+        for model in [
+            "claude-opus-5-5",
+            "claude-sonnet-5-5",
+            "claude-haiku-5-5",
+            "claude-opus-5-5@20261001",
+            "claude-haiku-5-5@20261001",
+        ] {
+            assert_eq!(claude_version(model), Some((5, 5)), "{model}");
+            assert!(supports_adaptive(model), "{model}");
+            assert!(supports_effort(model), "{model}");
+            assert!(supports_max_effort(model), "{model}");
+            assert!(supports_xhigh_effort(model), "{model}");
+            assert!(sampling_params_removed(model), "{model}");
+            assert_eq!(default_max_tokens(model), 128_000, "{model}");
+            let val = build_thinking_params(true, None, model).unwrap();
+            assert_eq!(val["type"], "adaptive", "{model}");
+            assert_eq!(val["display"], "summarized", "{model}");
+            assert!(val.get("budget_tokens").is_none(), "{model}");
+            let output = build_output_config(true, Some(ThinkingEffort::Max), model);
+            assert_eq!(output.unwrap()["effort"], "max", "{model}");
+        }
+    }
+
+    #[test]
+    fn opus_5_5_thinking_cannot_be_disabled() {
+        // Opus 5.5 rejects `disabled` and `budget_tokens` at every effort
+        // level, so turning thinking off must omit the key entirely.
+        let model = "claude-opus-5-5";
+        assert!(build_thinking_params(false, None, model).is_none());
+        assert!(build_thinking_params(false, Some(ThinkingEffort::Max), model).is_none());
+        assert!(build_thinking_params(true, Some(ThinkingEffort::None), model).is_none());
+        // Thinking still runs, so a configured effort is honored without the
+        // xhigh/max cap that applies to the explicit off configs.
+        let output = build_output_config(false, Some(ThinkingEffort::Xhigh), model);
+        assert_eq!(output.unwrap()["effort"], "xhigh");
+        // An explicit "none" maps to the lowest effort instead.
+        let output = build_output_config(true, Some(ThinkingEffort::None), model);
+        assert_eq!(output.unwrap()["effort"], "low");
+        // No configured effort leaves the API default in place.
+        assert!(build_output_config(false, None, model).is_none());
+    }
+
+    #[test]
+    fn sonnet_5_5_disabled_uses_between_tools() {
+        // Sonnet 5.5 returns 400 for `disabled`; `between_tools` (with no
+        // other field) is the way to turn thinking off.
+        for model in ["claude-sonnet-5-5", "claude-sonnet-5-5@20261001"] {
+            for (enable, effort) in [(false, None), (true, Some(ThinkingEffort::None))] {
+                let val = build_thinking_params(enable, effort, model).unwrap();
+                assert_eq!(val, serde_json::json!({"type": "between_tools"}), "{model}");
+            }
+            // `between_tools` is only accepted at effort "high" or below.
+            let output = build_output_config(false, Some(ThinkingEffort::Max), model);
+            assert!(
+                output.is_none(),
+                "{model}: effort is gated by enable_thinking"
+            );
+            let output = build_output_config(true, Some(ThinkingEffort::Xhigh), model);
+            assert_eq!(output.unwrap()["effort"], "xhigh", "{model}");
+        }
+    }
+
+    #[test]
+    fn haiku_5_5_disabled_sends_explicit_disabled() {
+        // Haiku 5.5 thinks by default and accepts `disabled` (at effort
+        // "high" or below), unlike Haiku 4.5 where omitting the key is off.
+        let model = "claude-haiku-5-5";
+        let val = build_thinking_params(false, None, model).unwrap();
+        assert_eq!(val, serde_json::json!({"type": "disabled"}));
+        assert!(build_thinking_params(false, None, "claude-haiku-4-5").is_none());
+        // Haiku 4.5 keeps the budget_tokens path.
+        let val = build_thinking_params(true, None, "claude-haiku-4-5").unwrap();
+        assert_eq!(val["type"], "enabled");
+        assert!(
+            build_output_config(true, Some(ThinkingEffort::High), "claude-haiku-4-5").is_none()
+        );
+    }
+
+    #[test]
+    fn sampling_claude_5_5_omits_sampling_params() {
+        let sampling = SamplingConfig {
+            temperature: Some(0.5),
+            top_p: Some(0.9),
+            top_k: Some(40),
+            ..Default::default()
+        };
+        for model in ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"] {
+            let params = build_sampling_params(&sampling, model, false);
+            assert!(!params.contains_key("temperature"), "{model}");
+            assert!(!params.contains_key("top_p"), "{model}");
+            assert!(!params.contains_key("top_k"), "{model}");
+            assert_eq!(params["max_tokens"], 128_000, "{model}");
+        }
+    }
+
+    #[test]
+    fn output_config_always_on_none_effort_maps_to_low() {
+        // Always-on models cannot turn thinking off, so an explicit "none"
+        // effort maps to "low" instead of silently using the API default.
+        for model in ["claude-fable-5", "claude-fable-5-1", "claude-opus-5-5"] {
+            for enable_thinking in [false, true] {
+                let output =
+                    build_output_config(enable_thinking, Some(ThinkingEffort::None), model);
+                assert_eq!(output.unwrap()["effort"], "low", "{model}");
+            }
+        }
+        // Models that can turn thinking off still send no effort for "none".
+        assert!(build_output_config(true, Some(ThinkingEffort::None), "claude-opus-5").is_none());
     }
 
     #[test]

@@ -378,7 +378,8 @@ fn is_gemini_2_5(model: &str) -> bool {
 
 /// Build thinkingConfig for the generationConfig.
 ///
-/// - Gemini 3.x (default): uses `thinkingLevel` enum (low/medium/high)
+/// - Gemini 3.x / 4.x (default, e.g. `gemini-4-argon`): uses `thinkingLevel`
+///   enum (low/medium/high)
 /// - Gemini 2.5: uses `thinkingBudget` integer
 /// - Unknown models: defaults to thinkingLevel
 fn build_thinking_config(
@@ -1233,6 +1234,22 @@ mod tests {
     fn thinking_gemini_2_5_effort_none_dynamic() {
         let config = build_thinking_config(None, "gemini-2.5-pro");
         assert_eq!(config["thinkingBudget"], -1);
+    }
+
+    #[test]
+    fn thinking_gemini_4_argon_uses_level() {
+        // Gemini 4 Argon accepts thinkingLevel low/medium/high (no budget).
+        for (effort, level) in [
+            (ThinkingEffort::Low, "low"),
+            (ThinkingEffort::Medium, "medium"),
+            (ThinkingEffort::High, "high"),
+            (ThinkingEffort::Max, "high"),
+        ] {
+            let config = build_thinking_config(Some(effort), "gemini-4-argon");
+            assert_eq!(config["thinkingLevel"], level);
+            assert_eq!(config["includeThoughts"], true);
+            assert!(config.get("thinkingBudget").is_none());
+        }
     }
 
     #[test]

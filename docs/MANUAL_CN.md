@@ -562,15 +562,16 @@ enable_thinking = false          # 请求显示推理摘要（默认 false）
 - 配置向导会询问推理力度和是否显示摘要；Pro 模式与 reasoning context 仍需手工编辑配置。
 - krew 0.12.0 暂不暴露 GPT-5.6 原生 Ultra 模式、Provider 侧多 Agent 编排和 PTC 控制。
 
-**Claude Fable 5 / Mythos 5 注意事项**（`claude-fable-5`、`claude-mythos-5`）：
+**Claude Fable 5 / 5.1、Mythos 5 / 5.1 注意事项**（`claude-fable-5`、`claude-fable-5-1`、`claude-mythos-5`、`claude-mythos-5-1`）：
 
+- `claude-fable-5-1` / `claude-mythos-5-1` 是 5.0 的后继版本，价格与请求参数相同，krew 对四者的处理完全一致。
 - 思考永远开启。`enable_thinking = false` 时 krew 省略 thinking 参数（合法）；`enable_thinking = true` 时使用 adaptive thinking 并以摘要形式在 TUI 中渲染思考内容。
-- 这两个模型不支持 `sampling.temperature` / `top_p` / `top_k`（API 直接返回 400）。krew 会自动忽略这些配置并打印警告日志。Opus 4.7+ 同样如此。
-- `thinking_effort` 支持完整档位，包括 `xhigh` 和 `max`。
+- 这些模型不支持 `sampling.temperature` / `top_p` / `top_k`（API 直接返回 400）。krew 会自动忽略这些配置并打印警告日志。Opus 4.7+ 同样如此。
+- `thinking_effort` 支持完整档位，包括 `xhigh` 和 `max`。由于思考无法关闭，`thinking_effort = "none"` 会以 `low` 发送。
 - 安全分类器可能拒绝请求（`stop_reason: "refusal"`）。krew 会将其作为 agent 错误展示（含拒绝类别），被拒轮次的部分输出会被丢弃。
 - 新 tokenizer：相同内容的 token 用量比 Opus 系模型多约 30%，请留意 `auto_compact_threshold` 设置。
 - 要求 Anthropic 组织开启 30 天数据保留；零数据保留（ZDR）组织的所有请求都会返回 400。定价：输入 $10 / 输出 $50 每百万 token。
-- `claude-mythos-5` 仅 Project Glasswing 组织可用。
+- `claude-mythos-5` / `claude-mythos-5-1` 仅 Project Glasswing 组织可用。
 
 **Claude Opus 5 注意事项**（`claude-opus-5`）：
 
@@ -592,6 +593,37 @@ enable_thinking = false          # 请求显示推理摘要（默认 false）
 - 新 tokenizer：相同内容的 token 用量比 Sonnet 4.6 多约 30%，请留意 `auto_compact_threshold` 设置。
 - 默认最大输出为 128,000（相比 Sonnet 4.6 的 64,000 提升），如需收紧可通过 `sampling.max_tokens` 覆盖。
 - 省略 thinking 参数时默认开启思考，因此 `enable_thinking = false` 时 krew 会显式发送 `thinking = disabled`，且 `xhigh` / `max` 会降级为 `high` —— 规则与上面的 Opus 5 相同。
+
+**Claude Opus 5.5 注意事项**（`claude-opus-5-5`）：
+
+- krew 将其识别为 adaptive thinking 模型，`thinking_effort` 支持完整档位，包括 `xhigh` 和 `max`。
+- **思考无法关闭。** 无论 effort 为何值，API 都会以 400 拒绝 `thinking = disabled` 和 `budget_tokens`。`enable_thinking = false` 时 krew 省略 thinking 参数（模型仍会思考，只是不显示摘要）；`thinking_effort = "none"` 会以最接近的 `low` 发送。
+- 由于思考始终开启，即使 `enable_thinking = false`，已配置的 `thinking_effort` 也会照常发送，且不受 `xhigh` / `max` 降级限制。
+- API 自身的 `effort` 默认值是 `medium`，比 Opus 5 的 `high` 低一档。如果之前依赖默认值，请显式配置 `thinking_effort`。
+- 不支持 `sampling.temperature` / `top_p` / `top_k`；krew 会自动忽略并打印警告日志。默认最大输出 128,000。
+- 定价：输入 $4 / 输出 $20 每百万 token；1M 上下文，最大输出 128k。
+
+**Claude Sonnet 5.5 注意事项**（`claude-sonnet-5-5`）：
+
+- 能力与 Sonnet 5 相同：adaptive thinking、完整 `thinking_effort` 档位、不支持采样参数、默认最大输出 128k。
+- API 会以 400 拒绝 `thinking = disabled`。`enable_thinking = false`（或 `thinking_effort = "none"`）时 krew 改为发送 `thinking = between_tools`，该配置仅在 effort 不高于 `high` 时被接受，因此此时 `xhigh` / `max` 会降级为 `high`。
+- effort 默认仍为 `high`，但各档位相对 Sonnet 5 重新校准过，建议重新调整 `thinking_effort`（agent 编码类从 `medium` 开始，聊天类用 `low`）。
+- 定价：输入 $2 / 输出 $10 每百万 token；1M 上下文。
+
+**Claude Haiku 5.5 注意事项**（`claude-haiku-5-5`）：
+
+- 与使用 `budget_tokens` 的 Haiku 4.5 不同，Haiku 5.5 是 adaptive thinking 模型，`thinking_effort` 支持完整档位，包括 `xhigh` 和 `max`。
+- 省略 thinking 参数时默认开启思考，因此 `enable_thinking = false` 时 krew 会显式发送 `thinking = disabled`，且 `xhigh` / `max` 会降级为 `high` —— 规则与 Opus 5 相同。
+- API 自身的 `effort` 默认值是 `medium`。
+- `sampling.temperature` / `top_p` / `top_k` 的非默认值会被拒绝，krew 会自动忽略。默认最大输出 128,000。
+- 定价：100K token 以内的提示词输入 $0.10 / 输出 $0.50 每百万 token（超出部分 $0.50 / $2.50）；1M 上下文。
+
+**Gemini 4 Argon 注意事项**（`gemini-4-argon`）：
+
+- 正式版模型 ID，没有 `-preview` 后缀；Gemini API（仅付费层级）和 Vertex AI 均可使用。
+- `thinking_effort` 映射到 `thinkingLevel`：`low` → low，`medium` → medium，`high` / `xhigh` / `max` → high。`enable_thinking = true` 且未配置 `thinking_effort` 时 krew 发送 `high`（模型自身默认是 `medium`）。
+- 模型会忽略 `sampling.temperature` / `top_p` / `top_k`（不会报错）。
+- 单次请求最大输出 65,536 token，`sampling.max_tokens` 同时包含思考和正文，建议不低于 32,768。不支持显式上下文缓存（krew 未使用）。
 
 ### 5.4 Provider 配置
 

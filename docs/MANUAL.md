@@ -563,15 +563,16 @@ enable_thinking = false          # Request a visible reasoning summary (default:
 - The setup wizard exposes reasoning effort and summary display. Pro mode and reasoning context remain advanced, hand-edited settings.
 - GPT-5.6-native Ultra mode, provider multi-agent orchestration, and PTC controls are not exposed in krew 0.12.0.
 
-**Claude Fable 5 / Mythos 5 notes** (`claude-fable-5`, `claude-mythos-5`):
+**Claude Fable 5 / 5.1 and Mythos 5 / 5.1 notes** (`claude-fable-5`, `claude-fable-5-1`, `claude-mythos-5`, `claude-mythos-5-1`):
 
+- `claude-fable-5-1` / `claude-mythos-5-1` succeed the 5.0 models at the same price with the same request surface; krew handles all four identically.
 - Thinking is always on. With `enable_thinking = false` krew omits the thinking parameter (valid); with `enable_thinking = true` it uses adaptive thinking with summarized display so thinking summaries render in the TUI.
 - `sampling.temperature` / `top_p` / `top_k` are not supported by these models (the API rejects them with 400). krew silently omits them and logs a warning if configured. Same applies to Opus 4.7+.
-- `thinking_effort` supports the full range including `xhigh` and `max`.
+- `thinking_effort` supports the full range including `xhigh` and `max`. Because thinking cannot be turned off, `thinking_effort = "none"` is sent as `low`.
 - Safety classifiers may refuse a request (`stop_reason: "refusal"`). krew surfaces this as an agent error with the refusal category; any partial output of the refused turn is discarded.
 - New tokenizer: the same content uses roughly 30% more tokens than Opus-tier models — watch your `auto_compact_threshold`.
 - Requires 30-day data retention on your Anthropic organization; zero-data-retention orgs get 400 on all requests. Pricing: $10/$50 per MTok input/output.
-- `claude-mythos-5` is only available to Project Glasswing organizations.
+- `claude-mythos-5` / `claude-mythos-5-1` are only available to Project Glasswing organizations.
 
 **Claude Opus 5 notes** (`claude-opus-5`):
 
@@ -593,6 +594,37 @@ enable_thinking = false          # Request a visible reasoning summary (default:
 - New tokenizer: the same content uses roughly 30% more tokens than Sonnet 4.6 — watch your `auto_compact_threshold`.
 - Default max output is 128,000 (raised from 64,000 on Sonnet 4.6); override via `sampling.max_tokens` if you want a tighter cap.
 - Thinking runs by default when the thinking parameter is omitted, so `enable_thinking = false` makes krew send an explicit `thinking = disabled`, with `xhigh` / `max` effort capped to `high` — same rules as Opus 5 above.
+
+**Claude Opus 5.5 notes** (`claude-opus-5-5`):
+
+- krew recognizes it as an adaptive-thinking model supporting the full `thinking_effort` range including `xhigh` and `max`.
+- **Thinking cannot be turned off.** The API rejects both `thinking = disabled` and `budget_tokens` with 400 at every effort level. With `enable_thinking = false` krew omits the thinking parameter (the model still thinks, but no summary is shown); `thinking_effort = "none"` is sent as `low`, the closest available setting.
+- Because thinking always runs, a configured `thinking_effort` is sent even when `enable_thinking = false`, without the `xhigh` / `max` cap.
+- The API's own `effort` default is `medium`, one level below Opus 5's `high`. Set `thinking_effort` explicitly if you relied on the old default.
+- `sampling.temperature` / `top_p` / `top_k` are not supported; krew silently omits them and logs a warning if configured. Default max output is 128,000.
+- Pricing: $4/$20 per MTok input/output; 1M context, 128k max output.
+
+**Claude Sonnet 5.5 notes** (`claude-sonnet-5-5`):
+
+- Same capability set as Sonnet 5: adaptive thinking, the full `thinking_effort` range, no sampling parameters, 128k default output.
+- The API rejects `thinking = disabled` with 400. With `enable_thinking = false` (or `thinking_effort = "none"`) krew sends `thinking = between_tools` instead, which is only accepted at effort `high` or below, so `xhigh` / `max` are capped to `high` in that case.
+- Effort still defaults to `high`, but the levels are recalibrated from Sonnet 5; re-tune `thinking_effort` (start at `medium` for agentic coding, `low` for chat).
+- Pricing: $2/$10 per MTok input/output; 1M context.
+
+**Claude Haiku 5.5 notes** (`claude-haiku-5-5`):
+
+- Unlike Haiku 4.5 (which uses `budget_tokens`), Haiku 5.5 is an adaptive-thinking model: `thinking_effort` supports the full range including `xhigh` and `max`.
+- Thinking runs by default when the thinking parameter is omitted, so `enable_thinking = false` makes krew send an explicit `thinking = disabled`, with `xhigh` / `max` effort capped to `high` — same rules as Opus 5.
+- The API's own `effort` default is `medium`.
+- `sampling.temperature` / `top_p` / `top_k` non-default values are rejected; krew omits them. Default max output is 128,000.
+- Pricing: $0.10/$0.50 per MTok input/output for prompts up to 100K tokens ($0.50/$2.50 beyond); 1M context.
+
+**Gemini 4 Argon notes** (`gemini-4-argon`):
+
+- Stable model ID without a `-preview` suffix; available on the Gemini API (paid tier only) and Vertex AI.
+- `thinking_effort` maps to `thinkingLevel`: `low` → low, `medium` → medium, `high` / `xhigh` / `max` → high. With `enable_thinking = true` and no `thinking_effort`, krew sends `high` (the model's own default is `medium`).
+- `sampling.temperature` / `top_p` / `top_k` are ignored by the model (not rejected).
+- Max output is 65,536 tokens per request and `sampling.max_tokens` covers thinking plus response text, so keep it at 32,768 or above. Explicit context caching is not supported (krew does not use it).
 
 ### 5.4 Provider configuration
 
