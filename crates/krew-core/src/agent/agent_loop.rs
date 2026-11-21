@@ -32,6 +32,10 @@ pub(crate) struct AgentLoopContext<'a> {
     pub(crate) cwd: &'a str,
     /// Whisper targets to stamp on all produced messages (None = not a whisper).
     pub(crate) whisper_targets: Option<Vec<String>>,
+    /// Optional USD cap; each round's usage is priced and booked on it.
+    pub(crate) budget: Option<&'a llm_budget::AgentBudget>,
+    /// Model name used to price usage against `budget`.
+    pub(crate) model: &'a str,
 }
 
 /// Run the agent's tool-call loop: stream LLM → execute tools → re-call LLM.
@@ -52,6 +56,20 @@ pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
     let mut all_server_tool_uses: Vec<krew_llm::ServerToolUseInfo> = Vec::new();
 
     for round in 0..=ctx.max_rounds {
+        if let Some(budget) = ctx.budget
+            && budget.is_exhausted()
+        {
+            let _ = ctx.tx.send(AgentEvent::Error {
+                message: format!(
+                    "Agent budget exhausted: spent ${:.4} of ${:.4}",
+                    budget.spent_usd(),
+                    budget.limit_usd()
+                ),
+                intermediate_messages: std::mem::take(&mut tool_round_messages),
+            });
+            return;
+        }
+
         // Call the LLM.
         let stream = match ctx
             .client
@@ -80,6 +98,21 @@ pub(crate) async fn run_agent_loop(ctx: &AgentLoopContext<'_>, messages: &mut Ve
             total_usage.prompt_tokens += usage.prompt_tokens;
             total_usage.completion_tokens += usage.completion_tokens;
             total_usage.total_tokens += usage.total_tokens;
+            if let Some(budget) = ctx.budget
+                && let Err(e) = budget.record(
+                    ctx.model,
+                    &llm_budget::Usage::new(
+                        usage.prompt_tokens.into(),
+                        usage.completion_tokens.into(),
+                    ),
+                )
+            {
+                let _ = ctx.tx.send(AgentEvent::Error {
+                    message: e.to_string(),
+                    intermediate_messages: std::mem::take(&mut tool_round_messages),
+                });
+                return;
+            }
         }
 
         // If there was a stream error, stop and report with collected messages.
@@ -850,6 +883,8 @@ mod tests {
             ask_rules: &[],
             cwd: ".",
             whisper_targets: None,
+            budget: None,
+            model: "",
         };
         let mut messages = vec![ChatMessage::text(krew_llm::ChatRole::User, "do it", None)];
         run_agent_loop(&ctx, &mut messages).await;
@@ -898,5 +933,71 @@ mod tests {
             vec![block_round1],
             "round 2 must replay round 1's thinking_blocks back to the provider"
         );
+    }
+
+    #[tokio::test]
+    async fn agent_loop_stops_when_usd_budget_is_spent() {
+        // Every round asks for another tool call, so only the budget can stop it
+        // before max_rounds. 1M gpt-4o input tokens costs more than the $0.01 cap.
+        let tool_round = || {
+            vec![
+                StreamEvent::ToolCall {
+                    id: "call_1".to_string(),
+                    name: "read_file".to_string(),
+                    arguments: r#"{"path":"a"}"#.to_string(),
+                    thought_signature: None,
+                },
+                StreamEvent::Done(Usage {
+                    prompt_tokens: 1_000_000,
+                    completion_tokens: 0,
+                    total_tokens: 1_000_000,
+                }),
+            ]
+        };
+        let canned = Arc::new(CannedClient {
+            rounds: Mutex::new((0..10).map(|_| tool_round()).collect()),
+            calls: Mutex::new(Vec::new()),
+        });
+        let client: Arc<dyn LlmClient> = canned.clone();
+        let tools = Arc::new(krew_tools::ToolRegistry::empty());
+        let sampling = SamplingConfig::default();
+        let on_retry = |_: RetryInfo| {};
+        let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();
+        let approval_cache = ApprovalCache::new();
+        let budget = llm_budget::AgentBudget::builder("claude", 0.01)
+            .build()
+            .unwrap();
+
+        let ctx = AgentLoopContext {
+            client: &client,
+            tools: &tools,
+            tool_defs: &[],
+            sampling: &sampling,
+            on_retry: &on_retry,
+            tx: &tx,
+            agent_name: "claude",
+            max_rounds: 8,
+            approval_mode: SharedApprovalMode::new(ApprovalMode::FullAuto),
+            approval_cache: &approval_cache,
+            allow_rules: &[],
+            deny_rules: &[],
+            ask_rules: &[],
+            cwd: ".",
+            whisper_targets: None,
+            budget: Some(&budget),
+            model: "gpt-4o",
+        };
+        let mut messages = vec![ChatMessage::text(krew_llm::ChatRole::User, "do it", None)];
+        run_agent_loop(&ctx, &mut messages).await;
+        drop(tx);
+
+        let mut error = None;
+        while let Some(event) = rx.recv().await {
+            if let AgentEvent::Error { message, .. } = event {
+                error = Some(message);
+            }
+        }
+        assert_eq!(canned.calls.lock().unwrap().len(), 1);
+        assert!(error.unwrap().contains("budget exhausted"));
     }
 }

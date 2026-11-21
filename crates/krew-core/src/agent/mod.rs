@@ -52,6 +52,8 @@ pub struct AgentRuntime {
     pub sub_agent_catalog: Option<String>,
     /// Language for agent responses (injected into system prompt when set).
     pub language: Option<String>,
+    /// USD budget from `max_cost_usd`, shared across this agent's turns.
+    pub budget: Option<Arc<llm_budget::AgentBudget>>,
 }
 
 /// Information about a peer agent, used for AI-to-AI prompt injection.
@@ -135,6 +137,8 @@ impl AgentRuntime {
         let deny_rules = self.deny_rules.clone();
         let ask_rules = self.ask_rules.clone();
         let cwd = self.cwd.clone();
+        let budget = self.budget.clone();
+        let model = self.config.model.clone();
         let exclude: Vec<String> = exclude_tools
             .unwrap_or(&[])
             .iter()
@@ -184,6 +188,8 @@ impl AgentRuntime {
                 ask_rules: &ask_rules,
                 cwd: &cwd,
                 whisper_targets,
+                budget: budget.as_deref(),
+                model: &model,
             };
             run_agent_loop(&ctx, &mut full_messages).await;
         });

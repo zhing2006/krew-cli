@@ -250,6 +250,13 @@ pub fn init_agents(config: &Config, cwd: Option<PathBuf>) -> InitAgentsResult {
             skill_catalog: skill_catalog.clone(),
             sub_agent_catalog: sub_agent_catalog.clone(),
             language: config.settings.language.clone(),
+            budget: agent_config.max_cost_usd.and_then(|usd| {
+                llm_budget::AgentBudget::builder(&agent_config.name, usd)
+                    .build()
+                    .map_err(|e| warnings.push(format!("{}: {e}", agent_config.name)))
+                    .ok()
+                    .map(Arc::new)
+            }),
         };
 
         agents.insert(agent_config.name.clone(), runtime);
@@ -325,6 +332,7 @@ mod tests {
             thinking_effort: None,
             reasoning_mode: None,
             reasoning_context: None,
+            max_cost_usd: None,
         });
         config.providers.insert(
             "vertex-anthropic".into(),

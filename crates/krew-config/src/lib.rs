@@ -304,6 +304,8 @@ pub struct AgentConfig {
     pub reasoning_mode: Option<ReasoningMode>,
     /// OpenAI GPT-5.6 reasoning history scope.
     pub reasoning_context: Option<ReasoningContext>,
+    /// Hard USD cap on this agent's spend for the session.
+    pub max_cost_usd: Option<f64>,
 }
 
 /// Sampling parameters for LLM generation.
