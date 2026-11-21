@@ -107,6 +107,8 @@ async fn run_task_inner(
         ask_rules: &req.ask_rules,
         cwd: &req.cwd,
         whisper_targets: None,
+        budget: None,
+        model: "",
     };
 
     run_agent_loop(&ctx, &mut messages).await;
